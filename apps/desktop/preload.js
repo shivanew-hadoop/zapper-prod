@@ -1,0 +1,27 @@
+// preload.js — Overlay bridge
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  joinMeet: (data) => ipcRenderer.invoke('join-meet', data),
+  leaveMeet: () => ipcRenderer.invoke('leave-meet'),
+  closeOverlay: () => ipcRenderer.invoke('close-overlay'),
+  googleSignIn: () => ipcRenderer.invoke('google-signin'),
+  clearGoogleProfile: () => ipcRenderer.invoke('clear-google-profile'),
+  checkGoogleLogin: () => ipcRenderer.invoke('check-google-login'),
+  getAppConfig: () => ipcRenderer.invoke('get-app-config'),
+  redeemSessionPin: (pin) => ipcRenderer.invoke('redeem-session-pin', pin),
+  saveSessionTranscript: (data) => ipcRenderer.invoke('save-session-transcript', data),
+  endBackendSession: (sessionToken) => ipcRenderer.invoke('end-backend-session', sessionToken),
+  setClickThrough: (enabled) => ipcRenderer.invoke('overlay-click-through', enabled),
+  setOverlayCollapsed: (collapsed) => ipcRenderer.invoke('overlay-set-collapsed', collapsed),
+  closeGoogleSignInWindow: () => ipcRenderer.invoke('close-google-signin-window'),
+  countdownAutoCloseReady: () => ipcRenderer.invoke('countdown-auto-close-ready'),
+  onTranscript: (cb) => ipcRenderer.on('transcript', (_, data) => cb(data)),
+  onStatus: (cb) => ipcRenderer.on('status', (_, msg) => cb(msg)),
+  onLoginRequired: (cb) => ipcRenderer.on('login-required', (_, msg) => cb(msg)),
+  onSpeechStart: (cb) => ipcRenderer.on('speech-started', () => cb()),
+  onMeetChat: (cb) => ipcRenderer.on('meet-chat', (_, data) => cb(data)),
+  onCountdownStart: (cb) => ipcRenderer.on('start-countdown-timer', (_, durationSeconds) => cb(durationSeconds)),
+  onPrivatePointerPosition: (cb) => ipcRenderer.on('private-pointer-position', (_, data) => cb(data)),
+  sendMeetChatMessage: (message) => ipcRenderer.invoke('send-meet-chat-message', message),
+});

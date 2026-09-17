@@ -1,0 +1,21 @@
+{
+  "name": "@zapper/api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zapper account, session PIN, transcript and STT API",
+  "main": "server.js",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check session-control.js",
+    "smoke": "node tests/smoke.js"
+  },
+  "dependencies": {
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.19.2",
+    "ws": "8.17.0"
+  }
+}

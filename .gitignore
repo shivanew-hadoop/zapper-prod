@@ -1,0 +1,26 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# dependencies/build
+**/node_modules/
+**/dist/
+**/.vite/
+**/.vercel/
+
+# runtime data
+**/data/
+*.db
+*.db-shm
+*.db-wal
+
+# logs/os/editors
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Electron artifacts
+apps/desktop/dist/

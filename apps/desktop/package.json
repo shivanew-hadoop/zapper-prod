@@ -1,0 +1,71 @@
+{
+  "name": "@zapper/desktop",
+  "version": "3.0.0",
+  "description": "Zapper desktop private Google Meet transcription client",
+  "main": "main.js",
+  "productName": "Zapper",
+  "author": "Zapper",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64",
+    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check transcriber/remoteDeepgram.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "in.zapper.desktop",
+    "directories": {
+      "output": "dist/Zapper-v${version}"
+    },
+    "productName": "Zapper",
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Zapper-v${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Zapper-v${version}.${ext}"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app-config.json",
+      "overlay/**/*",
+      "meet-controller/**/*",
+      "transcriber/**/*",
+      "audio-ws/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/*.md",
+      "!**/*.txt",
+      "!**/*.log",
+      "!**/test/**/*",
+      "!**/tests/**/*",
+      "!**/__tests__/**/*",
+      "!**/docs/**/*",
+      "!dist/**/*",
+      "!*.zip"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "protocols": [
+      {
+        "name": "Zapper",
+        "schemes": [
+          "zapper"
+        ]
+      }
+    ]
+  }
+}

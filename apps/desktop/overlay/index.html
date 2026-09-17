@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Zapper</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+  <div id="app" class="card">
+    <div class="header">
+      <span class="dot"></span>
+      <span class="title">ZAPPER</span>
+      <div class="fontControls">
+        <button id="fontDown" class="miniBtn" type="button">A−</button>
+        <span id="fontSizeLabel" class="fontSizeLabel">14</span>
+        <button id="fontUp" class="miniBtn" type="button">A+</button>
+      </div>
+      <span class="spacer"></span>
+      <button id="signinBtn" class="smallBtn" type="button">Google Sign-In</button>
+      <button id="leaveBtn" class="leave hidden" type="button">■ Leave</button>
+      <button id="collapseBtn" class="collapseBtn" type="button">−</button>
+      <button id="closeBtn" class="closeBtn" type="button">×</button>
+    </div>
+
+    <section id="joinPanel" class="joinPanel">
+      <div class="licenseSub">Enter the 6-digit session PIN created by the host in the Zapper portal.</div>
+      <form id="joinForm" class="form">
+        <input id="sessionPin" placeholder="6-digit session PIN" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required />
+        <button id="joinBtn" type="submit">Join &amp; Transcribe</button>
+      </form>
+      <div id="sessionInfo" class="licenseStatus"></div>
+      <div class="supportBox">
+        <div class="supportTitle">Need Help?</div>
+        <div class="supportItem">📧 <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a></div>
+        <div class="supportItem">📞 +91 9346073219</div>
+      </div>
+    </section>
+
+    <div id="loginAlert" class="loginAlert hidden"></div>
+
+    <div id="countdownPanel" class="countdownPanel hidden">
+      <div class="countdownMessage">Sign-in successful! Window will close automatically.</div>
+      <div class="countdownTimer" id="countdownTimer">5</div>
+      <div class="countdownButtons">
+        <button id="skipBtn" class="countdownBtn skipBtn" type="button">⟲ Keep Sign-In Window Open</button>
+        <button id="retainBtn" class="countdownBtn retainBtn" type="button">✓ Close Sign-In Window</button>
+      </div>
+    </div>
+
+    <section id="livePanel" class="live hidden">
+      <div id="status" class="status">Idle</div>
+      <div class="liveBody">
+        <div id="transcript" class="transcript">Waiting for host to speak...</div>
+        <div id="chatPanel" class="chatPanel">
+          <div class="chatHeader"><span>💬 Host Chat</span><button id="chatClearBtn" class="chatClearBtn" type="button">Clear</button></div>
+          <div id="chatMessages" class="chatMessages">No host chat yet.</div>
+          <form id="chatSendForm" class="chatSendForm">
+            <input id="chatInput" class="chatInput" type="text" placeholder="Reply to host..." autocomplete="off" maxlength="8000" />
+            <button id="chatSendBtn" class="chatSendBtn" type="submit">Send</button>
+          </form>
+        </div>
+      </div>
+      <div class="footerHint"><span class="shortcutFooter">Drag header to move · Ctrl+Shift+T hide/show</span></div>
+    </section>
+  </div>
+
+  <svg id="privateCursor" class="privateCursor" aria-hidden="true" viewBox="0 0 24 32" focusable="false">
+    <path d="M2 1.5V25.5L8.2 19.8L12.8 30.2L17 28.3L12.4 18H21.4L2 1.5Z" fill="#ffffff" stroke="#111111" stroke-width="1.6" stroke-linejoin="round"/>
+  </svg>
+  <script src="overlay.js"></script>
+</body>
+</html>

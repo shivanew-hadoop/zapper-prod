@@ -1,0 +1,28 @@
+name: Source checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: API syntax
+        run: |
+          node --check apps/api/server.js
+          node --check apps/api/session-control.js
+          node apps/api/tests/smoke.js
+      - name: Desktop syntax
+        run: |
+          node --check apps/desktop/main.js
+          node --check apps/desktop/preload.js
+          node --check apps/desktop/overlay/overlay.js
+          node --check apps/desktop/meet-controller/index.js
+          node --check apps/desktop/transcriber/remoteDeepgram.js
+      - name: Web syntax
+        run: node --check apps/web/src/main.js

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#07101f" />
+  <title>Zapper | Private meeting transcription</title>
+  <link rel="stylesheet" href="/src/app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <div class="brand">ZAPPER</div>
+        <div class="tag">Private meeting transcription</div>
+      </div>
+      <button id="logout" class="ghost hidden">Log out</button>
+    </header>
+
+    <section id="auth" class="auth card">
+      <div>
+        <span class="eyebrow">ZAPPER ACCOUNT</span>
+        <h1>Sign in to Zapper</h1>
+        <p>Create an account to create meeting sessions, PINs and access saved transcripts.</p>
+      </div>
+      <div class="tabs" role="tablist">
+        <button id="loginTab" class="active" type="button">Login</button>
+        <button id="registerTab" type="button">Sign up</button>
+      </div>
+      <form id="authForm">
+        <input id="name" class="hidden" placeholder="Name" autocomplete="name" />
+        <input id="email" type="email" placeholder="Email" autocomplete="email" required />
+        <input id="password" type="password" placeholder="Password (8+ characters)" autocomplete="current-password" required />
+        <button id="authSubmit" type="submit">Login</button>
+        <div id="authError" class="error" aria-live="polite"></div>
+      </form>
+    </section>
+
+    <main id="portal" class="hidden">
+      <section class="hero">
+        <div class="heroCopy">
+          <span class="eyebrow">ACCOUNT</span>
+          <h1 id="welcome">Welcome</h1>
+          <p id="subText"></p>
+        </div>
+        <div class="plan card">
+          <span>Monthly plan</span>
+          <strong>₹1,000</strong>
+          <small>per month · session PIN access</small>
+          <span id="planBadge" class="planBadge">Checking</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card create">
+          <span class="eyebrow">HOST</span>
+          <h2>Create session</h2>
+          <p>Paste a Meet link, <code>meet.google.com/abc-defg-hij</code>, or simply <code>abc-defg-hij</code>.</p>
+          <form id="sessionForm">
+            <input id="meetUrl" placeholder="abc-defg-hij" required />
+            <button type="submit">Create session</button>
+          </form>
+          <div id="sessionError" class="error" aria-live="polite"></div>
+          <div id="pinBox" class="pinBox hidden">
+            <small>SESSION PIN</small>
+            <strong id="pinValue">000000</strong>
+            <span id="pinMeet"></span>
+            <button id="copyPin" class="ghost" type="button">Copy PIN</button>
+          </div>
+        </div>
+
+        <div class="card launch">
+          <span class="eyebrow">DESKTOP</span>
+          <h2>Launch Zapper</h2>
+          <p>The desktop app checks Google sign-in and then asks only for the 6-digit PIN.</p>
+          <button id="launchBtn" type="button">Launch Zapper</button>
+          <a id="downloadBtn" class="buttonLink ghost hidden" href="#">Download desktop app</a>
+          <small id="launchHelp">Install Zapper once, then this button opens it directly.</small>
+        </div>
+      </section>
+
+      <section class="card sectionCard">
+        <div class="sectionHead">
+          <div><h2>Recent sessions</h2><p>Latest host sessions and generated PINs.</p></div>
+          <button id="refreshSessions" class="ghost" type="button">Refresh</button>
+        </div>
+        <div id="sessions" class="list"></div>
+      </section>
+
+      <section class="card sectionCard">
+        <div class="sectionHead">
+          <div><h2>Saved transcripts</h2><p>Latest 20 completed transcripts with PDF download.</p></div>
+          <button id="refreshTranscripts" class="ghost" type="button">Refresh</button>
+        </div>
+        <div id="transcripts" class="list"></div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

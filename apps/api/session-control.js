@@ -303,20 +303,24 @@ module.exports = function createSessionControl({ app, dataDir }) {
   }
 
   function buildTranscriptPdf(row, user, hostSession) {
-    const fmt = ms => new Date(Number(ms)).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    const fmtMetaIst = ms => `${new Date(Number(ms)).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} IST`;
     const fmt24Ist = ms => new Date(Number(ms)).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     const durationSec = Math.max(0, Math.round((row.ended_at_ms - row.started_at_ms) / 1000));
+    const durationText = `${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, '0')}s`;
+    const metadata = [
+      ['Session PIN', hostSession.pin],
+      ['Participant Google sign-in', row.google_email || 'Not captured'],
+      ['From', fmtMetaIst(row.started_at_ms)],
+      ['To', fmtMetaIst(row.ended_at_ms)],
+      ['Duration', durationText],
+    ];
+    const labelWidth = metadata.reduce((max, [label]) => Math.max(max, label.length), 0);
     const lines = [
-      { text: 'ZAPPER MEETING TRANSCRIPT' },
-      { text: `Host account: ${user.name || user.email} <${user.email}>` },
-      { text: `Session PIN: ${hostSession.pin}` },
-      { text: `Google Meet: ${hostSession.meet_url}` },
-      { text: `Participant Google identity: ${row.google_email || 'Not captured'}` },
-      { text: `From: ${fmt(row.started_at_ms)}` },
-      { text: `To: ${fmt(row.ended_at_ms)}` },
-      { text: `Duration: ${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, '0')}s` },
+      { text: 'ZAPPER MEETING TRANSCRIPT', bold: true, size: 12 },
       { text: '' },
-      { text: 'TRANSCRIPT' },
+      ...metadata.map(([label, value]) => ({ text: `${label.padEnd(labelWidth)} : ${value}`, mono: true, size: 8 })),
+      { text: '' },
+      { text: 'TRANSCRIPT', bold: true, size: 10 },
       { text: '----------' },
     ];
 
@@ -342,20 +346,31 @@ module.exports = function createSessionControl({ app, dataDir }) {
     for (let i = 0; i < lines.length; i += 55) pages.push(lines.slice(i, i + 55));
     const objects = [];
     const add = body => { objects.push(body); return objects.length; };
-    const catalogId = add(''); const pagesId = add(''); const fontId = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-    const pageIds = []; const esc = t => pdfSafe(t).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+    const catalogId = add('');
+    const pagesId = add('');
+    const helveticaId = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    const courierId = add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
+    const helveticaBoldId = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+    const pageIds = [];
+    const esc = t => pdfSafe(t).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
     for (const pageLines of pages) {
       const stream = ['BT', '/F1 9 Tf', '48 800 Td', '12 TL'];
+      let currentFont = 'F1';
       let currentSize = 9;
       for (const line of pageLines) {
-        const nextSize = line.small ? 7 : 9;
-        if (nextSize !== currentSize) { stream.push(`/F1 ${nextSize} Tf`); currentSize = nextSize; }
+        const nextFont = line.mono ? 'F2' : (line.bold ? 'F3' : 'F1');
+        const nextSize = Number(line.size || (line.small ? 7 : 9));
+        if (nextFont !== currentFont || nextSize !== currentSize) {
+          stream.push(`/${nextFont} ${nextSize} Tf`);
+          currentFont = nextFont;
+          currentSize = nextSize;
+        }
         stream.push(`(${esc(line.text)}) Tj`, 'T*');
       }
       stream.push('ET');
       const content = stream.join('\n');
       const contentId = add(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
-      pageIds.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`));
+      pageIds.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${helveticaId} 0 R /F2 ${courierId} 0 R /F3 ${helveticaBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`));
     }
     objects[catalogId - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
     objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;

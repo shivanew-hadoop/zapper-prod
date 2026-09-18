@@ -32,6 +32,23 @@ function fromLocalInput(value) {
   const ms = new Date(value).getTime();
   return Number.isFinite(ms) ? ms : null;
 }
+function hostMeetStorageKey() {
+  const email = String(account?.email || '').trim().toLowerCase();
+  return email ? `zapperLastMeetUrl:${email}` : '';
+}
+function restoreLastMeetUrl() {
+  const key = hostMeetStorageKey();
+  const input = $('meetUrl');
+  if (!key || !input) return;
+  const saved = String(localStorage.getItem(key) || '').trim();
+  if (saved && !input.value.trim()) input.value = saved;
+}
+function rememberMeetUrl(value) {
+  const key = hostMeetStorageKey();
+  const normalized = String(value || '').trim();
+  if (!key || !normalized) return;
+  localStorage.setItem(key, normalized);
+}
 async function api(path, opts = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...opts,
@@ -137,6 +154,7 @@ async function loadHostPortal() {
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
   $('createSessionBtn').disabled = !active;
   if (!active) $('sessionError').textContent = 'Your host subscription is not active. Contact the Zapper administrator to activate or renew it.';
+  restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
   window.scrollTo({ top: 0 });
 }
@@ -209,15 +227,20 @@ async function loadTranscripts() {
   });
 }
 
+$('meetUrl').addEventListener('input', () => rememberMeetUrl($('meetUrl').value));
 $('sessionForm').onsubmit = async event => {
   event.preventDefault();
   $('sessionError').textContent = '';
   try {
-    const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: $('meetUrl').value.trim() }) });
+    const requestedMeetUrl = $('meetUrl').value.trim();
+    rememberMeetUrl(requestedMeetUrl);
+    const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: requestedMeetUrl }) });
     currentSessionId = data.session.id;
     currentSessionPin = data.session.pin;
     $('pinValue').textContent = data.session.pin;
     $('pinMeet').textContent = data.session.meetUrl;
+    $('meetUrl').value = data.session.meetUrl;
+    rememberMeetUrl(data.session.meetUrl);
     $('pinStatus').textContent = 'Active — share only this PIN with the participant.';
     $('endCurrentSession').disabled = false;
     $('pinBox').classList.remove('hidden');

@@ -78,12 +78,16 @@ function enforceOverlayPrivacyAndTopmost() {
 
   try { overlayWindow.setContentProtection(true); } catch (_) {}
   try { overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-  try { overlayWindow.moveTop(); } catch (_) {}
+  try { overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+  try { if (overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
 }
 
 function startOverlayTopmostGuard() {
   if (overlayTopmostGuard) clearInterval(overlayTopmostGuard);
-  overlayTopmostGuard = setInterval(enforceOverlayPrivacyAndTopmost, 750);
+  // Z-order protection is independent of STT/audio and does not steal focus.
+  // Reassert frequently so ordinary Windows/app focus changes cannot bury Zapper.
+  overlayTopmostGuard = setInterval(enforceOverlayPrivacyAndTopmost, 250);
+  overlayTopmostGuard.unref?.();
 }
 
 function stopOverlayTopmostGuard() {
@@ -399,6 +403,17 @@ function createOverlayWindow() {
   ['show', 'restore', 'focus', 'blur', 'move', 'resize'].forEach((eventName) => {
     overlayWindow.on(eventName, enforceOverlayPrivacyAndTopmost);
   });
+  // Zapper uses its own collapse control. If Windows/native code minimizes the
+  // overlay, restore it immediately without taking keyboard focus.
+  overlayWindow.on('minimize', () => {
+    setImmediate(() => {
+      if (!overlayWindow || overlayWindow.isDestroyed()) return;
+      try { overlayWindow.restore(); } catch (_) {}
+      try { overlayWindow.showInactive(); } catch (_) {}
+      enforceOverlayPrivacyAndTopmost();
+    });
+  });
+  overlayWindow.webContents.on('did-finish-load', enforceOverlayPrivacyAndTopmost);
   overlayWindow.on('always-on-top-changed', (_, isAlwaysOnTop) => {
     if (!isAlwaysOnTop) setImmediate(enforceOverlayPrivacyAndTopmost);
   });

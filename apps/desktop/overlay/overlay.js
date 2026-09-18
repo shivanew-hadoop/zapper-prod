@@ -42,7 +42,7 @@ const MAX_CHAT_MESSAGES = 60;
 const OUTGOING_ECHO_SUPPRESS_MS = 20000;
 const MIN_FONT = 10;
 const MAX_FONT = 34;
-const DEFAULT_FONT = 14;
+const DEFAULT_FONT = 16;
 const DEFAULT_BACKEND_URL = 'https://api.zapperapp.in';
 const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 24;
 let transcriptAutoScroll = true;
@@ -259,6 +259,7 @@ function getRandomGuestName() {
 
 function showJoin() {
   currentPanel = 'join';
+  appEl.classList.remove('session-active');
   joinPanel.classList.remove('hidden');
   livePanel.classList.add('hidden');
   leaveBtn.classList.add('hidden');
@@ -497,6 +498,7 @@ function showLoginRequired(msg) {
 
 function showLive(status) {
   currentPanel = 'live';
+  appEl.classList.add('session-active');
   loginAlert.classList.add('hidden');
   countdownPanel.classList.add('hidden');
   joinPanel.classList.add('hidden');

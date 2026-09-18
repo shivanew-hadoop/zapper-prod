@@ -48,3 +48,7 @@ node tests/smoke.js
 ```
 
 The smoke test validates admin login, host registration, exact subscription editing, 15-session retention, PIN redemption, stored PDF creation and admin activity reporting.
+
+## v3.1.4 focused UI/PDF update
+
+This build keeps v3.1.3 session/STT behavior and only adjusts PDF header metadata, live overlay presentation, per-host Meet URL recall, and top-most reinforcement.

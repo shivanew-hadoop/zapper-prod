@@ -2,15 +2,20 @@
 
 Production SQLite file: `/data/zapper.db`.
 
+The backend performs safe in-place migrations for databases created by earlier greenfield Zapper builds.
+
 ## users
 
 - id
 - email (unique)
 - password hash (scrypt + per-user random salt)
 - name
-- status
+- role (`host` or `admin`)
+- account status (`active` or `disabled`)
 - subscription status
-- subscription valid-until timestamp
+- subscription start timestamp
+- subscription end timestamp
+- last login timestamp
 - created timestamp
 
 ## host_sessions
@@ -22,6 +27,8 @@ Production SQLite file: `/data/zapper.db`.
 - active/ended state
 - created / expires / ended timestamps
 
+Only the latest `SESSION_RETENTION` sessions are retained per host; production default is 15. Deleting an old session cascades its transcript record.
+
 ## transcripts
 
 - UUID transcript ID
@@ -30,6 +37,8 @@ Production SQLite file: `/data/zapper.db`.
 - participant Google email when detectable
 - start/end timestamps
 - full transcript text
+- stored PDF blob
+- PDF filename
 - created timestamp
 
-The portal returns only the latest 20 sessions/transcripts by default. Transcript retention is controlled by `TRANSCRIPT_RETENTION` and defaults to 20 per account.
+Only the latest `TRANSCRIPT_RETENTION` transcript records are retained per host; production default is 15.

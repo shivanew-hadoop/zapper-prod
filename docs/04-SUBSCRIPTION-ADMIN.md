@@ -1,39 +1,30 @@
-# 4 — Subscription administration for the first release
+# 4 — Subscription administration
 
-The database already stores `subscription_status` and `subscription_valid_until_ms`. The portal price is ₹1,000/month.
+Admin now has a browser console. No admin key is exposed to the web app.
 
-Payment gateway automation is intentionally not required for the first 50–100-user test. Activate customers manually through the protected admin API.
+## Admin login
 
-## Activate one registered user for 30 days
+Set Railway `ADMIN_EMAIL`. Sign in through the same normal website Login form. The backend returns role `admin`, and the frontend opens the admin console automatically.
 
-From `apps/api`:
+## Admin can
 
-### macOS/Linux
+- View/search registered users by name/email.
+- See account status and role.
+- See subscription start/end dates and approximate months.
+- See latest activity, retained session count and transcript PDF count.
+- Set exact subscription start/end dates.
+- Add or subtract 30 days quickly.
+- Mark a subscription active/inactive.
+- Disable or reactivate a host account.
+- Inspect recent session activity.
 
-```bash
-API_BASE_URL=https://api.zapper.in \
-ADMIN_KEY='YOUR_ADMIN_KEY' \
-node scripts/activate-subscription.js customer@example.com 30
-```
+## CLI fallback
 
-### PowerShell
-
-```powershell
-$env:API_BASE_URL="https://api.zapper.in"
-$env:ADMIN_KEY="YOUR_ADMIN_KEY"
-node scripts/activate-subscription.js customer@example.com 30
-```
-
-Reload the portal. The account should now show Active.
-
-## List registered users
+`ADMIN_KEY` still supports automation scripts without exposing the key to Vercel:
 
 ```powershell
-$env:API_BASE_URL="https://api.zapper.in"
+$env:API_BASE_URL="https://api.zapperapp.in"
 $env:ADMIN_KEY="YOUR_ADMIN_KEY"
 node scripts/list-users.js
+node scripts/activate-subscription.js customer@example.com 30
 ```
-
-This shows the user ID, email, name, status, subscription state, expiry and creation time from SQLite.
-
-Never put `ADMIN_KEY` in the Vercel frontend or desktop app.

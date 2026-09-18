@@ -42,8 +42,8 @@ html.private-cursor-ready body * {
   padding: 8px 10px 6px;
   border-radius: 16px;
   background: rgba(12,14,22,.92);
-  border: 1px solid rgba(255,255,255,.10);
-  box-shadow: 0 18px 60px rgba(0,0,0,.45);
+  border: 0;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;

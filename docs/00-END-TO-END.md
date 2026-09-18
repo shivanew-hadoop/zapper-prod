@@ -1,27 +1,30 @@
-# Zapper — end-to-end production setup
+# End-to-end deployment map
 
-This project is a new deployment. Do **not** point it at the old Zapper Railway service or old GitHub repo.
+You already have the new greenfield deployment connected. This build upgrades that same **new** project; it does not touch the historical/old Zapper project.
 
-## Final architecture
+| Layer | Current target |
+|---|---|
+| GitHub | `shivanew-hadoop/zapper-prod` |
+| Railway API | repo root `/apps/api` |
+| API domain | `https://api.zapperapp.in` |
+| Railway database | `/data/zapper.db` on persistent volume |
+| Vercel web | repo root `apps/web` |
+| Acceptance web URL | `https://zapper-prod.vercel.app` |
+| Final web domain | `https://zapperapp.in` |
+| Desktop | `apps/desktop` |
+| Windows releases | GitHub Releases |
 
-| Layer | New deployment | Production address |
-|---|---|---|
-| Source control | New GitHub repository | e.g. `your-org/zapper-platform` |
-| Web portal | New Vercel project | `https://zapper.in` |
-| API/STT backend | New Railway project/service | `https://api.zapper.in` |
-| Database | SQLite on new Railway persistent volume | `/data/zapper.db` |
-| Desktop | Electron build from `apps/desktop` | Windows portable EXE |
+## Rollout order
 
-## Do this in order
+1. Push this updated source to `shivanew-hadoop/zapper-prod`.
+2. Railway redeploys `/apps/api`; keep the `/data` volume.
+3. Add `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `SESSION_RETENTION=15`, `TRANSCRIPT_RETENTION=15` in Railway.
+4. Vercel redeploys `apps/web` with `VITE_API_BASE_URL=https://api.zapperapp.in`.
+5. Test admin login, host subscription activation and session creation on `zapper-prod.vercel.app`.
+6. Run desktop locally with `npm start`, test Google Sign-In + six-digit PIN + transcription + Leave.
+7. Confirm the host portal receives the stored PDF.
+8. Build/release the Windows EXE to GitHub Releases.
+9. Confirm Download Zapper works from the preview site.
+10. Only then connect `zapperapp.in` to Vercel.
 
-1. Create the new GitHub repository — `docs/01-GITHUB.md`.
-2. Create the new Railway backend and `/data` volume — `docs/02-RAILWAY.md`.
-3. Point `api.zapper.in` to Railway and verify `/health`.
-4. Deploy the web portal to Vercel — `docs/03-WEB-VERCEL.md`.
-5. Point `zapper.in` (and optionally `www.zapper.in`) to Vercel.
-6. Register your first test account on `https://zapper.in`.
-7. Activate its subscription using `docs/04-SUBSCRIPTION-ADMIN.md`.
-8. Build the desktop app — `docs/05-DESKTOP.md`.
-9. Execute every test in `docs/06-PRODUCTION-TEST.md`.
-
-Do not build the final desktop EXE until `https://api.zapper.in/health` is working, because the desktop production config already targets that API hostname.
+Read `10-COMPLETE-PRODUCT.md` for the exact variables and `11-GITHUB-RELEASES.md` for the desktop release.

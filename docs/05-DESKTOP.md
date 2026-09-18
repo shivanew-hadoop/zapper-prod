@@ -1,49 +1,41 @@
-# 5 — Build the new desktop app
+# 5 — Desktop app
 
-The desktop project is completely separate under `apps/desktop`.
-
-Production API config is in:
-
-```text
-apps/desktop/app-config.json
-```
-
-It currently contains:
+Production API config:
 
 ```json
-{"backendUrl":"https://api.zapper.in"}
+{"backendUrl":"https://api.zapperapp.in"}
 ```
 
-## Build on Windows
+## Participant flow
 
-Open PowerShell in `apps/desktop`:
+1. Click public website **Launch Zapper** or open the EXE.
+2. Desktop checks the persistent Google profile.
+3. If Google is not signed in, Sign-In opens automatically.
+4. After Google is signed in, participant enters only the 6-digit host PIN.
+5. API validates the host subscription and resolves the Meet URL.
+6. Existing transcription/overlay starts.
+7. On Leave, the full transcript and a generated PDF are stored against the host account.
+
+The participant never needs a Zapper website username/password.
+
+## Local test
 
 ```powershell
+cd apps\desktop
 npm install
 npm start
 ```
 
-First test the unpackaged app. When the complete flow works:
+## Windows distribution
 
 ```powershell
 npm run dist
 ```
 
-The Windows portable build is written under `apps/desktop/dist/`.
+Output:
 
-## Desktop flow
+```text
+apps/desktop/dist/Zapper-v3.1.0/Zapper-Windows-x64.exe
+```
 
-1. Open Zapper from the EXE or use the portal's `Launch Zapper` button.
-2. If no saved Google session exists, Zapper opens Google Sign-In.
-3. User signs in once.
-4. Overlay asks only for the 6-digit session PIN.
-5. PIN is sent to `api.zapper.in`.
-6. API resolves the hidden Meet URL and returns a temporary signed session token.
-7. Zapper opens the Meet and begins STT when Meet audio arrives.
-8. On Leave, the complete transcript uploads to the host account.
-
-The desktop makes a best-effort attempt to read the signed-in Google account email from the persistent Google profile and stores it with the transcript when available.
-
-## Web Launch button note
-
-The Windows machine should run the packaged Zapper EXE once so the `zapper://` protocol is registered. After that, `Launch Zapper` from the web portal can open/focus the desktop overlay. The Electron build also declares the `zapper` protocol in its builder configuration.
+For production download, publish the EXE through GitHub Releases; see `11-GITHUB-RELEASES.md`.

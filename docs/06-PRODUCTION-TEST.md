@@ -4,13 +4,13 @@ Do this in order with one real Google Meet.
 
 ## A. Backend
 
-- `https://api.zapper.in/health` returns `ok:true`.
+- `https://api.zapperapp.in/health` returns `ok:true`.
 - `deepgramConfigured` is `true`.
 - Railway volume is attached at `/data`.
 
 ## B. Portal account
 
-- Register a new test email at `https://zapper.in`.
+- Register a new test email at `https://zapperapp.in`.
 - Log out and log in again.
 - Use the admin helper to activate it for 30 days.
 - Refresh and confirm Subscription = Active.

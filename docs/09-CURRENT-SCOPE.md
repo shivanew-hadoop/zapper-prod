@@ -1,30 +1,30 @@
-# Current production scope
+# Current product scope
 
-## Implemented now
+## Implemented
 
-- New repository layout with separate API, web and desktop applications.
-- Email/password registration and login.
-- SQLite user database on a Railway volume.
-- User name/email/subscription records.
-- Manual subscription activation/renewal for the ₹1,000/month plan.
+- Public Zapper marketing/home page with Features, How it works, Pricing and About.
+- Public participant **Launch Zapper** and **Download Zapper** actions.
+- Stable GitHub Releases Windows download URL.
+- Host registration/login and subscription-gated session creation.
+- Role-based admin login through the same Login form.
+- Admin web console for users, activity, exact subscription dates and account status.
+- SQLite database on Railway persistent `/data` volume.
+- Database migration from the earlier greenfield build without deleting users.
 - Google Meet link/code normalization.
-- Unique 6-digit host session PIN.
-- Desktop Google sign-in + PIN-only launch flow.
+- Unique six-digit session PIN stored against host + Meet URL.
+- Participant desktop uses Google Sign-In + PIN only; no Zapper web credentials.
 - Signed short-lived desktop session authorization.
-- Remote Deepgram STT through the Railway backend.
-- Full transcript upload on Leave.
-- Backend session termination on Leave.
-- Latest 20 transcript list and PDF download.
-- Admin API/helper script to list registered users.
+- Deepgram STT through Railway.
+- Complete transcript upload on Leave.
+- PDF generated and stored in SQLite with the transcript.
+- Latest 15 host sessions retained per account.
+- Latest 15 transcript PDFs retained per account.
+- GitHub Actions workflow that creates a Windows release from a version tag.
 
-## Not automated yet
+## Still intentionally manual
 
-These are intentionally outside the first 50–100-user launch package and should be added after the base flow is stable:
-
-- Razorpay/Stripe payment checkout and payment webhooks.
+- Payment gateway checkout/webhooks (Razorpay/Stripe).
 - Email verification.
 - Forgot-password/reset-password email flow.
-- Admin web dashboard (admin functions currently use protected scripts/API).
-- Object storage for PDFs (PDFs are generated on demand from SQLite transcript text).
 
-The system is usable for controlled testing without these items. Do not call the billing process fully automated until a payment provider and webhook verification are added.
+Until payment integration is added, admin controls the subscription start/end dates from the web console.

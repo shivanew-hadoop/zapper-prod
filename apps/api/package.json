@@ -1,11 +1,11 @@
 {
   "name": "@zapper/api",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Zapper account, session PIN, transcript and STT API",
   "main": "server.js",
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "start": "node server.js",

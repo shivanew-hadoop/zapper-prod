@@ -1,13 +1,14 @@
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
-const DESKTOP_DOWNLOAD_URL = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
+const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Windows-x64.exe';
+const DESKTOP_DOWNLOAD_URL = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || DEFAULT_RELEASE_URL).trim();
 
 let mode = 'login';
 let token = localStorage.getItem('zapperToken') || '';
 let account = null;
+let adminUsers = [];
+let editingUser = null;
+let searchTimer = null;
 const $ = id => document.getElementById(id);
-const auth = $('auth');
-const portal = $('portal');
-const logout = $('logout');
 
 function escapeHTML(value) {
   return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
@@ -15,11 +16,25 @@ function escapeHTML(value) {
 function fmt(ms) {
   return ms ? new Date(Number(ms)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 }
+function fmtDate(ms) {
+  return ms ? new Date(Number(ms)).toLocaleDateString([], { dateStyle: 'medium' }) : '—';
+}
+function toLocalInput(ms) {
+  if (!ms) return '';
+  const d = new Date(Number(ms));
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(value) {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
 async function api(path, opts = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...opts,
     headers: {
-      'content-type': 'application/json',
+      ...(opts.body ? { 'content-type': 'application/json' } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     },
@@ -28,6 +43,36 @@ async function api(path, opts = {}) {
   if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
+
+function setDownloadLinks() {
+  document.querySelectorAll('[data-download]').forEach(link => {
+    link.href = DESKTOP_DOWNLOAD_URL;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+  });
+}
+function launchDesktop() {
+  const message = $('launchMessage');
+  if (message) {
+    message.textContent = 'Opening Zapper. If nothing opens, use Download Zapper and run it once.';
+    message.classList.remove('hidden');
+  }
+  window.location.href = 'zapper://launch';
+}
+document.querySelectorAll('[data-launch]').forEach(button => button.addEventListener('click', launchDesktop));
+setDownloadLinks();
+
+function showPublic() {
+  $('publicSite').classList.remove('hidden');
+  $('hostPortal').classList.add('hidden');
+  $('adminPortal').classList.add('hidden');
+}
+function hideAuth() { $('authModal').classList.add('hidden'); }
+function openAuth(nextMode = 'login') {
+  setMode(nextMode);
+  $('authModal').classList.remove('hidden');
+  setTimeout(() => $('email').focus(), 50);
+}
 function setMode(next) {
   mode = next;
   $('loginTab').classList.toggle('active', mode === 'login');
@@ -35,20 +80,27 @@ function setMode(next) {
   $('name').classList.toggle('hidden', mode !== 'register');
   $('password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
   $('authSubmit').textContent = mode === 'login' ? 'Login' : 'Create account';
+  $('authTitle').textContent = mode === 'login' ? 'Sign in to Zapper' : 'Create a host account';
   $('authError').textContent = '';
 }
-function showAuth(message = '') {
+function logout() {
   token = '';
   account = null;
   localStorage.removeItem('zapperToken');
-  portal.classList.add('hidden');
-  logout.classList.add('hidden');
-  auth.classList.remove('hidden');
-  $('authError').textContent = message;
+  showPublic();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+$('navLogin').onclick = () => openAuth('login');
+$('footerLogin').onclick = () => openAuth('login');
+$('navSignup').onclick = () => openAuth('register');
+$('pricingSignup').onclick = () => openAuth('register');
 $('loginTab').onclick = () => setMode('login');
 $('registerTab').onclick = () => setMode('register');
+document.querySelectorAll('[data-close-auth]').forEach(el => el.addEventListener('click', hideAuth));
+$('hostLogout').onclick = logout;
+$('adminLogout').onclick = logout;
+
 $('authForm').onsubmit = async event => {
   event.preventDefault();
   $('authError').textContent = '';
@@ -59,30 +111,40 @@ $('authForm').onsubmit = async event => {
     });
     token = data.token;
     localStorage.setItem('zapperToken', token);
+    hideAuth();
     await loadPortal();
   } catch (error) { $('authError').textContent = error.message; }
 };
-logout.onclick = () => showAuth();
 
 async function loadAccount() {
   const data = await api('/api/account');
   account = data.user;
+  return data;
+}
+
+async function loadHostPortal() {
+  $('publicSite').classList.add('hidden');
+  $('adminPortal').classList.add('hidden');
+  $('hostPortal').classList.remove('hidden');
   $('welcome').textContent = `Welcome${account.name ? `, ${account.name}` : ''}`;
-  const until = account.subscriptionValidUntil ? fmt(account.subscriptionValidUntil) : 'not activated';
-  $('subText').textContent = `${account.email} · Subscription ${account.subscriptionStatus} · Valid until ${until}`;
+  const start = account.subscriptionStartedAt ? fmtDate(account.subscriptionStartedAt) : 'not set';
+  const until = account.subscriptionValidUntil ? fmtDate(account.subscriptionValidUntil) : 'not activated';
+  $('subText').textContent = `${account.email} · Subscription ${account.subscriptionStatus} · ${start} → ${until}`;
   const active = account.subscriptionStatus === 'active';
   $('planBadge').textContent = active ? 'Active' : account.subscriptionStatus;
-  $('planBadge').classList.toggle('active', active);
+  $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
+  $('createSessionBtn').disabled = !active;
+  if (!active) $('sessionError').textContent = 'Your host subscription is not active. Contact the Zapper administrator to activate or renew it.';
+  await Promise.all([loadSessions(), loadTranscripts()]);
+  window.scrollTo({ top: 0 });
 }
+
 async function loadSessions() {
   const data = await api('/api/sessions');
   $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => `
-    <div class="row">
-      <div>
-        <strong>PIN ${escapeHTML(session.pin)}</strong>
-        <div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span><span>${escapeHTML(fmt(session.createdAt))}</span></div>
-      </div>
-      <button class="ghost" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button>
+    <div class="dataRow">
+      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span><span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
+      <button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button>
     </div>`).join('') : '<p class="empty">No sessions yet.</p>';
   $('sessions').querySelectorAll('[data-copy]').forEach(button => {
     button.onclick = async () => {
@@ -91,15 +153,13 @@ async function loadSessions() {
     };
   });
 }
+
 async function loadTranscripts() {
   const data = await api('/api/transcripts');
   $('transcripts').innerHTML = data.sessions.length ? data.sessions.map(session => `
-    <div class="row">
-      <div>
-        <strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong>
-        <div class="meta"><span>PIN ${escapeHTML(session.pin)}</span><span>${escapeHTML(session.meetUrl)}</span>${session.googleEmail ? `<span>${escapeHTML(session.googleEmail)}</span>` : ''}</div>
-      </div>
-      <button class="ghost" data-pdf="${escapeHTML(session.id)}" type="button">Download PDF</button>
+    <div class="dataRow">
+      <div><strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong><div class="meta"><span>PIN ${escapeHTML(session.pin)}</span><span>${escapeHTML(session.meetUrl)}</span>${session.googleEmail ? `<span>${escapeHTML(session.googleEmail)}</span>` : ''}</div></div>
+      <button class="ghostBtn compact" data-pdf="${escapeHTML(session.id)}" type="button">Download PDF</button>
     </div>`).join('') : '<p class="empty">No saved transcripts yet.</p>';
   $('transcripts').querySelectorAll('[data-pdf]').forEach(button => {
     button.onclick = async () => {
@@ -113,8 +173,8 @@ async function loadTranscripts() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      const contentDisposition = response.headers.get('content-disposition') || '';
-      const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^";]+)"?/i);
       anchor.download = match?.[1] || 'Zapper-Transcript.pdf';
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1500);
@@ -138,23 +198,108 @@ $('copyPin').onclick = async () => {
   if (/^\d{6}$/.test(pin)) await navigator.clipboard.writeText(pin);
   $('copyPin').textContent = 'Copied'; setTimeout(() => { $('copyPin').textContent = 'Copy PIN'; }, 1200);
 };
-$('launchBtn').onclick = () => { window.location.href = 'zapper://launch'; };
 $('refreshSessions').onclick = loadSessions;
 $('refreshTranscripts').onclick = loadTranscripts;
 
-if (DESKTOP_DOWNLOAD_URL) {
-  $('downloadBtn').href = DESKTOP_DOWNLOAD_URL;
-  $('downloadBtn').classList.remove('hidden');
+function monthEquivalent(start, end) {
+  if (!start || !end || end <= start) return '—';
+  const days = (end - start) / 86400000;
+  return `${(days / 30.4375).toFixed(1)} mo`;
 }
+
+async function loadAdminUsers(query = '') {
+  const suffix = query ? `?q=${encodeURIComponent(query)}` : '';
+  const data = await api(`/api/admin/users${suffix}`);
+  adminUsers = data.users || [];
+  $('adminUserCount').textContent = String(adminUsers.length);
+  $('adminActiveCount').textContent = String(adminUsers.filter(user => user.subscriptionStatus === 'active').length);
+  $('adminSessionCount').textContent = String(adminUsers.reduce((sum, user) => sum + Number(user.sessionCount || 0), 0));
+  $('adminUsers').innerHTML = adminUsers.length ? `
+    <table class="adminTable"><thead><tr><th>User</th><th>Subscription</th><th>Activity</th><th>Account</th><th></th></tr></thead><tbody>
+      ${adminUsers.map(user => `<tr>
+        <td><strong>${escapeHTML(user.name || 'Unnamed')}</strong><small>${escapeHTML(user.email)}</small><small>${escapeHTML(user.role)}</small></td>
+        <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmtDate(user.subscriptionStartedAt))} → ${escapeHTML(fmtDate(user.subscriptionValidUntil))}</small><small>${escapeHTML(monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
+        <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
+        <td><span class="pill">${escapeHTML(user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
+        <td><button class="ghostBtn compact" data-edit-user="${user.id}" type="button">Manage</button></td>
+      </tr>`).join('')}
+    </tbody></table>` : '<p class="empty">No users found.</p>';
+  $('adminUsers').querySelectorAll('[data-edit-user]').forEach(button => button.onclick = () => openAdminEdit(Number(button.dataset.editUser)));
+}
+
+async function loadAdminPortal() {
+  $('publicSite').classList.add('hidden');
+  $('hostPortal').classList.add('hidden');
+  $('adminPortal').classList.remove('hidden');
+  $('adminWelcome').textContent = `Welcome${account.name ? `, ${account.name}` : ''}`;
+  await loadAdminUsers();
+  window.scrollTo({ top: 0 });
+}
+
+async function openAdminEdit(userId) {
+  editingUser = adminUsers.find(user => Number(user.id) === Number(userId));
+  if (!editingUser) return;
+  $('editUserTitle').textContent = editingUser.name || editingUser.email;
+  $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
+  $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
+  $('editAccountStatus').value = editingUser.status === 'disabled' ? 'disabled' : 'active';
+  $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt);
+  $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil);
+  $('editError').textContent = '';
+  $('editActivity').textContent = 'Loading...';
+  $('adminEditModal').classList.remove('hidden');
+  try {
+    const activity = await api(`/api/admin/users/${editingUser.id}/activity`);
+    $('editActivity').innerHTML = `
+      <div class="activityStats"><span><strong>${activity.sessions.length}</strong> retained sessions</span><span><strong>${activity.transcripts.length}</strong> retained PDFs</span></div>
+      <div class="activityList">${activity.sessions.slice(0, 5).map(s => `<div><strong>PIN ${escapeHTML(s.pin)}</strong><span>${escapeHTML(fmt(s.createdAt))}</span><small>${escapeHTML(s.meetUrl)}</small></div>`).join('') || '<p class="empty">No session activity.</p>'}</div>`;
+  } catch (error) { $('editActivity').textContent = error.message; }
+}
+function closeAdminEdit() { $('adminEditModal').classList.add('hidden'); editingUser = null; }
+document.querySelectorAll('[data-close-admin]').forEach(el => el.addEventListener('click', closeAdminEdit));
+
+function adjustEnd(days) {
+  const current = fromLocalInput($('editEnd').value) || Date.now();
+  $('editEnd').value = toLocalInput(current + days * 86400000);
+}
+$('minus30').onclick = () => adjustEnd(-30);
+$('plus30').onclick = () => adjustEnd(30);
+$('saveUser').onclick = async () => {
+  if (!editingUser) return;
+  $('editError').textContent = '';
+  try {
+    await api(`/api/admin/users/${editingUser.id}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ subscriptionStatus: $('editSubStatus').value, startedAt: fromLocalInput($('editStart').value), validUntil: fromLocalInput($('editEnd').value) }),
+    });
+    if (editingUser.role !== 'admin') {
+      await api(`/api/admin/users/${editingUser.id}/status`, { method: 'POST', body: JSON.stringify({ status: $('editAccountStatus').value }) });
+    }
+    closeAdminEdit();
+    await loadAdminUsers($('adminSearch').value.trim());
+  } catch (error) { $('editError').textContent = error.message; }
+};
+$('adminSearch').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadAdminUsers($('adminSearch').value.trim()).catch(error => alert(error.message)), 300);
+});
+$('refreshAdmin').onclick = () => loadAdminUsers($('adminSearch').value.trim());
 
 async function loadPortal() {
   try {
     await loadAccount();
-    auth.classList.add('hidden');
-    portal.classList.remove('hidden');
-    logout.classList.remove('hidden');
-    await Promise.all([loadSessions(), loadTranscripts()]);
-  } catch (error) { showAuth(error.message); }
+    hideAuth();
+    if (account.role === 'admin') await loadAdminPortal();
+    else await loadHostPortal();
+  } catch (error) {
+    token = '';
+    account = null;
+    localStorage.removeItem('zapperToken');
+    showPublic();
+    openAuth('login');
+    $('authError').textContent = error.message;
+  }
 }
 
 if (token) loadPortal();
+else showPublic();

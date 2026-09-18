@@ -3,99 +3,182 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#07101f" />
+  <meta name="theme-color" content="#06111f" />
+  <meta name="description" content="Zapper private Google Meet transcription with host-controlled session PINs and downloadable PDF transcripts." />
   <title>Zapper | Private meeting transcription</title>
   <link rel="stylesheet" href="/src/app.css" />
 </head>
 <body>
-  <div class="shell">
-    <header class="topbar">
-      <div>
-        <div class="brand">ZAPPER</div>
-        <div class="tag">Private meeting transcription</div>
+  <div id="publicSite">
+    <header class="siteNav shellWide">
+      <a class="brandLockup" href="#home" aria-label="Zapper home">
+        <span class="brandMark">Z</span>
+        <span><strong>ZAPPER</strong><small>Private meeting transcription</small></span>
+      </a>
+      <nav class="navLinks" aria-label="Primary navigation">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#about">About</a>
+      </nav>
+      <div class="navActions">
+        <button class="ghostBtn" data-launch type="button">Launch Zapper</button>
+        <button id="navLogin" class="ghostBtn" type="button">Host login</button>
+        <button id="navSignup" class="primaryBtn" type="button">Host sign up</button>
       </div>
-      <button id="logout" class="ghost hidden">Log out</button>
     </header>
 
-    <section id="auth" class="auth card">
-      <div>
-        <span class="eyebrow">ZAPPER ACCOUNT</span>
-        <h1>Sign in to Zapper</h1>
-        <p>Create an account to create meeting sessions, PINs and access saved transcripts.</p>
-      </div>
-      <div class="tabs" role="tablist">
-        <button id="loginTab" class="active" type="button">Login</button>
-        <button id="registerTab" type="button">Sign up</button>
-      </div>
+    <main>
+      <section id="home" class="heroSection shellWide">
+        <div class="heroCopy">
+          <div class="eyebrow">PRIVATE · PIN-BASED · MEETING READY</div>
+          <h1>Live meeting transcription without making participants manage a portal account.</h1>
+          <p class="heroLead">Hosts create a secure 6-digit session PIN. Participants launch the Zapper desktop app, sign into Google if needed, enter the PIN, and start transcribing the linked Google Meet.</p>
+          <div class="heroActions">
+            <button class="primaryBtn large" data-launch type="button">Launch Zapper</button>
+            <a class="secondaryBtn large" data-download href="#">Download Zapper</a>
+          </div>
+          <div class="heroMeta">
+            <span>✓ No participant Zapper account</span>
+            <span>✓ Google sign-in stays in desktop</span>
+            <span>✓ Host-owned PDF history</span>
+          </div>
+        </div>
+        <div class="heroProduct cardGlow">
+          <div class="miniTop"><span class="liveDot"></span><strong>Participant flow</strong></div>
+          <div class="flowStack">
+            <div><span>1</span><p><strong>Launch</strong><br/>Open the installed Zapper app.</p></div>
+            <div><span>2</span><p><strong>Google Sign-In</strong><br/>Only when the desktop profile is not already signed in.</p></div>
+            <div><span>3</span><p><strong>Enter PIN</strong><br/>Use the 6-digit code provided by the host.</p></div>
+            <div><span>4</span><p><strong>Transcribe</strong><br/>The Meet URL is resolved privately from the backend.</p></div>
+          </div>
+          <div id="launchMessage" class="inlineNotice hidden"></div>
+        </div>
+      </section>
+
+      <section class="trustStrip">
+        <div class="shellWide trustGrid">
+          <span>Host-controlled access</span><span>6-digit session binding</span><span>Latest 15 sessions retained</span><span>PDF transcript archive</span>
+        </div>
+      </section>
+
+      <section id="features" class="section shellWide">
+        <div class="sectionIntro"><div class="eyebrow">FEATURES</div><h2>Everything needed for a controlled transcription workflow.</h2><p>Participant simplicity on one side; host accountability and transcript history on the other.</p></div>
+        <div class="featureGrid">
+          <article class="featureCard"><div class="iconChip">PIN</div><h3>Session PINs</h3><p>Every host-created Meet session receives a unique six-digit PIN stored against that host and meeting.</p></article>
+          <article class="featureCard"><div class="iconChip">LIVE</div><h3>Desktop transcription</h3><p>The participant enters only the PIN. Zapper resolves the Meet URL and starts the existing transcription flow.</p></article>
+          <article class="featureCard"><div class="iconChip">PDF</div><h3>Stored PDF record</h3><p>On Leave, the full transcript is saved to the host account and stored as a downloadable PDF.</p></article>
+          <article class="featureCard"><div class="iconChip">15</div><h3>Controlled retention</h3><p>Only the latest fifteen host sessions and transcripts are retained per account to keep the database lightweight.</p></article>
+          <article class="featureCard"><div class="iconChip">ADM</div><h3>Admin controls</h3><p>Administrators can view users, activity, subscription start/end dates, and shorten or extend access.</p></article>
+          <article class="featureCard"><div class="iconChip">₹</div><h3>Simple host plan</h3><p>Host subscription status is checked before session creation and again when a participant redeems the PIN.</p></article>
+        </div>
+      </section>
+
+      <section id="how" class="section sectionAlt">
+        <div class="shellWide">
+          <div class="sectionIntro"><div class="eyebrow">HOW TO USE</div><h2>Two people, two simple responsibilities.</h2></div>
+          <div class="howGrid">
+            <article class="stepCard"><span class="stepNo">01</span><h3>Host registers</h3><p>Create a Zapper host account. An active subscription is required to create sessions.</p></article>
+            <article class="stepCard"><span class="stepNo">02</span><h3>Host creates session</h3><p>Paste the Google Meet URL or meeting ID. Zapper stores it and returns a 6-digit PIN.</p></article>
+            <article class="stepCard"><span class="stepNo">03</span><h3>Participant launches Zapper</h3><p>No portal login. Google Sign-In happens only inside the desktop app if required.</p></article>
+            <article class="stepCard"><span class="stepNo">04</span><h3>Participant enters PIN</h3><p>The backend validates the host subscription and returns the matching Meet URL to the desktop.</p></article>
+            <article class="stepCard"><span class="stepNo">05</span><h3>Meeting is transcribed</h3><p>Live captions continue through the existing private overlay and transcription service.</p></article>
+            <article class="stepCard"><span class="stepNo">06</span><h3>Host gets the PDF</h3><p>When the participant leaves, the complete transcript is stored and appears in the host portal.</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" class="section shellWide">
+        <div class="pricingWrap">
+          <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>One straightforward host plan.</h2><p>Participants do not need a paid Zapper account. The host owns session creation and transcript history.</p></div>
+          <div class="pricingCard cardGlow">
+            <span class="pillBlue">HOST PLAN</span>
+            <div class="price"><strong>₹1,000</strong><span>/ month</span></div>
+            <ul><li>Host portal access</li><li>6-digit session PIN creation</li><li>Latest 15 sessions retained</li><li>Latest 15 PDF transcripts retained</li><li>Admin-managed subscription dates</li></ul>
+            <button id="pricingSignup" class="primaryBtn large" type="button">Create host account</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="about" class="section sectionAlt">
+        <div class="shellWide aboutGrid">
+          <div><div class="eyebrow">ABOUT ZAPPER</div><h2>Built around a private desktop transcription workflow.</h2></div>
+          <p>Zapper separates the commercial host account from the participant desktop experience. The website manages subscriptions, meeting sessions, PINs and transcript history. The desktop app focuses only on Google authentication, PIN redemption and live transcription.</p>
+        </div>
+      </section>
+
+      <section class="ctaSection shellWide">
+        <div class="ctaCard cardGlow"><div><div class="eyebrow">PARTICIPANT</div><h2>Already have Zapper installed?</h2><p>Launch it directly and enter the PIN shared by your host.</p></div><div class="heroActions"><button class="primaryBtn large" data-launch type="button">Launch Zapper</button><a class="secondaryBtn large" data-download href="#">Download</a></div></div>
+      </section>
+    </main>
+
+    <footer class="footer shellWide"><div><strong>ZAPPER</strong><span>Private meeting transcription</span></div><div><a href="#features">Features</a><a href="#pricing">Pricing</a><button id="footerLogin" class="linkBtn" type="button">Host login</button></div></footer>
+  </div>
+
+  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="modalBackdrop" data-close-auth></div>
+    <section class="authCard">
+      <button class="modalClose" data-close-auth type="button">×</button>
+      <div class="eyebrow">HOST / ADMIN ACCOUNT</div>
+      <h2 id="authTitle">Sign in to Zapper</h2>
+      <p id="authLead">Hosts sign in to create meeting sessions. Admins use the same login and are routed to the admin console automatically.</p>
+      <div class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
       <form id="authForm">
-        <input id="name" class="hidden" placeholder="Name" autocomplete="name" />
+        <input id="name" class="hidden" placeholder="Full name" autocomplete="name" />
         <input id="email" type="email" placeholder="Email" autocomplete="email" required />
         <input id="password" type="password" placeholder="Password (8+ characters)" autocomplete="current-password" required />
-        <button id="authSubmit" type="submit">Login</button>
+        <button id="authSubmit" class="primaryBtn" type="submit">Login</button>
         <div id="authError" class="error" aria-live="polite"></div>
       </form>
     </section>
-
-    <main id="portal" class="hidden">
-      <section class="hero">
-        <div class="heroCopy">
-          <span class="eyebrow">ACCOUNT</span>
-          <h1 id="welcome">Welcome</h1>
-          <p id="subText"></p>
-        </div>
-        <div class="plan card">
-          <span>Monthly plan</span>
-          <strong>₹1,000</strong>
-          <small>per month · session PIN access</small>
-          <span id="planBadge" class="planBadge">Checking</span>
-        </div>
-      </section>
-
-      <section class="grid">
-        <div class="card create">
-          <span class="eyebrow">HOST</span>
-          <h2>Create session</h2>
-          <p>Paste a Meet link, <code>meet.google.com/abc-defg-hij</code>, or simply <code>abc-defg-hij</code>.</p>
-          <form id="sessionForm">
-            <input id="meetUrl" placeholder="abc-defg-hij" required />
-            <button type="submit">Create session</button>
-          </form>
-          <div id="sessionError" class="error" aria-live="polite"></div>
-          <div id="pinBox" class="pinBox hidden">
-            <small>SESSION PIN</small>
-            <strong id="pinValue">000000</strong>
-            <span id="pinMeet"></span>
-            <button id="copyPin" class="ghost" type="button">Copy PIN</button>
-          </div>
-        </div>
-
-        <div class="card launch">
-          <span class="eyebrow">DESKTOP</span>
-          <h2>Launch Zapper</h2>
-          <p>The desktop app checks Google sign-in and then asks only for the 6-digit PIN.</p>
-          <button id="launchBtn" type="button">Launch Zapper</button>
-          <a id="downloadBtn" class="buttonLink ghost hidden" href="#">Download desktop app</a>
-          <small id="launchHelp">Install Zapper once, then this button opens it directly.</small>
-        </div>
-      </section>
-
-      <section class="card sectionCard">
-        <div class="sectionHead">
-          <div><h2>Recent sessions</h2><p>Latest host sessions and generated PINs.</p></div>
-          <button id="refreshSessions" class="ghost" type="button">Refresh</button>
-        </div>
-        <div id="sessions" class="list"></div>
-      </section>
-
-      <section class="card sectionCard">
-        <div class="sectionHead">
-          <div><h2>Saved transcripts</h2><p>Latest 20 completed transcripts with PDF download.</p></div>
-          <button id="refreshTranscripts" class="ghost" type="button">Refresh</button>
-        </div>
-        <div id="transcripts" class="list"></div>
-      </section>
-    </main>
   </div>
+
+  <main id="hostPortal" class="portalShell hidden">
+    <header class="portalTop">
+      <a class="brandLockup" href="#"><span class="brandMark">Z</span><span><strong>ZAPPER</strong><small>Host portal</small></span></a>
+      <div class="portalActions"><button class="ghostBtn" data-launch type="button">Launch Zapper</button><a class="ghostBtn anchorBtn" data-download href="#">Download</a><button id="hostLogout" class="ghostBtn" type="button">Log out</button></div>
+    </header>
+    <section class="portalHero">
+      <div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div>
+      <div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div>
+    </section>
+    <section class="portalGrid">
+      <div class="portalCard">
+        <div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Paste <code>abc-defg-hij</code>, <code>meet.google.com/abc-defg-hij</code>, or the full Google Meet URL.</p>
+        <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form>
+        <div id="sessionError" class="error" aria-live="polite"></div>
+        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button></div>
+      </div>
+      <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT HANDOFF</div><h2>Share only the PIN</h2><p>The participant launches Zapper, signs into Google if required, and enters the six-digit code. They do not need your portal credentials.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
+    </section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Latest 15 host sessions and generated PINs.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Latest 15 completed sessions with stored PDF download.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="transcripts" class="dataList"></div></section>
+  </main>
+
+  <main id="adminPortal" class="portalShell hidden">
+    <header class="portalTop"><a class="brandLockup" href="#"><span class="brandMark">Z</span><span><strong>ZAPPER</strong><small>Administrator console</small></span></a><div class="portalActions"><button id="refreshAdmin" class="ghostBtn" type="button">Refresh</button><button id="adminLogout" class="ghostBtn" type="button">Log out</button></div></header>
+    <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage host accounts, subscription dates and usage activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>
+    <section class="portalCard"><div class="sectionHead adminHead"><div><h2>Users</h2><p>Search by name or email. Edit exact subscription start/end dates or disable an account.</p></div><input id="adminSearch" class="searchInput" placeholder="Search users..."/></div><div id="adminUsers" class="adminTableWrap"></div></section>
+  </main>
+
+  <div id="adminEditModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modalBackdrop" data-close-admin></div>
+    <section class="adminEditCard">
+      <button class="modalClose" data-close-admin type="button">×</button>
+      <div class="eyebrow">EDIT USER</div><h2 id="editUserTitle">User</h2><p id="editUserMeta"></p>
+      <div class="formGrid">
+        <label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+        <label>Account status<select id="editAccountStatus"><option value="active">Active</option><option value="disabled">Disabled</option></select></label>
+        <label>Subscription start<input id="editStart" type="datetime-local"/></label>
+        <label>Subscription end<input id="editEnd" type="datetime-local"/></label>
+      </div>
+      <div class="quickAdjust"><button id="minus30" class="ghostBtn" type="button">−30 days</button><button id="plus30" class="ghostBtn" type="button">+30 days</button></div>
+      <div id="editError" class="error"></div>
+      <div class="modalActions"><button id="saveUser" class="primaryBtn" type="button">Save changes</button></div>
+      <div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
+    </section>
+  </div>
+
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

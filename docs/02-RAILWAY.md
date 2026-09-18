@@ -1,70 +1,56 @@
-# 2 — New Railway backend
+# 2 — Railway backend
 
-Create a **new Railway project**. Do not reuse the old Zapper service.
+The current new Zapper backend remains deployed from the same `zapper-prod` GitHub repository.
 
-## Service
+## Service settings
 
-1. Railway → New Project.
-2. Add a service from the new GitHub `zapper-platform` repo.
-3. Service name: `zapper-api`.
-4. Service Settings → Root Directory: `/apps/api`.
-5. Railway will use `apps/api/railway.json` and `npm start`.
+- Root Directory: `/apps/api`
+- Start command: `npm start`
+- Health check: `/health`
+- Custom domain: `api.zapperapp.in`
+- Persistent Volume mount: `/data`
 
-## Persistent SQLite volume
+Do not delete the `/data` volume; it contains the SQLite database and survives redeployments.
 
-1. Add a Railway Volume to `zapper-api`.
-2. Mount path: `/data`.
-3. Do not store the production DB anywhere outside this volume.
-
-The API resolves its database folder in this order: `DATA_DIR`, Railway's volume mount variable, then local `./data`.
-
-## Required variables
-
-Set these on the `zapper-api` service:
+## Production variables
 
 ```text
 NODE_ENV=production
 DEEPGRAM_API_KEY=<your real Deepgram key>
-JWT_SECRET=<long random secret, keep permanently>
-ADMIN_KEY=<different long random admin secret>
+JWT_SECRET=<stable long random secret>
+ADMIN_KEY=<different stable long random secret for CLI automation only>
+ADMIN_EMAIL=<your admin login email>
+ADMIN_PASSWORD=<8+ character bootstrap password if admin account does not already exist>
+ADMIN_NAME=Zapper Admin
 DATA_DIR=/data
-WEB_ORIGINS=https://zapper.in,https://www.zapper.in
+WEB_ORIGINS=https://zapper-prod.vercel.app,https://zapperapp.in,https://www.zapperapp.in
 PLAN_PRICE_INR=1000
 DEFAULT_TRIAL_DAYS=0
 PORTAL_TOKEN_DAYS=7
 HOST_SESSION_HOURS=12
 PARTICIPANT_TOKEN_MINUTES=180
-TRANSCRIPT_RETENTION=20
+SESSION_RETENTION=15
+TRANSCRIPT_RETENTION=15
 ```
 
-Generate secrets locally, for example:
+Important: in Railway the value of `WEB_ORIGINS` must be only the comma-separated URLs. Do not put `WEB_ORIGINS=` inside the value box.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-```
+## Admin bootstrap
 
-Run it twice: one result for `JWT_SECRET`, another for `ADMIN_KEY`.
+On startup:
 
-## Domain
-
-1. Railway service → Networking/Custom Domain.
-2. Add `api.zapper.in`.
-3. Railway will show the DNS record you must create at your domain/DNS provider.
-4. Add exactly the record Railway shows.
-5. Wait until Railway reports the custom domain as active.
+- If `ADMIN_EMAIL` already exists, that account is promoted to role `admin` and keeps its current password.
+- If it does not exist, `ADMIN_PASSWORD` is used to create the admin account.
+- The same normal website Login form routes an admin to the admin console.
 
 ## Verify
 
-Open:
-
 ```text
-https://api.zapper.in/health
+https://api.zapperapp.in/health
 ```
 
-Expected shape:
+Expected:
 
 ```json
 {"ok":true,"service":"zapper-api","databaseReady":true,"deepgramConfigured":true}
 ```
-
-Do not continue to the desktop build until this works.

@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electro
 const path = require('path');
 const fs = require('fs');
 
-const DEFAULT_BACKEND_URL = 'https://api.zapper.in';
+const DEFAULT_BACKEND_URL = 'https://api.zapperapp.in';
 let APP_CONFIG = {};
 try { APP_CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, 'app-config.json'), 'utf8')); } catch (_) {}
 const BACKEND_URL = String(APP_CONFIG.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '');

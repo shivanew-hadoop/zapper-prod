@@ -3,7 +3,7 @@ const adminKey = String(process.env.ADMIN_KEY || '');
 const email = String(process.argv[2] || '').trim();
 const days = Math.max(1, Number(process.argv[3] || 30));
 if (!adminKey || !email) {
-  console.error('Usage: ADMIN_KEY=... API_BASE_URL=https://api.zapper.in node scripts/activate-subscription.js user@example.com 30');
+  console.error('Usage: ADMIN_KEY=... API_BASE_URL=https://api.zapperapp.in node scripts/activate-subscription.js user@example.com 30');
   process.exit(1);
 }
 fetch(`${apiBase}/api/admin/subscription`, {

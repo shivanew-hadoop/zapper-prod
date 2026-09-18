@@ -1,51 +1,50 @@
-# Zapper Platform
+# Zapper Platform — complete product build
 
-Brand-new Zapper project. It is intentionally separate from the previous Zapper repository/backend.
+Greenfield Zapper repository with three independently deployable applications.
 
-## Applications
+- `apps/api` — Railway API + SQLite volume + Deepgram relay + host subscriptions + admin console APIs + 6-digit PINs + stored PDF transcripts.
+- `apps/web` — Vercel website. Public marketing/participant launch, host registration/login/dashboard and role-based admin console.
+- `apps/desktop` — Electron desktop app. No Zapper account login: Google Sign-In when required, then 6-digit PIN only.
 
-- `apps/api` — Railway API, SQLite database, subscriptions, 6-digit session PINs, transcript storage/PDF, Deepgram WebSocket relay.
-- `apps/web` — Zapper.in web portal (Vite) for signup/login, session creation, PINs, recent sessions and PDF downloads.
-- `apps/desktop` — Electron overlay. Google sign-in + 6-digit PIN only; no license key and no manual Meet URL.
-- `docs` — deployment and production runbook.
+## Production endpoints
 
-## Target production URLs
+- Website: `https://zapperapp.in` (keep using the Vercel preview URL until final acceptance testing is complete)
+- API: `https://api.zapperapp.in`
+- Desktop protocol: `zapper://launch`
+- Windows download: GitHub Releases asset `Zapper-Windows-x64.exe`
 
-- Portal: `https://zapper.in`
-- API: `https://api.zapper.in`
-- Desktop custom protocol: `zapper://launch`
+## Roles and flow
 
-## Core flow
+### Participant
+1. Opens the public website.
+2. Clicks **Launch Zapper** if installed or **Download Zapper** otherwise.
+3. Desktop verifies Google sign-in; it opens Google Sign-In only when needed.
+4. Participant enters the host's 6-digit PIN.
+5. API resolves the Meet URL and authorizes transcription. No Zapper portal account is required.
 
-1. Host registers/signs in at Zapper.in.
-2. Host subscription must be active.
-3. Host enters a Google Meet ID/link and creates a session.
-4. API saves the canonical Meet URL and returns a unique 6-digit PIN.
-5. Participant launches Zapper desktop, signs in to Google if required, and enters only the PIN.
-6. Desktop redeems the PIN and receives the Meet URL plus a signed session token.
-7. Captions stream through the new Railway API.
-8. On Leave, the complete transcript is uploaded to the host account.
-9. Portal shows the latest 20 transcripts and downloadable PDFs.
+### Host
+1. Registers/logs in on the website.
+2. Active subscription is required to create a session.
+3. Enters a Meet ID/link and receives a 6-digit PIN.
+4. Shares the PIN with the participant.
+5. On desktop Leave, the complete transcript and generated PDF are saved under the host account.
+6. The portal retains the latest 15 sessions and latest 15 transcript PDFs.
+
+### Admin
+1. Uses the same website Login form.
+2. `ADMIN_EMAIL` marks the account as admin.
+3. Admin sees all users, account state, subscription start/end dates, last activity, session count and transcript count.
+4. Admin can set exact start/end dates, extend/reduce dates and disable/reactivate host accounts.
 
 ## Start here
 
-Read `docs/00-END-TO-END.md` and follow it in order.
+Read `docs/10-COMPLETE-PRODUCT.md` for the deployment/update sequence and `docs/11-GITHUB-RELEASES.md` for the Windows download workflow.
 
-## Local verification
-
-Backend core logic (does not require npm packages):
+## Verification
 
 ```bash
 cd apps/api
 node tests/smoke.js
 ```
 
-JavaScript syntax:
-
-```bash
-node --check apps/api/server.js
-node --check apps/api/session-control.js
-node --check apps/desktop/main.js
-node --check apps/desktop/overlay/overlay.js
-node --check apps/desktop/meet-controller/index.js
-```
+The smoke test validates admin login, host registration, exact subscription editing, 15-session retention, PIN redemption, stored PDF creation and admin activity reporting.

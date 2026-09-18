@@ -1,14 +1,15 @@
 {
   "name": "@zapper/desktop",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
   "author": "Zapper",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable --x64",
-    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check transcriber/remoteDeepgram.js"
+    "dist": "electron-builder --win nsis --x64",
+    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check transcriber/remoteDeepgram.js",
+    "dist:portable": "electron-builder --win portable --x64"
   },
   "dependencies": {
     "ws": "^8.17.0"
@@ -26,16 +27,13 @@
     "win": {
       "target": [
         {
-          "target": "portable",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
-      "artifactName": "Zapper-Windows-x64.${ext}"
-    },
-    "portable": {
-      "artifactName": "Zapper-Windows-x64.${ext}"
+      "artifactName": "Zapper-Setup-x64.${ext}"
     },
     "files": [
       "main.js",
@@ -66,6 +64,16 @@
           "zapper"
         ]
       }
-    ]
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Zapper",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Zapper-Setup-x64.${ext}"
+    }
   }
 }

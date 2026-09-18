@@ -326,19 +326,35 @@ async function openGoogleSignIn(onStatusUpdate, force = false) {
 
     const loggedIn = await isGoogleLoggedIn().catch(() => false);
     if (loggedIn && !countdownStarted) {
+      // This flag now means "completion handled". Do not switch the overlay
+      // into a temporary countdown view: the participant must keep seeing the
+      // 6-digit PIN form until they explicitly start a session.
       countdownStarted = true;
       if (signInCheckTimer) clearInterval(signInCheckTimer);
-      
-      // Signal overlay to show countdown timer (5 seconds)
+      signInCheckTimer = null;
+
       if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
         try {
-          global.overlayWindow.webContents.send('start-countdown-timer', 5);
+          global.overlayWindow.webContents.send('google-signin-complete');
+          global.overlayWindow.show();
+          global.overlayWindow.focus();
+          try { global.overlayWindow.setContentProtection(true); } catch (_) {}
+          try { global.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
+          try { global.overlayWindow.moveTop(); } catch (_) {}
         } catch (e) {
-          console.error('[OpenGoogleSignIn] Error sending countdown signal:', e);
+          console.error('[OpenGoogleSignIn] Error restoring PIN overlay:', e);
         }
       }
-      
-      safeStatus(onStatusUpdate, 'Sign-in successful! Check the countdown panel below.');
+
+      safeStatus(onStatusUpdate, 'Google sign-in successful. Enter the 6-digit session PIN.');
+
+      // Close only the Google authentication window. The Zapper overlay remains
+      // open and visible with the PIN form.
+      setTimeout(() => {
+        if (loginWindow && !loginWindow.isDestroyed()) {
+          try { loginWindow.close(); } catch (_) {}
+        }
+      }, 350);
     }
   }, 500);
 

@@ -13,7 +13,7 @@ Keep the existing Vercel project connected to the same repository.
 
 ```text
 VITE_API_BASE_URL=https://api.zapperapp.in
-VITE_DESKTOP_DOWNLOAD_URL=https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Windows-x64.exe
+VITE_DESKTOP_DOWNLOAD_URL=https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe
 ```
 
 `VITE_API_BASE_URL` and the GitHub download URL are public browser configuration, so they should be Vercel **Config** values, not secrets.

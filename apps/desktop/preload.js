@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTranscript: (cb) => ipcRenderer.on('transcript', (_, data) => cb(data)),
   onStatus: (cb) => ipcRenderer.on('status', (_, msg) => cb(msg)),
   onLoginRequired: (cb) => ipcRenderer.on('login-required', (_, msg) => cb(msg)),
+  onGoogleSignInComplete: (cb) => ipcRenderer.on('google-signin-complete', () => cb()),
   onSpeechStart: (cb) => ipcRenderer.on('speech-started', () => cb()),
   onMeetChat: (cb) => ipcRenderer.on('meet-chat', (_, data) => cb(data)),
   onCountdownStart: (cb) => ipcRenderer.on('start-countdown-timer', (_, durationSeconds) => cb(durationSeconds)),

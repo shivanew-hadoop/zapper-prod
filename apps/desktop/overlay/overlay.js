@@ -541,18 +541,30 @@ retainBtn.addEventListener('click', () => {
 
 signinBtn.addEventListener('click', async () => {
   signinBtn.disabled = true;
-  showJoinError('Complete Google Sign-In in the opened window. After sign-in, enter the 6-digit Zapper session PIN.');
+  showJoin();
+  loginAlert.classList.add('hidden');
+  setSessionInfo('Complete Google Sign-In in the opened window. This PIN screen will stay here.', 'ok');
   await window.electronAPI.googleSignIn().catch(() => null);
-  const login = await window.electronAPI.checkGoogleLogin().catch(() => ({ loggedIn: false }));
-  if (login.loggedIn) {
-    loginAlert.classList.add('hidden');
-    setSessionInfo('Google signed in. Enter the 6-digit session PIN.', 'ok');
-    statusEl.textContent = 'Google signed in.';
-  } else {
-    showJoinError('You must log in with your Google account before joining. Complete Google Sign-In, then enter the session PIN.');
-  }
+  // Completion is delivered asynchronously by onGoogleSignInComplete after the
+  // persistent Google profile really contains authentication cookies.
   setTimeout(() => { signinBtn.disabled = false; }, 1000);
 });
+
+if (window.electronAPI.onGoogleSignInComplete) {
+  window.electronAPI.onGoogleSignInComplete(() => {
+    hideCountdownTimer();
+    showJoin();
+    loginAlert.classList.add('hidden');
+    setSessionInfo('Google signed in. Enter the 6-digit session PIN and click Start Session.', 'ok');
+    signinBtn.disabled = false;
+    const pinInput = document.getElementById('sessionPin');
+    if (pinInput) {
+      requestAnimationFrame(() => {
+        try { pinInput.focus({ preventScroll: true }); } catch (_) { try { pinInput.focus(); } catch (_) {} }
+      });
+    }
+  });
+}
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -685,8 +697,12 @@ if (window.electronAPI.onMeetChat) {
 
 // Listen for countdown timer start signal from main process
 if (window.electronAPI.onCountdownStart) {
-  window.electronAPI.onCountdownStart((durationSeconds) => {
-    showCountdownTimer(durationSeconds);
+  window.electronAPI.onCountdownStart(() => {
+    // Backward-compatible guard for older main-process builds: even if a stale
+    // countdown event arrives, keep the participant PIN form visible.
+    hideCountdownTimer();
+    showJoin();
+    setSessionInfo('Google signed in. Enter the 6-digit session PIN and click Start Session.', 'ok');
   });
 }
 

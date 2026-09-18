@@ -1,5 +1,5 @@
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
-const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Windows-x64.exe';
+const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe';
 const DESKTOP_DOWNLOAD_URL = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || DEFAULT_RELEASE_URL).trim();
 
 let mode = 'login';

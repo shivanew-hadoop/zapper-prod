@@ -15,13 +15,13 @@ git push origin v3.1.0
 3. GitHub Actions runs on Windows, builds `apps/desktop`, creates a GitHub Release and uploads:
 
 ```text
-Zapper-Windows-x64.exe
+Zapper-Setup-x64.exe
 ```
 
 4. The website Download Zapper button uses:
 
 ```text
-https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Windows-x64.exe
+https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe
 ```
 
 That URL remains stable across future releases as long as the asset keeps the same filename.
@@ -39,7 +39,7 @@ npm run dist
 The EXE is under:
 
 ```text
-apps/desktop/dist/Zapper-v3.1.0/Zapper-Windows-x64.exe
+apps/desktop/dist/Zapper-v3.1.1/Zapper-Setup-x64.exe
 ```
 
-In GitHub: **Repository → Releases → Draft a new release → choose/create tag → upload `Zapper-Windows-x64.exe` → Publish release**.
+In GitHub: **Repository → Releases → Draft a new release → choose/create tag → upload `Zapper-Setup-x64.exe` → Publish release**.

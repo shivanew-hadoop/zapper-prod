@@ -26,6 +26,7 @@ let privateCursor = null;
 
 let finalLines = [];
 let transcriptArchive = [];
+let transcriptSegments = [];
 let interimText = '';
 let chatMessages = [];
 const recentOutgoingChat = [];
@@ -49,6 +50,7 @@ let transcriptScrollTopLock = 0;
 let transcriptRenderRestoring = false;
 let transcriptUserScrollIntent = false;
 let transcriptRenderVersion = 0;
+let finalizingSession = false;
 
 
 function normalizeGoogleMeetInput(value) {
@@ -129,6 +131,25 @@ if (document.readyState === 'loading') {
 } else {
   initPrivateCursor();
 }
+
+// Resize through renderer-owned protected hit zones instead of native Windows
+// resize borders. The visible pointer remains the protected private cursor.
+document.querySelectorAll('[data-resize]').forEach((handle) => {
+  handle.addEventListener('pointerdown', async (event) => {
+    if (overlayCollapsed) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try { handle.setPointerCapture(event.pointerId); } catch (_) {}
+    await window.electronAPI.startOverlayResize(handle.dataset.resize).catch(() => null);
+  });
+  const stop = async (event) => {
+    try { if (event?.pointerId != null && handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId); } catch (_) {}
+    await window.electronAPI.stopOverlayResize().catch(() => null);
+  };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+});
+window.addEventListener('blur', () => window.electronAPI.stopOverlayResize?.().catch(() => null));
 
 const SHORT_AMERICAN_NAMES = ['Liam', 'Noah', 'Emma', 'Ava', 'Mia', 'Ella', 'Jack', 'Luke', 'Ryan', 'Owen', 'Evan', 'Nora'];
 
@@ -555,7 +576,7 @@ if (window.electronAPI.onGoogleSignInComplete) {
     hideCountdownTimer();
     showJoin();
     loginAlert.classList.add('hidden');
-    setSessionInfo('Google signed in. Enter the 6-digit session PIN and click Start Session.', 'ok');
+    setSessionInfo('Google signed in. Close the Google window manually when ready, then enter the 6-digit PIN and click Start Session.', 'ok');
     signinBtn.disabled = false;
     const pinInput = document.getElementById('sessionPin');
     if (pinInput) {
@@ -587,7 +608,7 @@ form.addEventListener('submit', async (e) => {
   setSessionInfo('Checking session PIN...');
   const redeemed = await window.electronAPI.redeemSessionPin(pin).catch(e => ({ success: false, error: e.message }));
   if (!redeemed.success) {
-    showJoinError(redeemed.error || 'Session PIN is invalid or expired.');
+    showJoinError(redeemed.error || 'This is not a valid active PIN. Ask the host for a current 6-digit PIN.');
     return;
   }
 
@@ -596,6 +617,7 @@ form.addEventListener('submit', async (e) => {
   activeMeetUrl = redeemed.meetUrl;
   sessionStartedAt = Date.now();
   transcriptArchive = [];
+  transcriptSegments = [];
   finalLines = [];
   interimText = '';
   transcriptAutoScroll = true;
@@ -612,6 +634,7 @@ form.addEventListener('submit', async (e) => {
     activeSessionId = '';
     activeMeetUrl = '';
     sessionStartedAt = 0;
+    transcriptSegments = [];
     activeGoogleEmail = '';
     if (res.loginRequired) return showLoginRequired(res.error);
     if (res.invalidMeetUrl) return showJoinError(res.error || 'The host session contains an invalid Google Meet URL.');
@@ -620,40 +643,50 @@ form.addEventListener('submit', async (e) => {
   activeGoogleEmail = String(res.googleEmail || '').trim();
 });
 
-leaveBtn.addEventListener('click', async () => {
-  const endedAt = Date.now();
-  const transcriptText = transcriptArchive.join('\n').trim();
-  if (activeSessionToken && transcriptText) {
-    statusEl.textContent = 'Saving transcript...';
-    const saved = await window.electronAPI.saveSessionTranscript({
-      sessionToken: activeSessionToken,
-      transcriptText,
-      startedAt: sessionStartedAt || endedAt,
-      endedAt,
-      googleEmail: activeGoogleEmail
-    }).catch(e => ({ success: false, error: e.message }));
-    if (!saved.success) statusEl.textContent = `Transcript save warning: ${saved.error || 'Could not save transcript.'}`;
+async function finalizeActiveSession({ endBackend = true, reason = 'Session ended. Enter another 6-digit PIN to start again.' } = {}) {
+  if (finalizingSession) return;
+  finalizingSession = true;
+  try {
+    const endedAt = Date.now();
+    const transcriptText = transcriptArchive.join('\n').trim();
+    if (activeSessionToken && transcriptText) {
+      statusEl.textContent = 'Saving transcript...';
+      const saved = await window.electronAPI.saveSessionTranscript({
+        sessionToken: activeSessionToken,
+        transcriptText,
+        transcriptSegments,
+        startedAt: sessionStartedAt || endedAt,
+        endedAt,
+        googleEmail: activeGoogleEmail
+      }).catch(e => ({ success: false, error: e.message }));
+      if (!saved.success) statusEl.textContent = `Transcript save warning: ${saved.error || 'Could not save transcript.'}`;
+    }
+    if (endBackend && activeSessionToken && window.electronAPI.endBackendSession) {
+      await window.electronAPI.endBackendSession(activeSessionToken).catch(() => null);
+    }
+    await window.electronAPI.leaveMeet();
+    finalLines = [];
+    transcriptArchive = [];
+    transcriptSegments = [];
+    interimText = '';
+    chatMessages = [];
+    activeSessionToken = '';
+    activeSessionId = '';
+    activeMeetUrl = '';
+    sessionStartedAt = 0;
+    activeGoogleEmail = '';
+    renderTranscript();
+    renderMeetChat();
+    statusEl.textContent = 'Stopped';
+    showJoin();
+    setSessionInfo(reason);
+    joinBtn.disabled = false;
+  } finally {
+    finalizingSession = false;
   }
-  if (activeSessionToken && window.electronAPI.endBackendSession) {
-    await window.electronAPI.endBackendSession(activeSessionToken).catch(() => null);
-  }
-  await window.electronAPI.leaveMeet();
-  finalLines = [];
-  transcriptArchive = [];
-  interimText = '';
-  chatMessages = [];
-  activeSessionToken = '';
-  activeSessionId = '';
-  activeMeetUrl = '';
-  sessionStartedAt = 0;
-  activeGoogleEmail = '';
-  renderTranscript();
-  renderMeetChat();
-  statusEl.textContent = 'Stopped';
-  showJoin();
-  setSessionInfo('Session ended. Enter another 6-digit PIN to start again.');
-  joinBtn.disabled = false;
-});
+}
+
+leaveBtn.addEventListener('click', async () => finalizeActiveSession({ endBackend: true }));
 
 window.electronAPI.onStatus((msg) => {
   statusEl.textContent = msg;
@@ -661,11 +694,17 @@ window.electronAPI.onStatus((msg) => {
 });
 if (window.electronAPI.onLoginRequired) window.electronAPI.onLoginRequired((msg) => showLoginRequired(msg));
 window.electronAPI.onSpeechStart(() => { statusEl.textContent = 'Speech detected...'; });
+if (window.electronAPI.onSessionEnded) {
+  window.electronAPI.onSessionEnded((message) => {
+    finalizeActiveSession({ endBackend: false, reason: message || 'This session is no longer active. Ask the host for a new PIN.' }).catch(() => null);
+  });
+}
 window.electronAPI.onTranscript(({ text, isFinal }) => {
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();
     transcriptArchive.push(cleanFinal);
+    transcriptSegments.push({ text: cleanFinal, at: Date.now() });
     finalLines.push(cleanFinal);
     // Never delete lines from the top while the user is reading older text.
     // Top-trimming was the hidden cause of the view moving down one line for
@@ -702,7 +741,7 @@ if (window.electronAPI.onCountdownStart) {
     // countdown event arrives, keep the participant PIN form visible.
     hideCountdownTimer();
     showJoin();
-    setSessionInfo('Google signed in. Enter the 6-digit session PIN and click Start Session.', 'ok');
+    setSessionInfo('Google signed in. Close the Google window manually when ready, then enter the 6-digit PIN and click Start Session.', 'ok');
   });
 }
 

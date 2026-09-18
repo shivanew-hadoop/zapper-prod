@@ -8,6 +8,8 @@ let account = null;
 let adminUsers = [];
 let editingUser = null;
 let searchTimer = null;
+let currentSessionId = '';
+let currentSessionPin = '';
 const $ = id => document.getElementById(id);
 
 function escapeHTML(value) {
@@ -139,17 +141,42 @@ async function loadHostPortal() {
   window.scrollTo({ top: 0 });
 }
 
+async function endHostSession(sessionId, pin = '') {
+  if (!sessionId) return;
+  const label = pin ? `PIN ${pin}` : 'this session';
+  if (!window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return;
+  await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
+  if (currentSessionId === sessionId) {
+    $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
+    $('endCurrentSession').disabled = true;
+    currentSessionId = '';
+  }
+  await loadSessions();
+}
+
 async function loadSessions() {
   const data = await api('/api/sessions');
-  $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => `
+  $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => {
+    const active = session.active !== false && session.status === 'active' && (!session.expiresAt || Number(session.expiresAt) > Date.now());
+    return `
     <div class="dataRow">
-      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span><span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
-      <button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button>
-    </div>`).join('') : '<p class="empty">No sessions yet.</p>';
+      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason === 'idle_timeout' ? 'Auto-ended: no speech' : session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
+      <div class="rowActions">
+        ${active ? `<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
+      </div>
+    </div>`;
+  }).join('') : '<p class="empty">No sessions yet.</p>';
   $('sessions').querySelectorAll('[data-copy]').forEach(button => {
     button.onclick = async () => {
       await navigator.clipboard.writeText(button.dataset.copy);
       const old = button.textContent; button.textContent = 'Copied'; setTimeout(() => { button.textContent = old; }, 1200);
+    };
+  });
+  $('sessions').querySelectorAll('[data-end]').forEach(button => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try { await endHostSession(button.dataset.end, button.dataset.pin); }
+      catch (error) { alert(error.message); button.disabled = false; }
     };
   });
 }
@@ -187,8 +214,12 @@ $('sessionForm').onsubmit = async event => {
   $('sessionError').textContent = '';
   try {
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: $('meetUrl').value.trim() }) });
+    currentSessionId = data.session.id;
+    currentSessionPin = data.session.pin;
     $('pinValue').textContent = data.session.pin;
     $('pinMeet').textContent = data.session.meetUrl;
+    $('pinStatus').textContent = 'Active — share only this PIN with the participant.';
+    $('endCurrentSession').disabled = false;
     $('pinBox').classList.remove('hidden');
     await loadSessions();
   } catch (error) { $('sessionError').textContent = error.message; }
@@ -197,6 +228,12 @@ $('copyPin').onclick = async () => {
   const pin = $('pinValue').textContent.trim();
   if (/^\d{6}$/.test(pin)) await navigator.clipboard.writeText(pin);
   $('copyPin').textContent = 'Copied'; setTimeout(() => { $('copyPin').textContent = 'Copy PIN'; }, 1200);
+};
+$('endCurrentSession').onclick = async () => {
+  if (!currentSessionId) return;
+  $('endCurrentSession').disabled = true;
+  try { await endHostSession(currentSessionId, currentSessionPin); }
+  catch (error) { $('sessionError').textContent = error.message; $('endCurrentSession').disabled = false; }
 };
 $('refreshSessions').onclick = loadSessions;
 $('refreshTranscripts').onclick = loadTranscripts;

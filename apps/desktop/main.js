@@ -66,6 +66,9 @@ let audioRelayStarted = false;
 let transcriptLimitReached = false;
 let overlayTopmostGuard = null;
 let overlayPointerGuard = null;
+let overlayResizeGuard = null;
+let overlayResizeState = null;
+let sessionStatusPoller = null;
 
 
 // Keep the overlay private from supported OS capture APIs and continuously
@@ -118,6 +121,58 @@ function stopOverlayPointerGuard() {
   overlayPointerGuard = null;
 }
 
+function stopOverlayManualResize() {
+  if (overlayResizeGuard) clearInterval(overlayResizeGuard);
+  overlayResizeGuard = null;
+  overlayResizeState = null;
+}
+
+function startOverlayManualResize(direction) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  stopOverlayManualResize();
+  const dir = String(direction || '').toLowerCase();
+  if (!/^(n|s|e|w|ne|nw|se|sw)$/.test(dir)) return false;
+  const startBounds = overlayWindow.getBounds();
+  const startPoint = screen.getCursorScreenPoint();
+  overlayResizeState = { dir, startBounds, startPoint, lastPoint: startPoint, lastMoveAt: Date.now() };
+
+  overlayResizeGuard = setInterval(() => {
+    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayResizeState) return stopOverlayManualResize();
+    const point = screen.getCursorScreenPoint();
+    const state = overlayResizeState;
+    if (point.x !== state.lastPoint.x || point.y !== state.lastPoint.y) {
+      state.lastPoint = point;
+      state.lastMoveAt = Date.now();
+    }
+
+    const dx = point.x - state.startPoint.x;
+    const dy = point.y - state.startPoint.y;
+    let { x, y, width, height } = state.startBounds;
+    const minWidth = 420;
+    const minHeight = 120;
+
+    if (state.dir.includes('e')) width = Math.max(minWidth, state.startBounds.width + dx);
+    if (state.dir.includes('s')) height = Math.max(minHeight, state.startBounds.height + dy);
+    if (state.dir.includes('w')) {
+      width = Math.max(minWidth, state.startBounds.width - dx);
+      x = state.startBounds.x + (state.startBounds.width - width);
+    }
+    if (state.dir.includes('n')) {
+      height = Math.max(minHeight, state.startBounds.height - dy);
+      y = state.startBounds.y + (state.startBounds.height - height);
+    }
+
+    try {
+      overlayWindow.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) }, false);
+    } catch (_) {}
+    enforceOverlayPrivacyAndTopmost();
+
+    // Safety fallback when mouse-up occurs outside Chromium.
+    if (Date.now() - state.lastMoveAt > 1200) stopOverlayManualResize();
+  }, 16);
+  return true;
+}
+
 function normalizeGoogleMeetUrl(rawUrl) {
   const raw = String(rawUrl || '').trim();
   if (!raw) return null;
@@ -150,6 +205,7 @@ function normalizeGoogleMeetUrl(rawUrl) {
 }
 
 function resetRuntimeFlags() {
+  stopSessionStatusPoller();
   started = false;
   remoteSttStarted = false;
   audioRelayStarted = false;
@@ -225,12 +281,12 @@ async function redeemSessionPin(pin) {
   return { success: true, ...data };
 }
 
-async function saveSessionTranscript({ sessionToken, transcriptText, startedAt, endedAt, googleEmail }) {
+async function saveSessionTranscript({ sessionToken, transcriptText, transcriptSegments, startedAt, endedAt, googleEmail }) {
   const base = normalizeBackendHttpUrl(BACKEND_URL);
   const res = await fetch(`${base}/api/desktop/transcripts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${String(sessionToken || '')}` },
-    body: JSON.stringify({ transcriptText, startedAt, endedAt, googleEmail })
+    body: JSON.stringify({ transcriptText, transcriptSegments, startedAt, endedAt, googleEmail })
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) return { success: false, error: data.error || `Transcript save failed (${res.status})` };
@@ -246,6 +302,47 @@ async function endBackendSession(sessionToken) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) return { success: false, error: data.error || `Session end failed (${res.status})` };
   return { success: true, ...data };
+}
+
+async function getBackendSessionStatus(sessionToken) {
+  const base = normalizeBackendHttpUrl(BACKEND_URL);
+  const res = await fetch(`${base}/api/desktop/session-status`, {
+    headers: { authorization: `Bearer ${String(sessionToken || '')}` }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) return { success: false, active: false, error: data.error || `Session status failed (${res.status})` };
+  return { success: true, ...data };
+}
+
+function stopSessionStatusPoller() {
+  if (sessionStatusPoller) clearInterval(sessionStatusPoller);
+  sessionStatusPoller = null;
+}
+
+function startSessionStatusPoller(sessionToken) {
+  stopSessionStatusPoller();
+  const token = String(sessionToken || '');
+  if (!token) return;
+  let checking = false;
+  sessionStatusPoller = setInterval(async () => {
+    if (checking || !overlayWindow || overlayWindow.isDestroyed()) return;
+    checking = true;
+    try {
+      const state = await getBackendSessionStatus(token);
+      if (state.success && state.active) return;
+      const message = state.endReason === 'idle_timeout'
+        ? `This Zapper session ended automatically after ${state.idleTimeoutMinutes || 20} minutes without speech.`
+        : (state.error || 'This Zapper session is no longer active. Ask the host for a new PIN.');
+      overlayWindow.webContents.send('session-ended', message);
+      stopSessionStatusPoller();
+      stopRemoteTranscriptStream();
+    } catch (_) {
+      // A temporary network error must not terminate a valid meeting.
+    } finally {
+      checking = false;
+    }
+  }, 10000);
+  sessionStatusPoller.unref?.();
 }
 
 function createOverlayWindow() {
@@ -267,7 +364,7 @@ function createOverlayWindow() {
     thickFrame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: true,
+    resizable: false,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -280,7 +377,7 @@ function createOverlayWindow() {
   // the header or any first-painted content from briefly appearing in a
   // supported screen/window capture source.
   overlayWindow.setMovable(true);
-  overlayWindow.setResizable(true);
+  overlayWindow.setResizable(false);
   try { overlayWindow.setContentProtection(true); } catch (_) {}
   try { overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
   try { overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
@@ -309,6 +406,7 @@ function createOverlayWindow() {
   overlayWindow.on('closed', () => {
     stopOverlayTopmostGuard();
     stopOverlayPointerGuard();
+    stopOverlayManualResize();
     overlayWindow = null;
   });
 }
@@ -379,6 +477,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
     started = true;
 
     sendStatus('Session verified. Opening Meet...');
+    startSessionStatusPoller(sessionToken);
 
     startAudioWSServer();
     audioRelayStarted = true;
@@ -402,6 +501,12 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
 
           if (payload.type === 'status') {
             overlayWindow.webContents.send('status', payload.text);
+            return;
+          }
+
+          if (payload.type === 'session_ended') {
+            overlayWindow.webContents.send('session-ended', payload.text || 'This Zapper session is no longer active.');
+            stopRemoteTranscriptStream();
             return;
           }
 
@@ -507,7 +612,7 @@ ipcMain.handle('overlay-set-collapsed', async (_, collapsed) => {
       height: 48
     });
   } else {
-    overlayWindow.setResizable(true);
+    overlayWindow.setResizable(false);
     overlayWindow.setBounds({
       x: b.x,
       y: b.y,
@@ -520,6 +625,9 @@ ipcMain.handle('overlay-set-collapsed', async (_, collapsed) => {
 
   return true;
 });
+
+ipcMain.handle('overlay-resize-start', (_, direction) => startOverlayManualResize(direction));
+ipcMain.handle('overlay-resize-stop', () => { stopOverlayManualResize(); return true; });
 
 ipcMain.handle('overlay-click-through', (_, enabled) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {

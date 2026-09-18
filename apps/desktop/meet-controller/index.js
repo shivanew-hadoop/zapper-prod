@@ -314,7 +314,21 @@ async function openGoogleSignIn(onStatusUpdate, force = false) {
     if (signInCheckTimer) clearInterval(signInCheckTimer);
     signInCheckTimer = null;
     loginWindow = null;
-    safeStatus(onStatusUpdate, 'Ready to join meetings.');
+    isGoogleLoggedIn().then((loggedIn) => {
+      if (loggedIn) {
+        safeStatus(onStatusUpdate, 'Google sign-in window closed. Enter the 6-digit session PIN and click Start Session.');
+        if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+          try {
+            global.overlayWindow.webContents.send('google-signin-complete');
+            global.overlayWindow.show();
+            global.overlayWindow.focus();
+            global.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+          } catch (_) {}
+        }
+      } else {
+        safeStatus(onStatusUpdate, 'Google Sign-In was closed before authentication completed. Sign in before starting a session.');
+      }
+    }).catch(() => safeStatus(onStatusUpdate, 'Google Sign-In window closed.'));
   });
 
   // Check if user successfully signed in
@@ -333,28 +347,20 @@ async function openGoogleSignIn(onStatusUpdate, force = false) {
       if (signInCheckTimer) clearInterval(signInCheckTimer);
       signInCheckTimer = null;
 
+      // Authentication is complete, but do NOT close or hide the Google window.
+      // The user explicitly asked to close this window manually because Google may
+      // still show account/consent state after cookies become available.
       if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
         try {
           global.overlayWindow.webContents.send('google-signin-complete');
-          global.overlayWindow.show();
-          global.overlayWindow.focus();
           try { global.overlayWindow.setContentProtection(true); } catch (_) {}
           try { global.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-          try { global.overlayWindow.moveTop(); } catch (_) {}
         } catch (e) {
-          console.error('[OpenGoogleSignIn] Error restoring PIN overlay:', e);
+          console.error('[OpenGoogleSignIn] Error notifying PIN overlay:', e);
         }
       }
 
-      safeStatus(onStatusUpdate, 'Google sign-in successful. Enter the 6-digit session PIN.');
-
-      // Close only the Google authentication window. The Zapper overlay remains
-      // open and visible with the PIN form.
-      setTimeout(() => {
-        if (loginWindow && !loginWindow.isDestroyed()) {
-          try { loginWindow.close(); } catch (_) {}
-        }
-      }, 350);
+      safeStatus(onStatusUpdate, 'Google sign-in successful. Close the Google window manually when ready, then enter the 6-digit session PIN.');
     }
   }, 500);
 

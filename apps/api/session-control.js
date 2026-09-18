@@ -28,9 +28,13 @@ module.exports = function createSessionControl({ app, dataDir }) {
       pin TEXT NOT NULL UNIQUE,
       meet_url TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
+      active INTEGER NOT NULL DEFAULT 1,
       created_at_ms INTEGER NOT NULL,
       expires_at_ms INTEGER NOT NULL,
       ended_at_ms INTEGER,
+      participant_started_at_ms INTEGER,
+      last_speech_at_ms INTEGER,
+      end_reason TEXT,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS transcripts(
@@ -62,6 +66,12 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
   ensureColumn('transcripts', 'pdf_blob', 'BLOB');
   ensureColumn('transcripts', 'pdf_filename', 'TEXT');
+  ensureColumn('host_sessions', 'active', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('host_sessions', 'participant_started_at_ms', 'INTEGER');
+  ensureColumn('host_sessions', 'last_speech_at_ms', 'INTEGER');
+  ensureColumn('host_sessions', 'end_reason', 'TEXT');
+  // Normalize the explicit active flag for databases created by earlier builds.
+  db.exec("UPDATE host_sessions SET active=CASE WHEN status='active' AND ended_at_ms IS NULL THEN 1 ELSE 0 END;");
 
   const jwtSecretRaw = String(process.env.JWT_SECRET || '').trim();
   const jwtSecret = jwtSecretRaw || crypto.randomBytes(48).toString('hex');
@@ -74,6 +84,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12));
   const sessionRetention = Math.max(1, Math.min(50, Number(process.env.SESSION_RETENTION || 15)));
   const transcriptRetention = Math.max(1, Math.min(50, Number(process.env.TRANSCRIPT_RETENTION || 15)));
+  const sessionIdleTimeoutMinutes = Math.max(1, Math.min(240, Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 20)));
+  const sessionIdleTimeoutMs = sessionIdleTimeoutMinutes * 60000;
+  const pdfPauseTimestampSeconds = Math.max(10, Math.min(300, Number(process.env.PDF_PAUSE_TIMESTAMP_SECONDS || 30)));
+  const pdfPauseTimestampMs = pdfPauseTimestampSeconds * 1000;
   const adminKey = String(process.env.ADMIN_KEY || '').trim();
 
   const normalizeEmail = value => String(value || '').trim().toLowerCase();
@@ -201,16 +215,49 @@ module.exports = function createSessionControl({ app, dataDir }) {
     });
   }
 
-  function verifyParticipantToken(rawToken) {
+  function expireClockSessions(now = Date.now()) {
+    db.prepare(`UPDATE host_sessions
+      SET status='expired', active=0, ended_at_ms=COALESCE(ended_at_ms, ?), end_reason=COALESCE(end_reason, 'expired')
+      WHERE active=1 AND status='active' AND expires_at_ms<=?`).run(now, now);
+  }
+
+  function sweepIdleSessions(now = Date.now()) {
+    expireClockSessions(now);
+    const cutoff = now - sessionIdleTimeoutMs;
+    const result = db.prepare(`UPDATE host_sessions
+      SET status='ended', active=0, ended_at_ms=COALESCE(ended_at_ms, ?), end_reason='idle_timeout'
+      WHERE active=1 AND status='active' AND participant_started_at_ms IS NOT NULL
+        AND COALESCE(last_speech_at_ms, participant_started_at_ms)<=?`).run(now, cutoff);
+    return Number(result.changes || 0);
+  }
+
+  function participantTokenState(rawToken) {
     try {
       const payload = verifyToken(rawToken, 'zapper-desktop', 'zapper-electron');
       if (payload.type !== 'participant') return null;
+      expireClockSessions();
       const session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
       const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
-      if (!session || !user || session.status !== 'active' || session.expires_at_ms <= Date.now()) return null;
-      if (!subscriptionState(user).valid) return null;
-      return { payload, session, user };
+      if (!session || !user) return null;
+      const active = Number(session.active || 0) === 1 && session.status === 'active' && session.expires_at_ms > Date.now();
+      return { payload, session, user, active, subscriptionValid: subscriptionState(user).valid };
     } catch (_) { return null; }
+  }
+
+  function verifyParticipantToken(rawToken, options = {}) {
+    const state = participantTokenState(rawToken);
+    if (!state || !state.subscriptionValid) return null;
+    if (state.active) return { payload: state.payload, session: state.session, user: state.user };
+    if (options.allowEnded && Number(state.session.active || 0) === 0) {
+      return { payload: state.payload, session: state.session, user: state.user };
+    }
+    return null;
+  }
+
+  function touchSessionSpeech(sessionId, at = Date.now()) {
+    const ts = Math.max(1, Number(at) || Date.now());
+    return Number(db.prepare(`UPDATE host_sessions SET last_speech_at_ms=?
+      WHERE id=? AND active=1 AND status='active'`).run(ts, String(sessionId || '')).changes || 0);
   }
 
   function uniquePin() {
@@ -257,21 +304,40 @@ module.exports = function createSessionControl({ app, dataDir }) {
 
   function buildTranscriptPdf(row, user, hostSession) {
     const fmt = ms => new Date(Number(ms)).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    const fmt24Ist = ms => new Date(Number(ms)).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     const durationSec = Math.max(0, Math.round((row.ended_at_ms - row.started_at_ms) / 1000));
     const lines = [
-      'ZAPPER MEETING TRANSCRIPT',
-      `Host account: ${user.name || user.email} <${user.email}>`,
-      `Session PIN: ${hostSession.pin}`,
-      `Google Meet: ${hostSession.meet_url}`,
-      `Participant Google identity: ${row.google_email || 'Not captured'}`,
-      `From: ${fmt(row.started_at_ms)}`,
-      `To: ${fmt(row.ended_at_ms)}`,
-      `Duration: ${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, '0')}s`,
-      '',
-      'TRANSCRIPT',
-      '----------',
-      ...wrapPdfLine(row.transcript_text || 'No transcript content.'),
+      { text: 'ZAPPER MEETING TRANSCRIPT' },
+      { text: `Host account: ${user.name || user.email} <${user.email}>` },
+      { text: `Session PIN: ${hostSession.pin}` },
+      { text: `Google Meet: ${hostSession.meet_url}` },
+      { text: `Participant Google identity: ${row.google_email || 'Not captured'}` },
+      { text: `From: ${fmt(row.started_at_ms)}` },
+      { text: `To: ${fmt(row.ended_at_ms)}` },
+      { text: `Duration: ${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, '0')}s` },
+      { text: '' },
+      { text: 'TRANSCRIPT' },
+      { text: '----------' },
     ];
+
+    const segments = Array.isArray(row.transcript_segments) ? row.transcript_segments : [];
+    if (segments.length) {
+      let previousAt = null;
+      for (const segment of segments) {
+        const at = Number(segment.at || 0);
+        const text = String(segment.text || '').trim();
+        if (!text) continue;
+        if (previousAt && at > previousAt && at - previousAt >= pdfPauseTimestampMs) {
+          lines.push({ text: '' });
+          lines.push({ text: `[${fmt24Ist(at)} IST]`, small: true });
+        }
+        for (const wrapped of wrapPdfLine(text)) lines.push({ text: wrapped });
+        previousAt = at || previousAt;
+      }
+    } else {
+      for (const wrapped of wrapPdfLine(row.transcript_text || 'No transcript content.')) lines.push({ text: wrapped });
+    }
+
     const pages = [];
     for (let i = 0; i < lines.length; i += 55) pages.push(lines.slice(i, i + 55));
     const objects = [];
@@ -280,7 +346,12 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const pageIds = []; const esc = t => pdfSafe(t).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
     for (const pageLines of pages) {
       const stream = ['BT', '/F1 9 Tf', '48 800 Td', '12 TL'];
-      for (const line of pageLines) stream.push(`(${esc(line)}) Tj`, 'T*');
+      let currentSize = 9;
+      for (const line of pageLines) {
+        const nextSize = line.small ? 7 : 9;
+        if (nextSize !== currentSize) { stream.push(`/F1 ${nextSize} Tf`); currentSize = nextSize; }
+        stream.push(`(${esc(line.text)}) Tj`, 'T*');
+      }
       stream.push('ET');
       const content = stream.join('\n');
       const contentId = add(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
@@ -300,7 +371,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const safePdfFilename = endedAt => `Zapper_${new Date(Number(endedAt)).toISOString().replace(/[:.]/g, '-')}.pdf`;
 
   app.get('/api/public/config', (_req, res) => {
-    res.json({ ok: true, plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention } });
+    res.json({ ok: true, plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention }, sessionIdleTimeoutMinutes });
   });
 
   app.post('/api/auth/register', (req, res) => {
@@ -343,50 +414,82 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (!sub.valid) return res.status(402).json({ ok: false, error: 'Your Zapper subscription is not active. Please activate or renew the Rs. 1,000 monthly host plan.' });
     const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
     if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
-    const now = Date.now(); const pin = uniquePin(); const id = crypto.randomUUID();
-    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?)')
-      .run(id, req.authUser.id, pin, meetUrl, 'active', now, now + sessionHours * 3600000);
+    const now = Date.now();
+    expireClockSessions(now);
+    // Starting the same Meet again creates a fresh PIN and retires any older active PIN for that Meet.
+    db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='superseded' WHERE user_id=? AND meet_url=? AND active=1 AND status='active'")
+      .run(now, req.authUser.id, meetUrl);
+    const pin = uniquePin(); const id = crypto.randomUUID();
+    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, now + sessionHours * 3600000);
     trimUserSessions(req.authUser.id);
-    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', createdAt: now, expiresAt: now + sessionHours * 3600000 } });
+    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt: now + sessionHours * 3600000 } });
   });
 
   app.get('/api/sessions', auth, (req, res) => {
-    const rows = db.prepare('SELECT id,pin,meet_url,status,created_at_ms,expires_at_ms,ended_at_ms FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, sessionRetention);
-    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms })) });
+    sweepIdleSessions();
+    const rows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, sessionRetention);
+    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {
-    db.prepare("UPDATE host_sessions SET status='ended', ended_at_ms=? WHERE id=? AND user_id=?").run(Date.now(), req.params.id, req.authUser.id);
-    res.json({ ok: true });
+    const endedAt = Date.now();
+    const result = db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='host_ended' WHERE id=? AND user_id=? AND active=1 AND status='active'").run(endedAt, req.params.id, req.authUser.id);
+    if (!Number(result.changes || 0)) return res.status(404).json({ ok: false, error: 'Active session not found or it has already ended.' });
+    res.json({ ok: true, endedAt });
   });
 
   app.post('/api/desktop/redeem-pin', (req, res) => {
     const pin = String(req.body?.pin || '').replace(/\D/g, '').slice(0, 6);
     if (!/^\d{6}$/.test(pin)) return res.status(400).json({ ok: false, error: 'Enter the 6-digit session PIN.' });
-    const session = db.prepare("SELECT * FROM host_sessions WHERE pin=? AND status='active' AND expires_at_ms>?").get(pin, Date.now());
+    const now = Date.now();
+    sweepIdleSessions(now);
+    const session = db.prepare("SELECT * FROM host_sessions WHERE pin=? AND active=1 AND status='active' AND expires_at_ms>?").get(pin, now);
     const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
-    if (!session || !user) return res.status(404).json({ ok: false, error: 'Session PIN is invalid or expired.' });
+    if (!session || !user) return res.status(404).json({ ok: false, error: 'This is not a valid active PIN. It may have been ended or expired. Ask the host for a current 6-digit PIN.' });
     if (!subscriptionState(user).valid) return res.status(402).json({ ok: false, error: 'The host subscription is inactive or expired.' });
-    res.set('Cache-Control', 'no-store').json({ ok: true, meetUrl: session.meet_url, sessionId: session.id, sessionToken: participantSign(user, session), host: { name: user.name || user.email, email: user.email } });
+    db.prepare(`UPDATE host_sessions SET participant_started_at_ms=COALESCE(participant_started_at_ms, ?), last_speech_at_ms=COALESCE(last_speech_at_ms, ?) WHERE id=? AND active=1`).run(now, now, session.id);
+    const refreshedSession = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
+    res.set('Cache-Control', 'no-store').json({ ok: true, meetUrl: refreshedSession.meet_url, sessionId: refreshedSession.id, sessionToken: participantSign(user, refreshedSession), idleTimeoutMinutes: sessionIdleTimeoutMinutes, host: { name: user.name || user.email, email: user.email } });
+  });
+
+  app.get('/api/desktop/session-status', (req, res) => {
+    const rawToken = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    sweepIdleSessions();
+    const state = participantTokenState(rawToken);
+    if (!state) return res.status(401).json({ ok: false, active: false, error: 'Session authorization expired.' });
+    const active = Boolean(state.active && state.subscriptionValid);
+    res.set('Cache-Control', 'no-store').json({
+      ok: true,
+      active,
+      status: state.session.status,
+      endReason: state.session.end_reason || '',
+      idleTimeoutMinutes: sessionIdleTimeoutMinutes,
+    });
   });
 
   app.post('/api/desktop/end-session', (req, res) => {
     const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (!verified) return res.status(401).json({ ok: false, error: 'Session authorization expired.' });
     const endedAt = Date.now();
-    db.prepare("UPDATE host_sessions SET status='ended', ended_at_ms=? WHERE id=? AND status='active'").run(endedAt, verified.session.id);
+    db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='participant_ended' WHERE id=? AND active=1 AND status='active'").run(endedAt, verified.session.id);
     res.json({ ok: true, endedAt });
   });
 
   app.post('/api/desktop/transcripts', (req, res) => {
-    const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), { allowEnded: true });
     if (!verified) return res.status(401).json({ ok: false, error: 'Session authorization expired. Enter the session PIN again.' });
     const text = String(req.body?.transcriptText || '').trim().slice(0, 500000);
     if (!text) return res.status(400).json({ ok: false, error: 'Transcript is empty.' });
     const endedAt = Math.min(Date.now() + 60000, Math.max(1, Number(req.body?.endedAt) || Date.now()));
     const startedAt = Math.max(1, Math.min(endedAt, Number(req.body?.startedAt) || endedAt));
+    const rawSegments = Array.isArray(req.body?.transcriptSegments) ? req.body.transcriptSegments.slice(0, 10000) : [];
+    const transcriptSegments = rawSegments.map(segment => ({
+      text: String(segment?.text || '').trim().slice(0, 12000),
+      at: Math.max(startedAt, Math.min(endedAt, Number(segment?.at) || startedAt)),
+    })).filter(segment => segment.text);
     const id = crypto.randomUUID();
-    const rowForPdf = { started_at_ms: startedAt, ended_at_ms: endedAt, google_email: normalizeEmail(req.body?.googleEmail), transcript_text: text };
+    const rowForPdf = { started_at_ms: startedAt, ended_at_ms: endedAt, google_email: normalizeEmail(req.body?.googleEmail), transcript_text: text, transcript_segments: transcriptSegments };
     const pdf = buildTranscriptPdf(rowForPdf, verified.user, verified.session);
     const pdfFilename = safePdfFilename(endedAt);
     db.prepare(`INSERT INTO transcripts(id,host_session_id,user_id,google_email,started_at_ms,ended_at_ms,transcript_text,pdf_blob,pdf_filename,created_at_ms)
@@ -445,13 +548,13 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.get('/api/admin/users/:id/activity', adminAuth, (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(Number(req.params.id));
     if (!user) return res.status(404).json({ ok: false, error: 'User not found.' });
-    const sessions = db.prepare('SELECT id,pin,meet_url,status,created_at_ms,expires_at_ms,ended_at_ms FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?').all(user.id, sessionRetention);
+    const sessions = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?').all(user.id, sessionRetention);
     const transcripts = db.prepare(`SELECT t.id,t.started_at_ms,t.ended_at_ms,t.google_email,t.pdf_filename,s.pin,s.meet_url
       FROM transcripts t JOIN host_sessions s ON s.id=t.host_session_id WHERE t.user_id=? ORDER BY t.ended_at_ms DESC LIMIT ?`).all(user.id, transcriptRetention);
     res.json({
       ok: true,
       user: adminUserSummary(user),
-      sessions: sessions.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms })),
+      sessions: sessions.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })),
       transcripts: transcripts.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, googleEmail: r.google_email, startedAt: r.started_at_ms, endedAt: r.ended_at_ms, pdfFilename: r.pdf_filename })),
     });
   });
@@ -498,5 +601,5 @@ module.exports = function createSessionControl({ app, dataDir }) {
     res.json({ ok: true, email, startedAt: start, validUntil: until, subscriptionStatus: status });
   });
 
-  return { db, dbPath, verifyParticipantToken, normalizeMeetUrl, planPriceInr, sessionRetention, transcriptRetention };
+  return { db, dbPath, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl, planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes };
 };

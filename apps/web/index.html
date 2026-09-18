@@ -147,7 +147,7 @@
         <div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Paste <code>abc-defg-hij</code>, <code>meet.google.com/abc-defg-hij</code>, or the full Google Meet URL.</p>
         <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form>
         <div id="sessionError" class="error" aria-live="polite"></div>
-        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button></div>
+        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div>
       </div>
       <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT HANDOFF</div><h2>Share only the PIN</h2><p>The participant launches Zapper, signs into Google if required, and enters the six-digit code. They do not need your portal credentials.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
     </section>

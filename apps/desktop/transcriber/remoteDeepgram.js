@@ -128,6 +128,10 @@ function connectSocket(url, isReconnect = false) {
     }
 
     if (msg.type === 'status') return emit({ type: 'status', text: msg.text });
+    if (msg.type === 'session_ended') {
+      permanentClose = true;
+      return emit({ type: 'session_ended', text: msg.message || 'This Zapper session is no longer active.' });
+    }
     if (msg.type === 'speech_started') return emit({ type: 'speech_started' });
 
     if (msg.type === 'transcript' && msg.text) {

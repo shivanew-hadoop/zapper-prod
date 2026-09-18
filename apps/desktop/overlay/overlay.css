@@ -36,6 +36,20 @@ html.private-cursor-ready body * {
   filter: drop-shadow(0 1px 1px rgba(0,0,0,.65));
 }
 .privateCursor.visible { display: block; }
+
+/* Renderer-owned resize zones replace native Windows resize borders. This keeps
+   resize interaction and its visible pointer inside the capture-protected overlay. */
+.resizeHandle { position: fixed; z-index: 2147483646; -webkit-app-region: no-drag; background: transparent; }
+.resizeN { top: 0; left: 10px; right: 10px; height: 7px; }
+.resizeS { bottom: 0; left: 10px; right: 10px; height: 7px; }
+.resizeE { right: 0; top: 10px; bottom: 10px; width: 7px; }
+.resizeW { left: 0; top: 10px; bottom: 10px; width: 7px; }
+.resizeNE, .resizeNW, .resizeSE, .resizeSW { width: 12px; height: 12px; }
+.resizeNE { right: 0; top: 0; }
+.resizeNW { left: 0; top: 0; }
+.resizeSE { right: 0; bottom: 0; }
+.resizeSW { left: 0; bottom: 0; }
+body:has(.card.collapsed) .resizeHandle { display: none; }
 .card {
   width: 100vw;
   height: 100vh;

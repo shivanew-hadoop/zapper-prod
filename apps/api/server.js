@@ -8,7 +8,14 @@ const WebSocket = require('ws');
 const createSessionControl = require('./session-control');
 
 const PORT = Number(process.env.PORT || 8080);
-const DEEPGRAM_API_KEY = String(process.env.DEEPGRAM_API_KEY || '').trim();
+function normalizeSecretEnv(name, rawValue) {
+  let value = String(rawValue || '').trim();
+  const prefix = `${name}=`;
+  if (value.toUpperCase().startsWith(prefix.toUpperCase())) value = value.slice(prefix.length).trim();
+  if ((value.startsWith('\"') && value.endsWith('\"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1).trim();
+  return value;
+}
+const DEEPGRAM_API_KEY = normalizeSecretEnv('DEEPGRAM_API_KEY', process.env.DEEPGRAM_API_KEY);
 const DATA_DIR = String(
   process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data')
 ).trim();
@@ -66,9 +73,35 @@ setInterval(() => {
 }, 10 * 60 * 1000).unref();
 
 const sessionControl = createSessionControl({ app, dataDir: DATA_DIR });
+const sessionIdleSweepTimer = setInterval(() => {
+  try { sessionControl.sweepIdleSessions(); } catch (error) { console.error('[SESSION] Idle sweep failed:', error.message); }
+}, 15000);
+sessionIdleSweepTimer.unref();
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'zapper-api', databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
+});
+app.get('/health/stt', async (_req, res) => {
+  if (!DEEPGRAM_API_KEY) return res.status(503).json({ ok: false, deepgramAuthValid: false, error: 'DEEPGRAM_API_KEY is not configured.' });
+  try {
+    const check = await fetch('https://api.deepgram.com/v1/projects', {
+      headers: { Authorization: `Token ${DEEPGRAM_API_KEY}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!check.ok) {
+      return res.status(503).json({
+        ok: false,
+        deepgramAuthValid: false,
+        providerStatus: check.status,
+        error: check.status === 401 || check.status === 403
+          ? 'Deepgram rejected the configured API key. In Railway, DEEPGRAM_API_KEY must contain only a current active Deepgram key, with no DEEPGRAM_API_KEY= prefix.'
+          : `Deepgram credential check failed (${check.status}).`,
+      });
+    }
+    return res.json({ ok: true, deepgramAuthValid: true });
+  } catch (error) {
+    return res.status(503).json({ ok: false, deepgramAuthValid: false, error: `Could not validate Deepgram credentials: ${error.message}` });
+  }
 });
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'Zapper API', health: '/health' });
@@ -109,8 +142,10 @@ wss.on('connection', (clientWs, req) => {
   let keepAliveTimer = null;
   let sessionLimitTimer = null;
   let clientPingTimer = null;
+  let sessionStateTimer = null;
   let dgConnectedAt = 0;
   let lastDeepgramAudioAt = 0;
+  let lastSpeechDbTouchAt = 0;
   let limitReached = false;
   let pendingAudio = [];
   const MAX_PENDING_AUDIO = 50;
@@ -122,7 +157,8 @@ wss.on('connection', (clientWs, req) => {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
     if (sessionLimitTimer) clearTimeout(sessionLimitTimer);
     if (clientPingTimer) clearInterval(clientPingTimer);
-    keepAliveTimer = sessionLimitTimer = clientPingTimer = null;
+    if (sessionStateTimer) clearInterval(sessionStateTimer);
+    keepAliveTimer = sessionLimitTimer = clientPingTimer = sessionStateTimer = null;
   };
   const cleanupDeepgram = () => {
     if (keepAliveTimer) clearInterval(keepAliveTimer);
@@ -148,6 +184,22 @@ wss.on('connection', (clientWs, req) => {
       try { clientWs.ping(); } catch (_) {}
     }
   }, BACKEND_CLIENT_PING_MS);
+  // Host can end a PIN from the portal at any time. Re-check the session so an
+  // already-connected participant is stopped promptly instead of continuing on
+  // an authorization token minted before the host ended the session.
+  sessionStateTimer = setInterval(() => {
+    if (clientWs.readyState !== WebSocket.OPEN) return;
+    sessionControl.sweepIdleSessions();
+    const state = sessionControl.participantTokenState(sessionToken);
+    if (!state || !state.active || !state.subscriptionValid) {
+      const reason = state?.session?.end_reason === 'idle_timeout'
+        ? `This Zapper session ended automatically after ${sessionControl.sessionIdleTimeoutMinutes} minutes without speech.`
+        : 'The host ended this Zapper session. This PIN is no longer valid.';
+      sendClient({ type: 'session_ended', message: reason });
+      cleanupDeepgram();
+      try { clientWs.close(1008, 'session no longer active'); } catch (_) {}
+    }
+  }, 5000);
 
   function connectDeepgram() {
     if (limitReached) return;
@@ -175,17 +227,32 @@ wss.on('connection', (clientWs, req) => {
     dgWs.on('message', data => {
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'SpeechStarted') return sendClient({ type: 'speech_started' });
+        if (msg.type === 'SpeechStarted') {
+          sendClient({ type: 'speech_started' });
+          const now = Date.now();
+          if (now - lastSpeechDbTouchAt >= 5000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(participant.session.id, now)); }
+          return;
+        }
         const alt = msg?.channel?.alternatives?.[0];
         const text = String(alt?.transcript || '');
         if (!text) return;
         sendClient({ type: 'transcript', text, isFinal: Boolean(msg.is_final), speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) });
+        const now = Date.now();
+        if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(participant.session.id, now)); }
       } catch (error) { console.error('[STT] Deepgram parse error:', error.message); }
     });
     dgWs.on('unexpected-response', (_request, response) => {
       let body = '';
       response.on('data', chunk => { body += chunk.toString(); });
-      response.on('end', () => sendClient({ type: 'error', message: body || `Deepgram connection failed (${response.statusCode})` }));
+      response.on('end', () => {
+        const invalidAuth = response.statusCode === 401 || response.statusCode === 403 || /INVALID_AUTH|INVALID CREDENTIALS/i.test(body);
+        sendClient({
+          type: 'error',
+          message: invalidAuth
+            ? 'Transcription credentials were rejected by Deepgram. Update Railway DEEPGRAM_API_KEY with the raw active key only, then redeploy the API.'
+            : (body || `Deepgram connection failed (${response.statusCode})`),
+        });
+      });
       dgOpen = false; dgConnecting = false; dgWs = null;
     });
     dgWs.on('close', code => {

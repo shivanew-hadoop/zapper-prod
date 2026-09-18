@@ -35,7 +35,7 @@ npm run dist
 Output:
 
 ```text
-apps/desktop/dist/Zapper-v3.1.1/Zapper-Setup-x64.exe
+apps/desktop/dist/Zapper-v3.1.3/Zapper-Setup-x64.exe
 ```
 
 For production download, publish the EXE through GitHub Releases; see `11-GITHUB-RELEASES.md`.

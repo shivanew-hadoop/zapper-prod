@@ -11,14 +11,14 @@ Greenfield Zapper repository with three independently deployable applications.
 - Website: `https://zapperapp.in` (keep using the Vercel preview URL until final acceptance testing is complete)
 - API: `https://api.zapperapp.in`
 - Desktop protocol: `zapper://launch`
-- Windows download: GitHub Releases asset `Zapper-Windows-x64.exe`
+- Windows download: GitHub Releases asset `Zapper-Setup-x64.exe`
 
 ## Roles and flow
 
 ### Participant
 1. Opens the public website.
 2. Clicks **Launch Zapper** if installed or **Download Zapper** otherwise.
-3. Desktop verifies Google sign-in; it opens Google Sign-In only when needed.
+3. Desktop verifies Google sign-in; the Google Sign-In window is left open until the participant closes it manually.
 4. Participant enters the host's 6-digit PIN.
 5. API resolves the Meet URL and authorizes transcription. No Zapper portal account is required.
 
@@ -26,7 +26,7 @@ Greenfield Zapper repository with three independently deployable applications.
 1. Registers/logs in on the website.
 2. Active subscription is required to create a session.
 3. Enters a Meet ID/link and receives a 6-digit PIN.
-4. Shares the PIN with the participant.
+4. Shares the PIN with the participant and can end the session at any time to invalidate that PIN.
 5. On desktop Leave, the complete transcript and generated PDF are saved under the host account.
 6. The portal retains the latest 15 sessions and latest 15 transcript PDFs.
 

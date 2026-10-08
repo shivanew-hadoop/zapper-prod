@@ -12,6 +12,7 @@ let currentUrl = '';
 let manuallyStopped = false;
 let reconnectAttempt = 0;
 let permanentClose = false;
+let streamGeneration = 0;
 
 const MAX_BUFFERED_CHUNKS = 40;
 const BACKEND_HEARTBEAT_MS = 15000;
@@ -59,8 +60,8 @@ function shouldReconnect(code) {
   return Boolean(currentUrl);
 }
 
-function scheduleReconnect(code, reasonText) {
-  if (!shouldReconnect(code)) return;
+function scheduleReconnect(code, reasonText, generation = streamGeneration) {
+  if (generation !== streamGeneration || !shouldReconnect(code)) return;
   if (reconnectTimer || isSocketActive()) return;
 
   reconnectAttempt += 1;
@@ -71,19 +72,24 @@ function scheduleReconnect(code, reasonText) {
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (!manuallyStopped && !permanentClose && currentUrl) {
-      connectSocket(currentUrl, true);
+    if (generation === streamGeneration && !manuallyStopped && !permanentClose && currentUrl) {
+      connectSocket(currentUrl, true, generation);
     }
   }, delay);
 }
 
-function connectSocket(url, isReconnect = false) {
-  if (isSocketActive()) return;
+function connectSocket(url, isReconnect = false, generation = streamGeneration) {
+  if (generation !== streamGeneration || isSocketActive()) return;
 
   opened = false;
-  socket = new WebSocket(url);
+  const ws = new WebSocket(url);
+  socket = ws;
 
-  socket.on('open', () => {
+  ws.on('open', () => {
+    if (generation !== streamGeneration || socket !== ws) {
+      try { ws.close(1000, 'stale stream'); } catch (_) {}
+      return;
+    }
     opened = true;
     reconnectAttempt = 0;
     console.log(isReconnect ? '[RemoteSTT] Reconnected to backend STT' : '[RemoteSTT] Connected to backend STT');
@@ -97,19 +103,20 @@ function connectSocket(url, isReconnect = false) {
 
     clearHeartbeat();
     heartbeatTimer = setInterval(() => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        try { socket.ping(); } catch (_) {}
+      if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.ping(); } catch (_) {}
       }
     }, BACKEND_HEARTBEAT_MS);
 
     for (const chunk of bufferedChunks.splice(0)) {
       try {
-        if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+        if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(chunk);
       } catch (_) {}
     }
   });
 
-  socket.on('message', (raw) => {
+  ws.on('message', (raw) => {
+    if (generation !== streamGeneration || socket !== ws) return;
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
 
@@ -143,22 +150,26 @@ function connectSocket(url, isReconnect = false) {
     }
   });
 
-  socket.on('close', (code, reason) => {
+  ws.on('close', (code, reason) => {
+    // A previous run may close after Leave -> Rejoin. Never let that stale
+    // close event clear or reconnect the new run's WebSocket.
+    if (generation !== streamGeneration) return;
     opened = false;
     clearHeartbeat();
 
     const msg = reason?.toString?.() || '';
     console.log('[RemoteSTT] Backend STT closed:', code, msg);
-    socket = null;
+    if (socket === ws) socket = null;
 
     if (shouldReconnect(code)) {
-      scheduleReconnect(code, msg);
+      scheduleReconnect(code, msg, generation);
     } else if (code !== 1000 && !manuallyStopped) {
       emit({ error: msg || 'Backend transcription connection closed. Check session/backend.' });
     }
   });
 
-  socket.on('error', (err) => {
+  ws.on('error', (err) => {
+    if (generation !== streamGeneration || socket !== ws) return;
     opened = false;
     clearHeartbeat();
     console.error('[RemoteSTT] Backend STT error:', err.message);
@@ -167,6 +178,7 @@ function connectSocket(url, isReconnect = false) {
 
 function startRemoteTranscriptStream({ backendUrl, sessionToken }, onTranscript) {
   stopRemoteTranscriptStream();
+  const generation = ++streamGeneration;
 
   transcriptCb = typeof onTranscript === 'function' ? onTranscript : () => {};
 
@@ -182,7 +194,7 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken }, onTranscript)
   opened = false;
   bufferedChunks = [];
 
-  connectSocket(currentUrl, false);
+  connectSocket(currentUrl, false, generation);
   return true;
 }
 
@@ -199,12 +211,16 @@ function sendAudioChunk(pcmBuffer) {
     if (bufferedChunks.length > MAX_BUFFERED_CHUNKS) bufferedChunks.shift();
 
     if (!isSocketActive() && currentUrl && !reconnectTimer) {
-      scheduleReconnect(1006, 'audio arrived while STT socket was closed');
+      scheduleReconnect(1006, 'audio arrived while STT socket was closed', streamGeneration);
     }
   }
 }
 
 function stopRemoteTranscriptStream() {
+  // Invalidate every event handler belonging to the previous stream before
+  // asking its socket to close. This prevents a late close/error event from
+  // mutating a newly-started stream after Leave -> Rejoin.
+  streamGeneration += 1;
   manuallyStopped = true;
   permanentClose = false;
   bufferedChunks = [];
@@ -215,9 +231,10 @@ function stopRemoteTranscriptStream() {
   clearReconnect();
   clearHeartbeat();
 
-  if (socket) {
-    try { socket.close(1000, 'client stopped'); } catch (_) {}
-    socket = null;
+  const socketToClose = socket;
+  socket = null;
+  if (socketToClose) {
+    try { socketToClose.close(1000, 'client stopped'); } catch (_) {}
   }
 
   transcriptCb = () => {};

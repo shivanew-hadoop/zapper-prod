@@ -70,6 +70,7 @@ let overlayPointerGuard = null;
 let overlayResizeGuard = null;
 let overlayResizeState = null;
 let sessionStatusPoller = null;
+let forceExitScheduled = false;
 
 
 // Keep the overlay private from supported OS capture APIs and continuously
@@ -427,6 +428,42 @@ function startSessionStatusPoller(sessionToken) {
   sessionStatusPoller.unref?.();
 }
 
+async function terminateApplicationCompletely() {
+  if (forceExitScheduled) return;
+  forceExitScheduled = true;
+
+  resetRuntimeFlags();
+  stopSessionStatusPoller();
+  onAudioChunk(() => {});
+
+  // Do not let a slow Meet/Google renderer keep the Electron process alive.
+  await Promise.race([
+    leaveMeet().catch(() => {}),
+    new Promise(resolve => setTimeout(resolve, 300))
+  ]);
+
+  try { closeGoogleSignInWindow(); } catch (_) {}
+  stopRemoteTranscriptStream();
+  stopAudioWSServer();
+  stopOverlayTopmostGuard();
+  stopOverlayPointerGuard();
+  stopOverlayManualResize();
+  destroyPrivateCursorWindow();
+  try { globalShortcut.unregisterAll(); } catch (_) {}
+
+  // Close/destroy every Electron window, including hidden Meet/sign-in windows.
+  for (const win of BrowserWindow.getAllWindows()) {
+    try { if (!win.isDestroyed()) win.destroy(); } catch (_) {}
+  }
+
+  // app.exit() is intentional here. The overlay X means "Exit Zapper", not
+  // "hide to background". This guarantees the single-instance lock and all
+  // background resources are released before the user launches Zapper again.
+  setTimeout(() => {
+    try { app.exit(0); } catch (_) { process.exit(0); }
+  }, 25);
+}
+
 function createOverlayWindow() {
   const { workArea } = screen.getPrimaryDisplay();
   const overlayWidth = 625; // 50% default width
@@ -647,7 +684,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
 
   } catch (err) {
     stopRemoteTranscriptStream();
-    stopAudioWSServer();
+    onAudioChunk(() => {});
     resetRuntimeFlags();
     console.error('[Main] join-meet error:', err);
 
@@ -661,9 +698,13 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
 ipcMain.handle('leave-meet', async () => {
   resetRuntimeFlags();
 
+  // Keep the local relay server alive for the lifetime of the desktop app.
+  // Closing and immediately reopening port 9999 caused a race where a rejoin
+  // could connect to a relay that was still shutting down. Detach only the
+  // previous session's callback; the next Start Session installs a fresh one.
+  onAudioChunk(() => {});
   await leaveMeet();
   stopRemoteTranscriptStream();
-  stopAudioWSServer();
 
   sendStatus('Stopped');
 
@@ -671,14 +712,11 @@ ipcMain.handle('leave-meet', async () => {
 });
 
 ipcMain.handle('close-overlay', async () => {
-  resetRuntimeFlags();
-
-  await leaveMeet().catch(() => {});
-  stopRemoteTranscriptStream();
-  stopAudioWSServer();
-
-  app.quit();
-
+  // The X button is a true application exit. No tray/background Electron
+  // process is intentionally retained after this action.
+  terminateApplicationCompletely().catch(() => {
+    try { app.exit(0); } catch (_) { process.exit(0); }
+  });
   return { success: true };
 });
 
@@ -733,6 +771,11 @@ ipcMain.handle('overlay-click-through', (_, enabled) => {
 });
 
 app.whenReady().then(async () => {
+  // Keep one stable localhost audio relay for the whole desktop process.
+  // Individual Leave/Rejoin cycles replace only the audio callback.
+  startAudioWSServer();
+  audioRelayStarted = true;
+
   // Renderer owns the startup sequence: Google Sign-In first, then 6-digit session PIN.
   createOverlayWindow();
 

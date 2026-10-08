@@ -270,9 +270,15 @@ function createMeetWindow(onStatusUpdate) {
     console.log('[MeetWindow]', message);
   });
 
-  meetWindow.on('closed', () => {
+  // Capture the exact window instance. An old hidden Meet window can finish
+  // closing after a rapid Leave -> Rejoin; it must never clear the new run's
+  // meetWindow or polling timer.
+  const createdMeetWindow = meetWindow;
+  createdMeetWindow.on('closed', () => {
+    if (meetWindow !== createdMeetWindow) return;
     meetWindow = null;
     if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
   });
 
   safeStatus(onStatusUpdate, 'Meet window ready');
@@ -679,17 +685,22 @@ async function leaveMeet() {
   if (manualJoinWatcher) clearInterval(manualJoinWatcher);
   manualJoinWatcher = null;
 
+  // Detach the global reference before closing the old window. This allows an
+  // immediate rejoin to create a new Meet window without the old window's
+  // delayed 'closed' event nulling the new instance.
+  const windowToClose = meetWindow;
+  if (meetWindow === windowToClose) meetWindow = null;
+
   try {
-    if (meetWindow && !meetWindow.isDestroyed()) {
-      await meetWindow.webContents.executeJavaScript(`(() => {
+    if (windowToClose && !windowToClose.isDestroyed()) {
+      await windowToClose.webContents.executeJavaScript(`(() => {
         const btns = [...document.querySelectorAll('button, div[role="button"]')];
         const btn = btns.find(b => /leave call|hang up/i.test((b.getAttribute('aria-label') || b.innerText || '')));
         if (btn) btn.click();
       })()`, true).catch(() => {});
-      meetWindow.close();
+      if (!windowToClose.isDestroyed()) windowToClose.close();
     }
   } catch (_) {}
-  meetWindow = null;
 }
 
 

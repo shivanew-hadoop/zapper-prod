@@ -52,19 +52,7 @@ html.private-cursor-ready body,
 html.private-cursor-ready body * {
   cursor: none !important;
 }
-.privateCursor {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 24px;
-  height: 32px;
-  display: none;
-  pointer-events: none;
-  z-index: 2147483647;
-  transform: translate3d(-100px, -100px, 0);
-  filter: drop-shadow(0 1px 1px rgba(0,0,0,.65));
-}
-.privateCursor.visible { display: block; }
+.privateCursor { display: none !important; }
 
 /* Renderer-owned resize zones replace native Windows resize borders. This keeps
    resize interaction and its visible pointer inside the capture-protected overlay. */
@@ -549,6 +537,26 @@ input::placeholder { color: rgba(255,255,255,.45); }
   font-size: 8px;
 }
 
+
+.supportEmailFooter {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 5px;
+  min-height: 15px;
+  padding: 2px 4px 0;
+  font-size: 8px;
+  line-height: 12px;
+  color: rgba(233,240,255,.48);
+  user-select: none;
+}
+.supportEmailFooter a {
+  color: rgba(151,193,255,.72);
+  text-decoration: none;
+}
+.supportEmailFooter a:hover { color: rgba(190,218,255,.92); }
+
 .card.collapsed {
   height: 48px;
   padding-bottom: 8px;
@@ -563,7 +571,8 @@ input::placeholder { color: rgba(255,255,255,.45); }
 .card.collapsed .licensePanel,
 .card.collapsed .joinPanel,
 .card.collapsed .loginAlert,
-.card.collapsed .live {
+.card.collapsed .live,
+.card.collapsed .supportEmailFooter {
   display: none !important;
 }
 .card.collapsed .title {

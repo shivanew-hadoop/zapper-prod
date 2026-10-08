@@ -2,6 +2,7 @@ const form = document.getElementById('joinForm');
 const joinBtn = document.getElementById('joinBtn');
 const leaveBtn = document.getElementById('leaveBtn');
 const signinBtn = document.getElementById('signinBtn');
+const backToLiveBtn = document.getElementById('backToLiveBtn');
 const closeBtn = document.getElementById('closeBtn');
 const collapseBtn = document.getElementById('collapseBtn');
 const appEl = document.getElementById('app');
@@ -89,40 +90,11 @@ new MutationObserver(removeHoverTooltips).observe(document.documentElement, {
 });
 
 function initPrivateCursor() {
+  // The native cursor is hidden only while it is over the overlay.
+  // A separate, capture-protected main-process cursor window now paints the
+  // local-only pointer so it cannot be clipped by the overlay edges.
   privateCursor = document.getElementById('privateCursor');
-  if (!privateCursor) return;
-
-  const paintPrivateCursor = ({ inside = true, x, y } = {}) => {
-    if (!privateCursor) return;
-
-    if (!inside || !Number.isFinite(x) || !Number.isFinite(y)) {
-      privateCursor.classList.remove('visible');
-      return;
-    }
-
-    privateCursor.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
-    privateCursor.classList.add('visible');
-  };
-
-  // Renderer movement gives immediate local feedback over normal controls.
-  // The main-process screen-point feed remains the fallback for draggable
-  // header regions/native window movement where renderer mouse events can pause.
-  document.addEventListener('mousemove', (event) => {
-    paintPrivateCursor({ inside: true, x: event.clientX, y: event.clientY });
-  }, { passive: true, capture: true });
-  document.addEventListener('mouseenter', (event) => {
-    paintPrivateCursor({ inside: true, x: event.clientX, y: event.clientY });
-  }, { passive: true, capture: true });
-  document.addEventListener('mouseleave', () => {
-    privateCursor?.classList.remove('visible');
-  }, { passive: true, capture: true });
-
-  if (window.electronAPI?.onPrivatePointerPosition) {
-    window.electronAPI.onPrivatePointerPosition(paintPrivateCursor);
-  }
-
-  // Only hide the native cursor after the replacement cursor exists and its
-  // listeners are installed. This prevents an invisible-pointer failure mode.
+  privateCursor?.classList.remove('visible');
   document.documentElement.classList.add('private-cursor-ready');
 }
 
@@ -257,12 +229,21 @@ function getRandomGuestName() {
   return SHORT_AMERICAN_NAMES[Math.floor(Math.random() * SHORT_AMERICAN_NAMES.length)];
 }
 
-function showJoin() {
+function showJoin({ force = false } = {}) {
+  // Never let Google Sign-In or a stale UI event kick an active transcription
+  // back to the PIN screen. The active session remains authoritative until the
+  // participant leaves or the host ends it.
+  if (!force && activeSessionToken && currentPanel === 'live') {
+    backToLiveBtn?.classList.add('hidden');
+    return false;
+  }
   currentPanel = 'join';
   appEl.classList.remove('session-active');
   joinPanel.classList.remove('hidden');
   livePanel.classList.add('hidden');
   leaveBtn.classList.add('hidden');
+  backToLiveBtn?.classList.toggle('hidden', !activeSessionToken);
+  return true;
 }
 
 function setSessionInfo(text, cls = '') {
@@ -504,6 +485,7 @@ function showLive(status) {
   joinPanel.classList.add('hidden');
   livePanel.classList.remove('hidden');
   leaveBtn.classList.remove('hidden');
+  backToLiveBtn?.classList.add('hidden');
   statusEl.textContent = status;
 }
 
@@ -564,28 +546,36 @@ retainBtn.addEventListener('click', () => {
 
 signinBtn.addEventListener('click', async () => {
   signinBtn.disabled = true;
-  showJoin();
+  const sessionInProgress = Boolean(activeSessionToken && currentPanel === 'live');
   loginAlert.classList.add('hidden');
-  setSessionInfo('Complete Google Sign-In in the opened window. This PIN screen will stay here.', 'ok');
+  if (sessionInProgress) {
+    statusEl.textContent = 'Google Sign-In opened. Your live transcription remains active.';
+  } else {
+    showJoin();
+    setSessionInfo('Complete Google Sign-In in the opened window. This PIN screen will stay here.', 'ok');
+  }
   await window.electronAPI.googleSignIn().catch(() => null);
-  // Completion is delivered asynchronously by onGoogleSignInComplete after the
-  // persistent Google profile really contains authentication cookies.
   setTimeout(() => { signinBtn.disabled = false; }, 1000);
+});
+
+if (backToLiveBtn) backToLiveBtn.addEventListener('click', () => {
+  if (!activeSessionToken) return showJoin({ force: true });
+  showLive('Live session resumed.');
 });
 
 if (window.electronAPI.onGoogleSignInComplete) {
   window.electronAPI.onGoogleSignInComplete(() => {
     hideCountdownTimer();
-    showJoin();
     loginAlert.classList.add('hidden');
-    setSessionInfo('Google signed in. Close the Google window manually when ready, then enter the 6-digit PIN and click Start Session.', 'ok');
     signinBtn.disabled = false;
-    const pinInput = document.getElementById('sessionPin');
-    if (pinInput) {
-      requestAnimationFrame(() => {
-        try { pinInput.focus({ preventScroll: true }); } catch (_) { try { pinInput.focus(); } catch (_) {} }
-      });
+    if (activeSessionToken) {
+      showLive('Google sign-in complete. Live session continues. Close the Google window manually when ready.');
+      return;
     }
+    showJoin({ force: true });
+    setSessionInfo('Google signed in. Close the Google window manually when ready, then enter the 6-digit PIN and click Start Session.', 'ok');
+    const pinInput = document.getElementById('sessionPin');
+    if (pinInput) requestAnimationFrame(() => { try { pinInput.focus({ preventScroll: true }); } catch (_) { try { pinInput.focus(); } catch (_) {} } });
   });
 }
 
@@ -645,7 +635,7 @@ form.addEventListener('submit', async (e) => {
   activeGoogleEmail = String(res.googleEmail || '').trim();
 });
 
-async function finalizeActiveSession({ endBackend = true, reason = 'Session ended. Enter another 6-digit PIN to start again.' } = {}) {
+async function finalizeActiveSession({ endBackend = false, reason = 'You left this Zapper view. The host session and PIN remain active.' } = {}) {
   if (finalizingSession) return;
   finalizingSession = true;
   try {
@@ -688,7 +678,7 @@ async function finalizeActiveSession({ endBackend = true, reason = 'Session ende
   }
 }
 
-leaveBtn.addEventListener('click', async () => finalizeActiveSession({ endBackend: true }));
+leaveBtn.addEventListener('click', async () => finalizeActiveSession({ endBackend: false, reason: 'You left the meeting. This PIN remains active until the host ends the session.' }));
 
 window.electronAPI.onStatus((msg) => {
   statusEl.textContent = msg;
@@ -739,10 +729,12 @@ if (window.electronAPI.onMeetChat) {
 // Listen for countdown timer start signal from main process
 if (window.electronAPI.onCountdownStart) {
   window.electronAPI.onCountdownStart(() => {
-    // Backward-compatible guard for older main-process builds: even if a stale
-    // countdown event arrives, keep the participant PIN form visible.
     hideCountdownTimer();
-    showJoin();
+    if (activeSessionToken) {
+      showLive('Live session continues. Google Sign-In can be closed manually.');
+      return;
+    }
+    showJoin({ force: true });
     setSessionInfo('Google signed in. Close the Google window manually when ready, then enter the 6-digit PIN and click Start Session.', 'ok');
   });
 }

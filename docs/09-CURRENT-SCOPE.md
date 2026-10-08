@@ -15,9 +15,10 @@
 - Participant desktop uses Google Sign-In + PIN only; no Zapper web credentials.
 - Signed short-lived desktop session authorization.
 - Deepgram STT through Railway.
-- Complete transcript upload on Leave.
-- PDF generated and stored in SQLite with the transcript.
-- Latest 15 host sessions retained per account.
+- Complete transcript upload on participant Leave without ending the host session.
+- PDF generated and stored in SQLite with the transcript; downloads regenerate the current compact header (participant email, PIN, From/To/Duration) so older stored PDFs do not keep obsolete host metadata.
+- Host-controlled sessions: participant Leave, silence, refresh and legacy expiry do not deactivate a PIN; only Host End Session does.
+- Active sessions are preserved; ended session history is trimmed conservatively.
 - Latest 15 transcript PDFs retained per account.
 - GitHub Actions workflow that creates a Windows release from a version tag.
 

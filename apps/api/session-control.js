@@ -51,9 +51,19 @@ module.exports = function createSessionControl({ app, dataDir }) {
       FOREIGN KEY(host_session_id) REFERENCES host_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS password_reset_tokens(
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at_ms INTEGER NOT NULL,
+      used_at_ms INTEGER,
+      created_at_ms INTEGER NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON host_sessions(user_id, created_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_transcripts_user ON transcripts(user_id, ended_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(host_session_id, ended_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_password_reset_hash ON password_reset_tokens(token_hash);
   `);
 
   // Safe in-place migrations for databases created by earlier Zapper builds.
@@ -66,6 +76,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
   ensureColumn('transcripts', 'pdf_blob', 'BLOB');
   ensureColumn('transcripts', 'pdf_filename', 'TEXT');
+  ensureColumn('transcripts', 'transcript_segments_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('host_sessions', 'active', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('host_sessions', 'participant_started_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'last_speech_at_ms', 'INTEGER');
@@ -81,14 +92,19 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const planPriceInr = Math.max(1, Number(process.env.PLAN_PRICE_INR || 1000));
   const portalTokenDays = Math.max(1, Number(process.env.PORTAL_TOKEN_DAYS || 7));
   const participantTokenMinutes = Math.max(30, Number(process.env.PARTICIPANT_TOKEN_MINUTES || 180));
-  const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12));
+  const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12)); // legacy metadata only; host controls session end
   const sessionRetention = Math.max(1, Math.min(50, Number(process.env.SESSION_RETENTION || 15)));
   const transcriptRetention = Math.max(1, Math.min(50, Number(process.env.TRANSCRIPT_RETENTION || 15)));
+  // Kept for backwards-compatible config reporting only. Active sessions are host-controlled and are never auto-ended for silence.
   const sessionIdleTimeoutMinutes = Math.max(1, Math.min(240, Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 20)));
-  const sessionIdleTimeoutMs = sessionIdleTimeoutMinutes * 60000;
   const pdfPauseTimestampSeconds = Math.max(10, Math.min(300, Number(process.env.PDF_PAUSE_TIMESTAMP_SECONDS || 30)));
   const pdfPauseTimestampMs = pdfPauseTimestampSeconds * 1000;
   const adminKey = String(process.env.ADMIN_KEY || '').trim();
+  const passwordResetMinutes = Math.max(10, Math.min(120, Number(process.env.PASSWORD_RESET_MINUTES || 30)));
+  const passwordResetBaseUrl = String(process.env.PASSWORD_RESET_BASE_URL || process.env.WEB_APP_URL || 'https://zapper-prod.vercel.app').trim().replace(/\/+$/, '');
+  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const passwordResetFrom = String(process.env.PASSWORD_RESET_FROM || 'Zapper <no-reply@zapperapp.in>').trim();
+  const returnResetLink = String(process.env.PASSWORD_RESET_RETURN_LINK || '').toLowerCase() === 'true';
 
   const normalizeEmail = value => String(value || '').trim().toLowerCase();
   const configuredAdminEmail = normalizeEmail(process.env.ADMIN_EMAIL);
@@ -162,6 +178,31 @@ module.exports = function createSessionControl({ app, dataDir }) {
     } catch (_) { return false; }
   }
 
+  const hashResetToken = raw => crypto.createHash('sha256').update(String(raw || '')).digest('hex');
+  async function sendPasswordResetEmail(email, resetLink) {
+    if (!resendApiKey) {
+      console.warn(`[AUTH] Password reset requested for ${email}, but RESEND_API_KEY is not configured.`);
+      return false;
+    }
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: passwordResetFrom,
+          to: [email],
+          subject: 'Reset your Zapper password',
+          html: `<div style="font-family:Arial,sans-serif;color:#0b1728;line-height:1.6"><h2>Reset your Zapper password</h2><p>Use the secure link below to choose a new password. This link expires in ${passwordResetMinutes} minutes.</p><p><a href="${resetLink}" style="display:inline-block;background:#246ff2;color:white;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700">Reset password</a></p><p>If you did not request this, you can ignore this email.</p></div>`
+        }),
+      });
+      if (!response.ok) console.warn('[AUTH] Password reset email provider rejected the request:', response.status);
+      return response.ok;
+    } catch (error) {
+      console.warn('[AUTH] Password reset email failed:', error.message);
+      return false;
+    }
+  }
+
   // Same website login is used for hosts and admins. ADMIN_EMAIL promotes an
   // existing account to admin; ADMIN_PASSWORD can bootstrap it when absent.
   function bootstrapAdmin() {
@@ -215,38 +256,27 @@ module.exports = function createSessionControl({ app, dataDir }) {
     });
   }
 
-  function expireClockSessions(now = Date.now()) {
-    db.prepare(`UPDATE host_sessions
-      SET status='expired', active=0, ended_at_ms=COALESCE(ended_at_ms, ?), end_reason=COALESCE(end_reason, 'expired')
-      WHERE active=1 AND status='active' AND expires_at_ms<=?`).run(now, now);
-  }
-
-  function sweepIdleSessions(now = Date.now()) {
-    expireClockSessions(now);
-    const cutoff = now - sessionIdleTimeoutMs;
-    const result = db.prepare(`UPDATE host_sessions
-      SET status='ended', active=0, ended_at_ms=COALESCE(ended_at_ms, ?), end_reason='idle_timeout'
-      WHERE active=1 AND status='active' AND participant_started_at_ms IS NOT NULL
-        AND COALESCE(last_speech_at_ms, participant_started_at_ms)<=?`).run(now, cutoff);
-    return Number(result.changes || 0);
-  }
+  // Session lifecycle rule: once a host creates a session, only the host's explicit
+  // End Session action may deactivate it. Browser refresh, participant Leave, silence,
+  // and the legacy expires_at_ms value must not invalidate an active PIN.
+  function expireClockSessions() { return 0; }
+  function sweepIdleSessions() { return 0; }
 
   function participantTokenState(rawToken) {
     try {
       const payload = verifyToken(rawToken, 'zapper-desktop', 'zapper-electron');
       if (payload.type !== 'participant') return null;
-      expireClockSessions();
       const session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
       const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!session || !user) return null;
-      const active = Number(session.active || 0) === 1 && session.status === 'active' && session.expires_at_ms > Date.now();
+      const active = Number(session.active || 0) === 1 && session.status === 'active';
       return { payload, session, user, active, subscriptionValid: subscriptionState(user).valid };
     } catch (_) { return null; }
   }
 
   function verifyParticipantToken(rawToken, options = {}) {
     const state = participantTokenState(rawToken);
-    if (!state || !state.subscriptionValid) return null;
+    if (!state) return null;
     if (state.active) return { payload: state.payload, session: state.session, user: state.user };
     if (options.allowEnded && Number(state.session.active || 0) === 0) {
       return { payload: state.payload, session: state.session, user: state.user };
@@ -263,15 +293,18 @@ module.exports = function createSessionControl({ app, dataDir }) {
   function uniquePin() {
     for (let i = 0; i < 50; i += 1) {
       const pin = String(crypto.randomInt(100000, 1000000));
-      if (!db.prepare('SELECT 1 FROM host_sessions WHERE pin=? AND status=? AND expires_at_ms>?').get(pin, 'active', Date.now())) return pin;
+      if (!db.prepare('SELECT 1 FROM host_sessions WHERE pin=? AND status=?').get(pin, 'active')) return pin;
     }
     throw new Error('Could not allocate a session PIN. Please retry.');
   }
 
   function trimUserSessions(userId) {
-    db.prepare(`DELETE FROM host_sessions WHERE user_id=? AND id NOT IN (
-      SELECT id FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?
-    )`).run(userId, userId, sessionRetention);
+    // Never delete an active host-controlled session just to satisfy retention.
+    // Keep all active sessions, plus the newest ended sessions up to the configured history limit.
+    const ended = db.prepare(`SELECT id FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC`).all(userId);
+    const remove = ended.slice(sessionRetention);
+    const del = db.prepare('DELETE FROM host_sessions WHERE id=? AND user_id=? AND active=0');
+    for (const row of remove) del.run(row.id, userId);
   }
 
   function trimTranscripts(userId) {
@@ -307,18 +340,14 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const fmt24Ist = ms => new Date(Number(ms)).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     const durationSec = Math.max(0, Math.round((row.ended_at_ms - row.started_at_ms) / 1000));
     const durationText = `${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, '0')}s`;
-    const metadata = [
-      ['Session PIN', hostSession.pin],
-      ['Participant Google sign-in', row.google_email || 'Not captured'],
-      ['From', fmtMetaIst(row.started_at_ms)],
-      ['To', fmtMetaIst(row.ended_at_ms)],
-      ['Duration', durationText],
-    ];
-    const labelWidth = metadata.reduce((max, [label]) => Math.max(max, label.length), 0);
+    const participantEmail = row.google_email || 'Not captured';
+    const metaLine1 = `Participant: ${participantEmail}    PIN: ${hostSession.pin}`;
+    const metaLine2 = `From: ${fmtMetaIst(row.started_at_ms)}    To: ${fmtMetaIst(row.ended_at_ms)}    Duration: ${durationText}`;
     const lines = [
       { text: 'ZAPPER MEETING TRANSCRIPT', bold: true, size: 12 },
       { text: '' },
-      ...metadata.map(([label, value]) => ({ text: `${label.padEnd(labelWidth)} : ${value}`, mono: true, size: 8 })),
+      { text: metaLine1, mono: true, size: 8 },
+      { text: metaLine2, mono: true, size: 8 },
       { text: '' },
       { text: 'TRANSCRIPT', bold: true, size: 10 },
       { text: '----------' },
@@ -419,6 +448,36 @@ module.exports = function createSessionControl({ app, dataDir }) {
     res.json({ ok: true, token: portalSign(refreshed), user: publicUser(refreshed) });
   });
 
+  app.post('/api/auth/forgot-password', async (req, res) => {
+    const email = normalizeEmail(req.body?.email);
+    const generic = { ok: true, message: 'If that email is registered, a password reset link has been generated.' };
+    if (!/^\S+@\S+\.\S+$/.test(email)) return res.json(generic);
+    const user = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    if (!user) return res.json(generic);
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = hashResetToken(rawToken);
+    const now = Date.now();
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id=? OR expires_at_ms<? OR used_at_ms IS NOT NULL').run(user.id, now);
+    db.prepare('INSERT INTO password_reset_tokens(id,user_id,token_hash,expires_at_ms,created_at_ms) VALUES(?,?,?,?,?)')
+      .run(crypto.randomUUID(), user.id, tokenHash, now + passwordResetMinutes * 60000, now);
+    const resetLink = `${passwordResetBaseUrl}/?reset=${encodeURIComponent(rawToken)}`;
+    await sendPasswordResetEmail(user.email, resetLink);
+    res.json(returnResetLink ? { ...generic, resetLink } : generic);
+  });
+
+  app.post('/api/auth/reset-password', (req, res) => {
+    const rawToken = String(req.body?.token || '').trim();
+    const password = String(req.body?.password || '');
+    if (!rawToken || password.length < 8) return res.status(400).json({ ok: false, error: 'Use a valid reset link and a password with at least 8 characters.' });
+    const now = Date.now();
+    const row = db.prepare('SELECT * FROM password_reset_tokens WHERE token_hash=? AND used_at_ms IS NULL AND expires_at_ms>?').get(hashResetToken(rawToken), now);
+    if (!row) return res.status(400).json({ ok: false, error: 'This password reset link is invalid or expired.' });
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), row.user_id);
+    db.prepare('UPDATE password_reset_tokens SET used_at_ms=? WHERE id=?').run(now, row.id);
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id=? AND id<>?').run(row.user_id, row.id);
+    res.json({ ok: true, message: 'Password updated. You can now sign in with the new password.' });
+  });
+
   app.get('/api/account', auth, (req, res) => {
     res.json({ ok: true, user: publicUser(req.authUser), plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention } });
   });
@@ -430,21 +489,24 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
     if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
     const now = Date.now();
-    expireClockSessions(now);
-    // Starting the same Meet again creates a fresh PIN and retires any older active PIN for that Meet.
-    db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='superseded' WHERE user_id=? AND meet_url=? AND active=1 AND status='active'")
-      .run(now, req.authUser.id, meetUrl);
+    // Do not supersede an existing active session, even for the same Meet URL.
+    // Every created PIN stays active until the host explicitly ends that specific session.
     const pin = uniquePin(); const id = crypto.randomUUID();
+    const legacyExpiresAt = now + Math.max(sessionHours, 24 * 365 * 20) * 3600000;
     db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?,?)')
-      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, now + sessionHours * 3600000);
+      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, legacyExpiresAt);
     trimUserSessions(req.authUser.id);
-    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt: now + sessionHours * 3600000 } });
+    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt: null } });
   });
 
   app.get('/api/sessions', auth, (req, res) => {
-    sweepIdleSessions();
-    const rows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, sessionRetention);
-    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
+    // Always return every active session so the host can still see and explicitly end it.
+    // Fill the remaining history slots with the newest ended sessions.
+    const activeRows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=1 ORDER BY created_at_ms DESC').all(req.authUser.id);
+    const endedLimit = Math.max(0, sessionRetention - activeRows.length);
+    const endedRows = endedLimit ? db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, endedLimit) : [];
+    const rows = [...activeRows, ...endedRows].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0));
+    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: null, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {
@@ -458,11 +520,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const pin = String(req.body?.pin || '').replace(/\D/g, '').slice(0, 6);
     if (!/^\d{6}$/.test(pin)) return res.status(400).json({ ok: false, error: 'Enter the 6-digit session PIN.' });
     const now = Date.now();
-    sweepIdleSessions(now);
-    const session = db.prepare("SELECT * FROM host_sessions WHERE pin=? AND active=1 AND status='active' AND expires_at_ms>?").get(pin, now);
+    const session = db.prepare("SELECT * FROM host_sessions WHERE pin=? AND active=1 AND status='active'").get(pin);
     const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
     if (!session || !user) return res.status(404).json({ ok: false, error: 'This is not a valid active PIN. It may have been ended or expired. Ask the host for a current 6-digit PIN.' });
-    if (!subscriptionState(user).valid) return res.status(402).json({ ok: false, error: 'The host subscription is inactive or expired.' });
     db.prepare(`UPDATE host_sessions SET participant_started_at_ms=COALESCE(participant_started_at_ms, ?), last_speech_at_ms=COALESCE(last_speech_at_ms, ?) WHERE id=? AND active=1`).run(now, now, session.id);
     const refreshedSession = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
     res.set('Cache-Control', 'no-store').json({ ok: true, meetUrl: refreshedSession.meet_url, sessionId: refreshedSession.id, sessionToken: participantSign(user, refreshedSession), idleTimeoutMinutes: sessionIdleTimeoutMinutes, host: { name: user.name || user.email, email: user.email } });
@@ -470,25 +530,24 @@ module.exports = function createSessionControl({ app, dataDir }) {
 
   app.get('/api/desktop/session-status', (req, res) => {
     const rawToken = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    sweepIdleSessions();
     const state = participantTokenState(rawToken);
     if (!state) return res.status(401).json({ ok: false, active: false, error: 'Session authorization expired.' });
-    const active = Boolean(state.active && state.subscriptionValid);
+    const active = Boolean(state.active);
     res.set('Cache-Control', 'no-store').json({
       ok: true,
       active,
       status: state.session.status,
       endReason: state.session.end_reason || '',
-      idleTimeoutMinutes: sessionIdleTimeoutMinutes,
+      hostControlled: true,
     });
   });
 
   app.post('/api/desktop/end-session', (req, res) => {
-    const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    // Backwards-compatible participant detach endpoint. A participant may leave/reopen
+    // Zapper without invalidating the host's PIN. Only /api/sessions/:id/end may end it.
+    const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), { allowEnded: true });
     if (!verified) return res.status(401).json({ ok: false, error: 'Session authorization expired.' });
-    const endedAt = Date.now();
-    db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='participant_ended' WHERE id=? AND active=1 AND status='active'").run(endedAt, verified.session.id);
-    res.json({ ok: true, endedAt });
+    res.json({ ok: true, active: Number(verified.session.active || 0) === 1, detached: true });
   });
 
   app.post('/api/desktop/transcripts', (req, res) => {
@@ -507,8 +566,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const rowForPdf = { started_at_ms: startedAt, ended_at_ms: endedAt, google_email: normalizeEmail(req.body?.googleEmail), transcript_text: text, transcript_segments: transcriptSegments };
     const pdf = buildTranscriptPdf(rowForPdf, verified.user, verified.session);
     const pdfFilename = safePdfFilename(endedAt);
-    db.prepare(`INSERT INTO transcripts(id,host_session_id,user_id,google_email,started_at_ms,ended_at_ms,transcript_text,pdf_blob,pdf_filename,created_at_ms)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id, verified.session.id, verified.user.id, rowForPdf.google_email, startedAt, endedAt, text, pdf, pdfFilename, Date.now());
+    db.prepare(`INSERT INTO transcripts(id,host_session_id,user_id,google_email,started_at_ms,ended_at_ms,transcript_text,pdf_blob,pdf_filename,created_at_ms,transcript_segments_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id, verified.session.id, verified.user.id, rowForPdf.google_email, startedAt, endedAt, text, pdf, pdfFilename, Date.now(), JSON.stringify(transcriptSegments));
     trimTranscripts(verified.user.id);
     trimUserSessions(verified.user.id);
     res.json({ ok: true, transcriptId: id, pdfSaved: true, retained: Math.min(transcriptRetention, db.prepare('SELECT COUNT(*) c FROM transcripts WHERE user_id=?').get(verified.user.id).c) });
@@ -524,8 +583,12 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const row = db.prepare('SELECT * FROM transcripts WHERE id=? AND user_id=?').get(String(req.params.id || ''), req.authUser.id);
     if (!row) return res.status(404).json({ ok: false, error: 'Transcript not found.' });
     const session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(row.host_session_id);
-    const pdf = row.pdf_blob ? Buffer.from(row.pdf_blob) : buildTranscriptPdf(row, req.authUser, session);
+    // Always regenerate using the current PDF layout so transcripts saved by older
+    // versions do not keep obsolete host-account/Meet metadata in their stored blob.
+    try { row.transcript_segments = JSON.parse(row.transcript_segments_json || '[]'); } catch (_) { row.transcript_segments = []; }
+    const pdf = buildTranscriptPdf(row, req.authUser, session);
     const filename = row.pdf_filename || safePdfFilename(row.ended_at_ms);
+    try { db.prepare('UPDATE transcripts SET pdf_blob=?, pdf_filename=? WHERE id=?').run(pdf, filename, row.id); } catch (_) {}
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store', 'Content-Length': String(pdf.length) });
     res.end(pdf);
   });
@@ -599,6 +662,16 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be disabled from this panel.' });
     db.prepare('UPDATE users SET status=? WHERE id=?').run(status, user.id);
     res.json({ ok: true, user: adminUserSummary(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
+  });
+
+  app.post('/api/admin/users/:id/password', adminAuth, (req, res) => {
+    const user = db.prepare('SELECT * FROM users WHERE id=?').get(Number(req.params.id));
+    if (!user) return res.status(404).json({ ok: false, error: 'User not found.' });
+    const password = String(req.body?.password || '');
+    if (password.length < 8) return res.status(400).json({ ok: false, error: 'New password must contain at least 8 characters.' });
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), user.id);
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id=?').run(user.id);
+    res.json({ ok: true, message: `Password reset for ${user.email}.` });
   });
 
   // Backward-compatible CLI admin endpoint used by scripts/activate-subscription.js.

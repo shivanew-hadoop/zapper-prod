@@ -60,6 +60,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 
 let overlayWindow = null;
+let privateCursorWindow = null;
 let started = false;
 let remoteSttStarted = false;
 let audioRelayStarted = false;
@@ -96,33 +97,109 @@ function stopOverlayTopmostGuard() {
   overlayTopmostGuard = null;
 }
 
+function createPrivateCursorWindow() {
+  if (privateCursorWindow && !privateCursorWindow.isDestroyed()) return privateCursorWindow;
+
+  privateCursorWindow = new BrowserWindow({
+    width: 30,
+    height: 40,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    roundedCorners: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  const cursorMarkup = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;cursor:none!important;user-select:none}
+    svg{display:block;width:24px;height:32px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.65))}
+  </style></head><body><svg viewBox="0 0 24 32" aria-hidden="true">
+    <path d="M2 1.5V25.5L8.2 19.8L12.8 30.2L17 28.3L12.4 18H21.4L2 1.5Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/>
+  </svg></body></html>`;
+
+  privateCursorWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(cursorMarkup)}`);
+  try { privateCursorWindow.setIgnoreMouseEvents(true, { forward: true }); } catch (_) {}
+  try { privateCursorWindow.setContentProtection(true); } catch (_) {}
+  try { privateCursorWindow.setAlwaysOnTop(true, 'screen-saver', 2); } catch (_) {}
+  try { privateCursorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+
+  privateCursorWindow.on('closed', () => { privateCursorWindow = null; });
+  return privateCursorWindow;
+}
+
+function showPrivateCursorAt(point) {
+  const win = createPrivateCursorWindow();
+  if (!win || win.isDestroyed()) return;
+  // Keep the arrow hotspot at the true OS pointer while allowing the rest of
+  // the protected cursor to extend outside the overlay without clipping.
+  try { win.setBounds({ x: Math.round(point.x - 2), y: Math.round(point.y - 2), width: 30, height: 40 }, false); } catch (_) {}
+  try { win.setContentProtection(true); } catch (_) {}
+  try { win.setAlwaysOnTop(true, 'screen-saver', 2); } catch (_) {}
+  try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+  try { if (!win.isVisible()) win.showInactive(); } catch (_) {}
+}
+
+function hidePrivateCursorWindow() {
+  if (!privateCursorWindow || privateCursorWindow.isDestroyed()) return;
+  try { privateCursorWindow.hide(); } catch (_) {}
+}
+
+function destroyPrivateCursorWindow() {
+  if (!privateCursorWindow || privateCursorWindow.isDestroyed()) { privateCursorWindow = null; return; }
+  try { privateCursorWindow.destroy(); } catch (_) {}
+  privateCursorWindow = null;
+}
 
 function startOverlayPointerGuard() {
   if (overlayPointerGuard) clearInterval(overlayPointerGuard);
 
   overlayPointerGuard = setInterval(() => {
-    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible()) return;
+    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible()) {
+      hidePrivateCursorWindow();
+      return;
+    }
 
     try {
       const point = screen.getCursorScreenPoint();
       const bounds = overlayWindow.getBounds();
+      // Inclusive right/bottom edge is intentional. During manual resize the OS
+      // pointer commonly sits exactly on the moving border; treating that pixel
+      // as outside was the reason the private cursor disappeared at the edges.
       const inside =
-        point.x >= bounds.x && point.x < bounds.x + bounds.width &&
-        point.y >= bounds.y && point.y < bounds.y + bounds.height;
+        point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
+        point.y >= bounds.y && point.y <= bounds.y + bounds.height;
 
+      if (inside) showPrivateCursorAt(point);
+      else hidePrivateCursorWindow();
+
+      // Keep the renderer notification for compatibility with older overlay code.
       overlayWindow.webContents.send('private-pointer-position', {
         inside,
-        x: point.x - bounds.x,
-        y: point.y - bounds.y
+        x: Math.max(0, Math.min(bounds.width - 1, point.x - bounds.x)),
+        y: Math.max(0, Math.min(bounds.height - 1, point.y - bounds.y))
       });
     } catch (_) {}
-  }, 24);
+  }, 16);
 }
 
 function stopOverlayPointerGuard() {
-  if (!overlayPointerGuard) return;
-  clearInterval(overlayPointerGuard);
+  if (overlayPointerGuard) clearInterval(overlayPointerGuard);
   overlayPointerGuard = null;
+  hidePrivateCursorWindow();
 }
 
 function stopOverlayManualResize() {
@@ -333,10 +410,11 @@ function startSessionStatusPoller(sessionToken) {
     checking = true;
     try {
       const state = await getBackendSessionStatus(token);
-      if (state.success && state.active) return;
-      const message = state.endReason === 'idle_timeout'
-        ? `This Zapper session ended automatically after ${state.idleTimeoutMinutes || 20} minutes without speech.`
-        : (state.error || 'This Zapper session is no longer active. Ask the host for a new PIN.');
+      if (!state.success) return; // network/auth glitches must never end a host-controlled session locally
+      if (state.active) return;
+      const message = state.endReason === 'host_ended'
+        ? 'The host ended this Zapper session. This PIN is no longer valid.'
+        : 'This Zapper session is no longer active. Ask the host for a new PIN.';
       overlayWindow.webContents.send('session-ended', message);
       stopSessionStatusPoller();
       stopRemoteTranscriptStream();
@@ -388,6 +466,7 @@ function createOverlayWindow() {
   try { overlayWindow.setFullScreenable(false); } catch (_) {}
 
   global.overlayWindow = overlayWindow;
+  createPrivateCursorWindow();
   overlayWindow.loadFile(path.join(__dirname, 'overlay', 'index.html'));
 
   overlayWindow.once('ready-to-show', () => {
@@ -422,6 +501,7 @@ function createOverlayWindow() {
     stopOverlayTopmostGuard();
     stopOverlayPointerGuard();
     stopOverlayManualResize();
+    hidePrivateCursorWindow();
     overlayWindow = null;
   });
 }
@@ -678,6 +758,7 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
   stopOverlayTopmostGuard();
   stopOverlayPointerGuard();
+  destroyPrivateCursorWindow();
   globalShortcut.unregisterAll();
 });
 

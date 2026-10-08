@@ -4,115 +4,110 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#06111f" />
-  <meta name="description" content="Zapper private Google Meet transcription with host-controlled session PINs and downloadable PDF transcripts." />
+  <meta name="description" content="Zapper private meeting transcription with low-latency captions, participant launch access, host session controls and downloadable transcripts." />
   <title>Zapper | Private meeting transcription</title>
   <link rel="stylesheet" href="/src/app.css" />
 </head>
 <body>
-  <div id="publicSite">
-    <header class="siteNav shellWide">
-      <a class="brandLockup" href="#home" aria-label="Zapper home">
-        <span class="brandMark">Z</span>
-        <span><strong>ZAPPER</strong><small>Private meeting transcription</small></span>
-      </a>
-      <nav class="navLinks" aria-label="Primary navigation">
-        <a href="#features">Features</a>
-        <a href="#how">How it works</a>
-        <a href="#pricing">Pricing</a>
-        <a href="#about">About</a>
-      </nav>
-      <div class="navActions">
-        <button class="ghostBtn" data-launch type="button">Launch Zapper</button>
-        <button id="navLogin" class="ghostBtn" type="button">Host login</button>
-        <button id="navSignup" class="primaryBtn" type="button">Host sign up</button>
-      </div>
-    </header>
+  <header id="siteHeader" class="siteNav shellWide">
+    <button class="brandLockup brandButton" data-section="home" type="button" aria-label="Zapper home">
+      <span class="brandMark">Z</span><span><strong>ZAPPER</strong><small>Private meeting transcription</small></span>
+    </button>
+    <nav class="navLinks" aria-label="Primary navigation">
+      <button data-section="features" type="button">Features</button>
+      <button data-section="how" type="button">How it works</button>
+      <button data-section="pricing" type="button">Pricing</button>
+      <button data-section="about" type="button">About</button>
+      <button data-section="legal" type="button">Policies</button>
+      <button data-section="contact" type="button">Contact</button>
+    </nav>
+    <div class="navActions">
+      <button class="ghostBtn" data-launch type="button">Launch Zapper</button>
+      <a class="ghostBtn anchorBtn" data-download href="#">Download Zapper</a>
+      <button id="dashboardBtn" class="ghostBtn hidden" type="button">Dashboard</button>
+      <button id="navLogin" class="ghostBtn" type="button">Host login</button>
+      <button id="navSignup" class="primaryBtn" type="button">Host sign up</button>
+      <button id="navLogout" class="ghostBtn hidden" type="button">Log out</button>
+    </div>
+  </header>
 
+  <div id="publicSite">
     <main>
       <section id="home" class="heroSection shellWide">
         <div class="heroCopy">
-          <div class="eyebrow">PRIVATE · PIN-BASED · MEETING READY</div>
-          <h1>Live meeting transcription without making participants manage a portal account.</h1>
-          <p class="heroLead">Hosts create a secure 6-digit session PIN. Participants launch the Zapper desktop app, sign into Google if needed, enter the PIN, and start transcribing the linked Google Meet.</p>
+          <div class="eyebrow">PRIVATE · FAST · MEETING READY</div>
+          <h1>Live meeting transcription, one click away.</h1>
+          <p class="heroLead">Launch Zapper and follow the conversation with a lightweight private overlay built for fast voice-to-text, focused reading and meeting notes without adding a portal login for participants.</p>
           <div class="heroActions">
             <button class="primaryBtn large" data-launch type="button">Launch Zapper</button>
             <a class="secondaryBtn large" data-download href="#">Download Zapper</a>
           </div>
           <div class="heroMeta">
-            <span>✓ No participant Zapper account</span>
-            <span>✓ Google sign-in stays in desktop</span>
-            <span>✓ Host-owned PDF history</span>
+            <span>✓ Participant access without website login</span>
+            <span>✓ Low-latency live captions</span>
+            <span>✓ Downloadable host transcripts</span>
           </div>
         </div>
         <div class="heroProduct cardGlow">
           <div class="miniTop"><span class="liveDot"></span><strong>Participant flow</strong></div>
-          <div class="flowStack">
-            <div><span>1</span><p><strong>Launch</strong><br/>Open the installed Zapper app.</p></div>
-            <div><span>2</span><p><strong>Google Sign-In</strong><br/>Only when the desktop profile is not already signed in.</p></div>
-            <div><span>3</span><p><strong>Enter PIN</strong><br/>Use the 6-digit code provided by the host.</p></div>
-            <div><span>4</span><p><strong>Transcribe</strong><br/>The Meet URL is resolved privately from the backend.</p></div>
+          <div class="flowStack compactFlow">
+            <div><span>1</span><p><strong>Launch</strong><br/>Open Zapper from the website or desktop shortcut.</p></div>
+            <div><span>2</span><p><strong>Enter PIN</strong><br/>Enter the six-digit code shared for the meeting.</p></div>
+            <div><span>3</span><p><strong>Start transcription</strong><br/>Follow the live conversation and use meeting chat from the overlay.</p></div>
           </div>
           <div id="launchMessage" class="inlineNotice hidden"></div>
         </div>
       </section>
 
-      <section class="trustStrip">
-        <div class="shellWide trustGrid">
-          <span>Host-controlled access</span><span>6-digit session binding</span><span>Latest 15 sessions retained</span><span>PDF transcript archive</span>
-        </div>
-      </section>
+      <section class="trustStrip"><div class="shellWide trustGrid"><span>Fast voice-to-text</span><span>Private overlay experience</span><span>Two-way meeting chat</span><span>PDF transcript history</span></div></section>
 
       <section id="features" class="section shellWide">
-        <div class="sectionIntro"><div class="eyebrow">FEATURES</div><h2>Everything needed for a controlled transcription workflow.</h2><p>Participant simplicity on one side; host accountability and transcript history on the other.</p></div>
+        <div class="sectionIntro"><div class="eyebrow">FEATURES</div><h2>Designed for fast, focused meeting transcription.</h2><p>Zapper keeps participant interaction simple while giving hosts a practical transcript workflow.</p></div>
         <div class="featureGrid">
-          <article class="featureCard"><div class="iconChip">PIN</div><h3>Session PINs</h3><p>Every host-created Meet session receives a unique six-digit PIN stored against that host and meeting.</p></article>
-          <article class="featureCard"><div class="iconChip">LIVE</div><h3>Desktop transcription</h3><p>The participant enters only the PIN. Zapper resolves the Meet URL and starts the existing transcription flow.</p></article>
-          <article class="featureCard"><div class="iconChip">PDF</div><h3>Stored PDF record</h3><p>On Leave, the full transcript is saved to the host account and stored as a downloadable PDF.</p></article>
-          <article class="featureCard"><div class="iconChip">15</div><h3>Controlled retention</h3><p>Only the latest fifteen host sessions and transcripts are retained per account to keep the database lightweight.</p></article>
-          <article class="featureCard"><div class="iconChip">ADM</div><h3>Admin controls</h3><p>Administrators can view users, activity, subscription start/end dates, and shorten or extend access.</p></article>
-          <article class="featureCard"><div class="iconChip">₹</div><h3>Simple host plan</h3><p>Host subscription status is checked before session creation and again when a participant redeems the PIN.</p></article>
+          <article class="featureCard"><div class="iconChip">FAST</div><h3>Low-latency captions</h3><p>Streaming speech-to-text is designed to surface spoken content quickly so the transcript stays useful during a live conversation.</p></article>
+          <article class="featureCard"><div class="iconChip">VOICE</div><h3>Accurate voice-to-text</h3><p>Smart formatting and live interim results make spoken content easier to follow and review during the meeting.</p></article>
+          <article class="featureCard"><div class="iconChip">PRIV</div><h3>Private overlay</h3><p>The desktop overlay is designed to stay available to the local participant while using supported operating-system capture protection for screen sharing.</p></article>
+          <article class="featureCard"><div class="iconChip">CUR</div><h3>Private pointer experience</h3><p>Pointer handling over the overlay is separated from the normal desktop experience so the user can interact naturally with Zapper controls.</p></article>
+          <article class="featureCard"><div class="iconChip">CHAT</div><h3>Two-way meeting chat</h3><p>Read host chat and reply directly from the Zapper overlay without leaving the live transcript view.</p></article>
+          <article class="featureCard"><div class="iconChip">PDF</div><h3>Transcripts one click away</h3><p>Completed meeting transcripts are available from the host dashboard as clean downloadable PDF records.</p></article>
+          <article class="featureCard"><div class="iconChip">₹</div><h3>Cost-conscious host plan</h3><p>A simple ₹1,000 monthly host plan keeps pricing predictable while participants can launch without buying a separate account.</p></article>
+          <article class="featureCard"><div class="iconChip">1X</div><h3>One-click access</h3><p>Launch and download controls are available directly from the public homepage, so participants do not have to navigate an account portal first.</p></article>
         </div>
       </section>
 
-      <section id="how" class="section sectionAlt">
-        <div class="shellWide">
-          <div class="sectionIntro"><div class="eyebrow">HOW TO USE</div><h2>Two people, two simple responsibilities.</h2></div>
-          <div class="howGrid">
-            <article class="stepCard"><span class="stepNo">01</span><h3>Host registers</h3><p>Create a Zapper host account. An active subscription is required to create sessions.</p></article>
-            <article class="stepCard"><span class="stepNo">02</span><h3>Host creates session</h3><p>Paste the Google Meet URL or meeting ID. Zapper stores it and returns a 6-digit PIN.</p></article>
-            <article class="stepCard"><span class="stepNo">03</span><h3>Participant launches Zapper</h3><p>No portal login. Google Sign-In happens only inside the desktop app if required.</p></article>
-            <article class="stepCard"><span class="stepNo">04</span><h3>Participant enters PIN</h3><p>The backend validates the host subscription and returns the matching Meet URL to the desktop.</p></article>
-            <article class="stepCard"><span class="stepNo">05</span><h3>Meeting is transcribed</h3><p>Live captions continue through the existing private overlay and transcription service.</p></article>
-            <article class="stepCard"><span class="stepNo">06</span><h3>Host gets the PDF</h3><p>When the participant leaves, the complete transcript is stored and appears in the host portal.</p></article>
-          </div>
+      <section id="how" class="section sectionAlt"><div class="shellWide">
+        <div class="sectionIntro"><div class="eyebrow">HOW TO USE</div><h2>A clear flow for hosts and participants.</h2></div>
+        <div class="howGrid">
+          <article class="stepCard"><span class="stepNo">HOST 01</span><h3>Create your host account</h3><p>Register, sign in and keep an active host subscription.</p></article>
+          <article class="stepCard"><span class="stepNo">HOST 02</span><h3>Create a meeting session</h3><p>Use your Google Meet link and share the generated session PIN with the participant.</p></article>
+          <article class="stepCard"><span class="stepNo">USER 01</span><h3>Launch Zapper</h3><p>No website account is required for a participant. Launch the installed desktop app directly.</p></article>
+          <article class="stepCard"><span class="stepNo">USER 02</span><h3>Enter the PIN</h3><p>Enter the six-digit session PIN and click Start Session.</p></article>
+          <article class="stepCard"><span class="stepNo">LIVE</span><h3>Follow the conversation</h3><p>Use live transcription and chat while the meeting continues.</p></article>
+          <article class="stepCard"><span class="stepNo">HOST 03</span><h3>Download the transcript</h3><p>Completed transcripts remain available to the host as downloadable PDFs.</p></article>
+        </div>
+      </div></section>
+
+      <section id="pricing" class="section shellWide"><div class="pricingWrap">
+        <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>Simple host pricing.</h2><p>Participants can launch Zapper without purchasing a separate participant subscription.</p></div>
+        <div class="pricingCard cardGlow"><span class="pillBlue">HOST PLAN</span><div class="price"><strong>₹1,000</strong><span>/ month</span></div><ul><li>Host dashboard and session creation</li><li>Live participant transcription flow</li><li>Transcript PDF downloads</li><li>Subscription and account support</li></ul><button id="pricingSignup" class="primaryBtn large" type="button">Create host account</button><p class="finePrint">By purchasing or continuing a paid plan, you agree to the Terms, Privacy Policy, Billing & Cancellation Policy and Refund Policy below.</p></div>
+      </div></section>
+
+      <section id="about" class="section sectionAlt"><div class="shellWide aboutGrid"><div><div class="eyebrow">ABOUT ZAPPER</div><h2>Meeting transcription without unnecessary participant friction.</h2></div><p>Zapper combines a host-managed web portal with a focused desktop experience for live transcription. It is built for practical meeting access, low-latency captions, host-controlled sessions, searchable account administration and downloadable transcript records.</p></div></section>
+
+      <section id="legal" class="section shellWide">
+        <div class="sectionIntro"><div class="eyebrow">POLICIES & PAYMENT READINESS</div><h2>Clear terms for using and paying for Zapper.</h2><p>These sections are available throughout the site for account, payment and support transparency.</p></div>
+        <div class="policyGrid">
+          <article id="terms" class="policyCard"><h3>Terms of Service</h3><p>Zapper provides software for meeting transcription and related host session management. Users are responsible for obtaining any consent required before recording or transcribing a meeting, safeguarding account credentials and using the service lawfully. Service availability may depend on third-party platforms, network connectivity and supported operating-system capabilities.</p><p>Paid access is licensed to the registered host account for the active subscription period. Misuse, attempts to bypass access controls, unlawful transcription, abusive traffic or interference with the service may result in suspension.</p></article>
+          <article id="privacy" class="policyCard"><h3>Privacy Policy</h3><p>Zapper stores account details needed to operate the service, including name, email, subscription status, session records and saved transcript data. Participant Google identity may be stored with a transcript when available. Passwords are stored as one-way hashes.</p><p>Data is used to provide authentication, session access, transcription, support and account administration. Zapper does not require participants to create a website account. Customers should avoid entering sensitive information that is not needed for the meeting.</p></article>
+          <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>The displayed host plan is ₹1,000 per month unless a different price is presented at checkout. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
+          <article id="refund" class="policyCard"><h3>Refund Policy</h3><p>If a payment is duplicated, charged in error, or the paid service cannot be provided due to a verified Zapper-side issue, contact support with the account email and transaction reference. Eligible refunds are reviewed case by case and, when approved, are returned to the original payment method according to payment-provider timelines.</p><p>Usage already consumed during an active billing period may affect refund eligibility except where applicable law requires otherwise.</p></article>
+          <article id="security" class="policyCard"><h3>Security & Responsible Use</h3><p>Zapper uses authenticated host accounts, time-limited application tokens and server-side session validation. Users should keep login credentials and session PINs confidential and install desktop builds only from the official Zapper release link.</p></article>
+          <article id="support" class="policyCard"><h3>Support & Grievance Contact</h3><p>For account, billing, privacy, refund or technical questions, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a>. Include your registered email and a concise description of the issue. Do not send passwords or private meeting content unless specifically required for troubleshooting.</p></article>
         </div>
       </section>
 
-      <section id="pricing" class="section shellWide">
-        <div class="pricingWrap">
-          <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>One straightforward host plan.</h2><p>Participants do not need a paid Zapper account. The host owns session creation and transcript history.</p></div>
-          <div class="pricingCard cardGlow">
-            <span class="pillBlue">HOST PLAN</span>
-            <div class="price"><strong>₹1,000</strong><span>/ month</span></div>
-            <ul><li>Host portal access</li><li>6-digit session PIN creation</li><li>Latest 15 sessions retained</li><li>Latest 15 PDF transcripts retained</li><li>Admin-managed subscription dates</li></ul>
-            <button id="pricingSignup" class="primaryBtn large" type="button">Create host account</button>
-          </div>
-        </div>
-      </section>
-
-      <section id="about" class="section sectionAlt">
-        <div class="shellWide aboutGrid">
-          <div><div class="eyebrow">ABOUT ZAPPER</div><h2>Built around a private desktop transcription workflow.</h2></div>
-          <p>Zapper separates the commercial host account from the participant desktop experience. The website manages subscriptions, meeting sessions, PINs and transcript history. The desktop app focuses only on Google authentication, PIN redemption and live transcription.</p>
-        </div>
-      </section>
-
-      <section class="ctaSection shellWide">
-        <div class="ctaCard cardGlow"><div><div class="eyebrow">PARTICIPANT</div><h2>Already have Zapper installed?</h2><p>Launch it directly and enter the PIN shared by your host.</p></div><div class="heroActions"><button class="primaryBtn large" data-launch type="button">Launch Zapper</button><a class="secondaryBtn large" data-download href="#">Download</a></div></div>
-      </section>
+      <section id="contact" class="ctaSection shellWide"><div class="ctaCard cardGlow"><div><div class="eyebrow">GET STARTED</div><h2>Participant? Launch immediately.</h2><p>Open Zapper, enter the PIN shared for your meeting and start transcription.</p></div><div class="heroActions"><button class="primaryBtn large" data-launch type="button">Launch Zapper</button><a class="secondaryBtn large" data-download href="#">Download Zapper</a></div></div></section>
     </main>
-
-    <footer class="footer shellWide"><div><strong>ZAPPER</strong><span>Private meeting transcription</span></div><div><a href="#features">Features</a><a href="#pricing">Pricing</a><button id="footerLogin" class="linkBtn" type="button">Host login</button></div></footer>
   </div>
 
   <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
@@ -121,63 +116,48 @@
       <button class="modalClose" data-close-auth type="button">×</button>
       <div class="eyebrow">HOST / ADMIN ACCOUNT</div>
       <h2 id="authTitle">Sign in to Zapper</h2>
-      <p id="authLead">Hosts sign in to create meeting sessions. Admins use the same login and are routed to the admin console automatically.</p>
-      <div class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
+      <p id="authLead">Hosts sign in to create meeting sessions. Administrators use the same login and are routed automatically.</p>
+      <div id="authTabs" class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
       <form id="authForm">
         <input id="name" class="hidden" placeholder="Full name" autocomplete="name" />
         <input id="email" type="email" placeholder="Email" autocomplete="email" required />
         <input id="password" type="password" placeholder="Password (8+ characters)" autocomplete="current-password" required />
+        <input id="resetConfirm" class="hidden" type="password" placeholder="Confirm new password" autocomplete="new-password" />
         <button id="authSubmit" class="primaryBtn" type="submit">Login</button>
+        <button id="forgotPasswordBtn" class="linkBtn authLink" type="button">Forgot password?</button>
+        <button id="backToLoginBtn" class="linkBtn authLink hidden" type="button">Back to login</button>
         <div id="authError" class="error" aria-live="polite"></div>
+        <div id="authSuccess" class="successText" aria-live="polite"></div>
       </form>
     </section>
   </div>
 
   <main id="hostPortal" class="portalShell hidden">
-    <header class="portalTop">
-      <a class="brandLockup" href="#"><span class="brandMark">Z</span><span><strong>ZAPPER</strong><small>Host portal</small></span></a>
-      <div class="portalActions"><button class="ghostBtn" data-launch type="button">Launch Zapper</button><a class="ghostBtn anchorBtn" data-download href="#">Download</a><button id="hostLogout" class="ghostBtn" type="button">Log out</button></div>
-    </header>
-    <section class="portalHero">
-      <div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div>
-      <div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div>
-    </section>
+    <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
     <section class="portalGrid">
-      <div class="portalCard">
-        <div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Paste <code>abc-defg-hij</code>, <code>meet.google.com/abc-defg-hij</code>, or the full Google Meet URL.</p>
-        <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form>
-        <div id="sessionError" class="error" aria-live="polite"></div>
-        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div>
-      </div>
-      <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT HANDOFF</div><h2>Share only the PIN</h2><p>The participant launches Zapper, signs into Google if required, and enters the six-digit code. They do not need your portal credentials.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
+      <div class="portalCard"><div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Enter your Google Meet ID or link. Your most recent Meet is remembered for quick reuse.</p><form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form><div id="sessionError" class="error" aria-live="polite"></div><div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div></div>
+      <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
     </section>
-    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Latest 15 host sessions and generated PINs.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>
-    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Latest 15 completed sessions with stored PDF download.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="transcripts" class="dataList"></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Your current and recent meeting sessions.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Completed meeting transcripts with PDF download.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="transcripts" class="dataList"></div></section>
   </main>
 
   <main id="adminPortal" class="portalShell hidden">
-    <header class="portalTop"><a class="brandLockup" href="#"><span class="brandMark">Z</span><span><strong>ZAPPER</strong><small>Administrator console</small></span></a><div class="portalActions"><button id="refreshAdmin" class="ghostBtn" type="button">Refresh</button><button id="adminLogout" class="ghostBtn" type="button">Log out</button></div></header>
-    <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage host accounts, subscription dates and usage activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>
-    <section class="portalCard"><div class="sectionHead adminHead"><div><h2>Users</h2><p>Search by name or email. Edit exact subscription start/end dates or disable an account.</p></div><input id="adminSearch" class="searchInput" placeholder="Search users..."/></div><div id="adminUsers" class="adminTableWrap"></div></section>
+    <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage accounts, access periods, password support and user activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>
+    <section class="adminQuickGrid"><div class="portalCard"><div class="eyebrow">ACCOUNT CONTROL</div><h3>Subscription management</h3><p>Edit exact start and end dates, activate or pause access and review recent account activity.</p></div><div class="portalCard"><div class="eyebrow">PASSWORD SUPPORT</div><h3>Reset user passwords</h3><p>Set a new temporary password for a user from the Manage panel. The user can then sign in and change it again through Forgot Password.</p></div><div class="portalCard"><div class="eyebrow">ACTIVITY</div><h3>Operational visibility</h3><p>Review retained session and transcript activity for each host account.</p></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead adminHead"><div><h2>Users</h2><p>Search by name or email and manage the selected account.</p></div><div class="adminToolbar"><input id="adminSearch" class="searchInput" placeholder="Search users..."/><button id="refreshAdmin" class="ghostBtn" type="button">Refresh</button></div></div><div id="adminUsers" class="adminTableWrap"></div></section>
   </main>
 
   <div id="adminEditModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modalBackdrop" data-close-admin></div>
-    <section class="adminEditCard">
-      <button class="modalClose" data-close-admin type="button">×</button>
-      <div class="eyebrow">EDIT USER</div><h2 id="editUserTitle">User</h2><p id="editUserMeta"></p>
-      <div class="formGrid">
-        <label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
-        <label>Account status<select id="editAccountStatus"><option value="active">Active</option><option value="disabled">Disabled</option></select></label>
-        <label>Subscription start<input id="editStart" type="datetime-local"/></label>
-        <label>Subscription end<input id="editEnd" type="datetime-local"/></label>
-      </div>
+    <div class="modalBackdrop" data-close-admin></div><section class="adminEditCard"><button class="modalClose" data-close-admin type="button">×</button><div class="eyebrow">MANAGE USER</div><h2 id="editUserTitle">User</h2><p id="editUserMeta"></p>
+      <div class="formGrid"><label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label>Account status<select id="editAccountStatus"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label>Subscription start<input id="editStart" type="datetime-local"/></label><label>Subscription end<input id="editEnd" type="datetime-local"/></label></div>
       <div class="quickAdjust"><button id="minus30" class="ghostBtn" type="button">−30 days</button><button id="plus30" class="ghostBtn" type="button">+30 days</button></div>
-      <div id="editError" class="error"></div>
-      <div class="modalActions"><button id="saveUser" class="primaryBtn" type="button">Save changes</button></div>
-      <div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
+      <div class="passwordAdminBox"><h3>Password reset</h3><p>Set a new password for this user (minimum 8 characters).</p><div class="inlineForm"><input id="adminNewPassword" type="password" placeholder="New password" autocomplete="new-password"/><button id="adminResetPassword" class="ghostBtn" type="button">Reset password</button></div><div id="adminPasswordStatus" class="successText"></div></div>
+      <div id="editError" class="error"></div><div class="modalActions"><button id="saveUser" class="primaryBtn" type="button">Save account changes</button></div><div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
     </section>
   </div>
+
+  <footer id="siteFooter" class="footer shellWide"><div><strong>ZAPPER</strong><span>Private meeting transcription</span></div><div class="footerLinks"><button data-section="features" class="linkBtn" type="button">Features</button><button data-section="pricing" class="linkBtn" type="button">Pricing</button><a href="/terms.html">Terms</a><a href="/privacy.html">Privacy</a><a href="/billing.html">Billing & Cancellation</a><a href="/refund.html">Refunds</a><a href="/contact.html">Contact</a><button id="footerLogin" class="linkBtn" type="button">Host login</button></div><small>© 2026 Zapper. Use of meeting transcription is subject to applicable consent and privacy requirements.</small></footer>
 
   <script type="module" src="/src/main.js"></script>
 </body>

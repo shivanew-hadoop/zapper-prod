@@ -10,6 +10,7 @@ let editingUser = null;
 let searchTimer = null;
 let currentSessionId = '';
 let currentSessionPin = '';
+let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
 const $ = id => document.getElementById(id);
 
 function escapeHTML(value) {
@@ -81,34 +82,57 @@ function launchDesktop() {
 document.querySelectorAll('[data-launch]').forEach(button => button.addEventListener('click', launchDesktop));
 setDownloadLinks();
 
-function showPublic() {
+function refreshHeaderState() {
+  const loggedIn = Boolean(token && account);
+  $('navLogin').classList.toggle('hidden', loggedIn);
+  $('navSignup').classList.toggle('hidden', loggedIn);
+  $('dashboardBtn').classList.toggle('hidden', !loggedIn);
+  $('navLogout').classList.toggle('hidden', !loggedIn);
+}
+function showPublic(section = '') {
   $('publicSite').classList.remove('hidden');
   $('hostPortal').classList.add('hidden');
   $('adminPortal').classList.add('hidden');
+  refreshHeaderState();
+  if (section) requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 function hideAuth() { $('authModal').classList.add('hidden'); }
 function openAuth(nextMode = 'login') {
   setMode(nextMode);
   $('authModal').classList.remove('hidden');
-  setTimeout(() => $('email').focus(), 50);
+  const target = nextMode === 'reset' ? $('password') : $('email');
+  setTimeout(() => target?.focus(), 50);
 }
 function setMode(next) {
   mode = next;
-  $('loginTab').classList.toggle('active', mode === 'login');
-  $('registerTab').classList.toggle('active', mode === 'register');
-  $('name').classList.toggle('hidden', mode !== 'register');
-  $('password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
-  $('authSubmit').textContent = mode === 'login' ? 'Login' : 'Create account';
-  $('authTitle').textContent = mode === 'login' ? 'Sign in to Zapper' : 'Create a host account';
+  const loginMode = mode === 'login';
+  const registerMode = mode === 'register';
+  const forgotMode = mode === 'forgot';
+  const resetMode = mode === 'reset';
+  $('authTabs').classList.toggle('hidden', forgotMode || resetMode);
+  $('loginTab').classList.toggle('active', loginMode);
+  $('registerTab').classList.toggle('active', registerMode);
+  $('name').classList.toggle('hidden', !registerMode);
+  $('email').classList.toggle('hidden', resetMode);
+  $('password').classList.toggle('hidden', forgotMode);
+  $('resetConfirm').classList.toggle('hidden', !resetMode);
+  $('forgotPasswordBtn').classList.toggle('hidden', !loginMode);
+  $('backToLoginBtn').classList.toggle('hidden', loginMode || registerMode);
+  $('name').required = registerMode;
+  $('email').required = !resetMode;
+  $('password').required = !forgotMode;
+  $('resetConfirm').required = resetMode;
+  $('password').autocomplete = loginMode ? 'current-password' : 'new-password';
+  $('authSubmit').textContent = loginMode ? 'Login' : registerMode ? 'Create account' : forgotMode ? 'Generate reset link' : 'Set new password';
+  $('authTitle').textContent = loginMode ? 'Sign in to Zapper' : registerMode ? 'Create a host account' : forgotMode ? 'Reset your password' : 'Choose a new password';
+  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account to manage subscriptions, sessions and transcripts.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
   $('authError').textContent = '';
+  $('authSuccess').textContent = '';
 }
 function logout() {
-  token = '';
-  account = null;
-  localStorage.removeItem('zapperToken');
-  showPublic();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  token = ''; account = null; localStorage.removeItem('zapperToken'); refreshHeaderState(); showPublic('home');
 }
+function openPublicSection(section) { showPublic(section); }
 
 $('navLogin').onclick = () => openAuth('login');
 $('footerLogin').onclick = () => openAuth('login');
@@ -116,22 +140,35 @@ $('navSignup').onclick = () => openAuth('register');
 $('pricingSignup').onclick = () => openAuth('register');
 $('loginTab').onclick = () => setMode('login');
 $('registerTab').onclick = () => setMode('register');
+$('forgotPasswordBtn').onclick = () => setMode('forgot');
+$('backToLoginBtn').onclick = () => setMode('login');
+$('dashboardBtn').onclick = () => loadPortal();
+$('navLogout').onclick = logout;
+document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => openPublicSection(el.dataset.section)));
 document.querySelectorAll('[data-close-auth]').forEach(el => el.addEventListener('click', hideAuth));
-$('hostLogout').onclick = logout;
-$('adminLogout').onclick = logout;
+document.getElementById('hostLogout')?.addEventListener('click', logout);
+document.getElementById('adminLogout')?.addEventListener('click', logout);
 
 $('authForm').onsubmit = async event => {
   event.preventDefault();
-  $('authError').textContent = '';
+  $('authError').textContent = ''; $('authSuccess').textContent = '';
   try {
-    const data = await api(`/api/auth/${mode}`, {
-      method: 'POST',
-      body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }),
-    });
-    token = data.token;
-    localStorage.setItem('zapperToken', token);
-    hideAuth();
-    await loadPortal();
+    if (mode === 'forgot') {
+      const data = await api('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: $('email').value.trim() }) });
+      $('authSuccess').innerHTML = escapeHTML(data.message || 'If that email is registered, a reset link has been generated.');
+      if (data.resetLink) $('authSuccess').innerHTML += `<br><a href="${escapeHTML(data.resetLink)}">Open reset link</a>`;
+      return;
+    }
+    if (mode === 'reset') {
+      if ($('password').value.length < 8) throw new Error('Password must contain at least 8 characters.');
+      if ($('password').value !== $('resetConfirm').value) throw new Error('Passwords do not match.');
+      const data = await api('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: resetToken, password: $('password').value }) });
+      resetToken = ''; history.replaceState({}, '', window.location.pathname);
+      setMode('login'); $('authSuccess').textContent = data.message || 'Password updated. Sign in with your new password.';
+      return;
+    }
+    const data = await api(`/api/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }) });
+    token = data.token; localStorage.setItem('zapperToken', token); hideAuth(); await loadPortal();
   } catch (error) { $('authError').textContent = error.message; }
 };
 
@@ -144,6 +181,7 @@ async function loadAccount() {
 async function loadHostPortal() {
   $('publicSite').classList.add('hidden');
   $('adminPortal').classList.add('hidden');
+  refreshHeaderState();
   $('hostPortal').classList.remove('hidden');
   $('welcome').textContent = `Welcome${account.name ? `, ${account.name}` : ''}`;
   const start = account.subscriptionStartedAt ? fmtDate(account.subscriptionStartedAt) : 'not set';
@@ -174,11 +212,23 @@ async function endHostSession(sessionId, pin = '') {
 
 async function loadSessions() {
   const data = await api('/api/sessions');
+  const activeSession = (data.sessions || []).find(session => session.active !== false && session.status === 'active');
+  if (activeSession) {
+    currentSessionId = activeSession.id;
+    currentSessionPin = activeSession.pin;
+    $('pinValue').textContent = activeSession.pin;
+    $('pinMeet').textContent = activeSession.meetUrl;
+    $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
+    $('endCurrentSession').disabled = false;
+    $('pinBox').classList.remove('hidden');
+  } else if (!currentSessionId) {
+    $('pinBox').classList.add('hidden');
+  }
   $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => {
-    const active = session.active !== false && session.status === 'active' && (!session.expiresAt || Number(session.expiresAt) > Date.now());
+    const active = session.active !== false && session.status === 'active';
     return `
     <div class="dataRow">
-      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason === 'idle_timeout' ? 'Auto-ended: no speech' : session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
+      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
       <div class="rowActions">
         ${active ? `<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
       </div>
@@ -290,6 +340,7 @@ async function loadAdminUsers(query = '') {
 async function loadAdminPortal() {
   $('publicSite').classList.add('hidden');
   $('hostPortal').classList.add('hidden');
+  refreshHeaderState();
   $('adminPortal').classList.remove('hidden');
   $('adminWelcome').textContent = `Welcome${account.name ? `, ${account.name}` : ''}`;
   await loadAdminUsers();
@@ -306,6 +357,8 @@ async function openAdminEdit(userId) {
   $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt);
   $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil);
   $('editError').textContent = '';
+  $('adminNewPassword').value = '';
+  $('adminPasswordStatus').textContent = '';
   $('editActivity').textContent = 'Loading...';
   $('adminEditModal').classList.remove('hidden');
   try {
@@ -339,6 +392,16 @@ $('saveUser').onclick = async () => {
     await loadAdminUsers($('adminSearch').value.trim());
   } catch (error) { $('editError').textContent = error.message; }
 };
+$('adminResetPassword').onclick = async () => {
+  if (!editingUser) return;
+  $('adminPasswordStatus').textContent = ''; $('editError').textContent = '';
+  const password = $('adminNewPassword').value;
+  if (password.length < 8) { $('editError').textContent = 'New password must contain at least 8 characters.'; return; }
+  try {
+    const data = await api(`/api/admin/users/${editingUser.id}/password`, { method: 'POST', body: JSON.stringify({ password }) });
+    $('adminNewPassword').value = ''; $('adminPasswordStatus').textContent = data.message || 'Password reset successfully.';
+  } catch (error) { $('editError').textContent = error.message; }
+};
 $('adminSearch').addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => loadAdminUsers($('adminSearch').value.trim()).catch(error => alert(error.message)), 300);
@@ -361,5 +424,7 @@ async function loadPortal() {
   }
 }
 
-if (token) loadPortal();
-else showPublic();
+refreshHeaderState();
+if (resetToken) { showPublic('home'); openAuth('reset'); }
+else if (token) loadPortal();
+else showPublic('home');

@@ -189,15 +189,13 @@ wss.on('connection', (clientWs, req) => {
   // an authorization token minted before the host ended the session.
   sessionStateTimer = setInterval(() => {
     if (clientWs.readyState !== WebSocket.OPEN) return;
-    sessionControl.sweepIdleSessions();
     const state = sessionControl.participantTokenState(sessionToken);
-    if (!state || !state.active || !state.subscriptionValid) {
-      const reason = state?.session?.end_reason === 'idle_timeout'
-        ? `This Zapper session ended automatically after ${sessionControl.sessionIdleTimeoutMinutes} minutes without speech.`
-        : 'The host ended this Zapper session. This PIN is no longer valid.';
-      sendClient({ type: 'session_ended', message: reason });
+    // A temporary auth/token/network issue must not terminate a meeting. Only a
+    // confirmed backend session row marked inactive (host End Session) stops it.
+    if (state && !state.active) {
+      sendClient({ type: 'session_ended', message: 'The host ended this Zapper session. This PIN is no longer valid.' });
       cleanupDeepgram();
-      try { clientWs.close(1008, 'session no longer active'); } catch (_) {}
+      try { clientWs.close(1008, 'host ended session'); } catch (_) {}
     }
   }, 5000);
 

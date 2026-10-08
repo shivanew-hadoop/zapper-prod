@@ -28,7 +28,8 @@ Greenfield Zapper repository with three independently deployable applications.
 3. Enters a Meet ID/link and receives a 6-digit PIN.
 4. Shares the PIN with the participant and can end the session at any time to invalidate that PIN.
 5. On desktop Leave, the complete transcript and generated PDF are saved under the host account.
-6. The portal retains the latest 15 sessions and latest 15 transcript PDFs.
+6. Participant Leave/reopen and host browser refresh do not end the PIN. Only Host **End Session** invalidates it.
+7. The portal shows the latest session history and retains the latest 15 transcript PDFs; active sessions are never auto-deleted.
 
 ### Admin
 1. Uses the same website Login form.
@@ -47,8 +48,17 @@ cd apps/api
 node tests/smoke.js
 ```
 
-The smoke test validates admin login, host registration, exact subscription editing, 15-session retention, PIN redemption, stored PDF creation and admin activity reporting.
+The smoke test validates admin login, host registration, host-controlled PIN lifecycle, participant leave/rejoin, host End Session invalidation, compact PDF generation and admin activity reporting.
 
-## v3.1.4 focused UI/PDF update
 
-This build keeps v3.1.3 session/STT behavior and only adjusts PDF header metadata, live overlay presentation, per-host Meet URL recall, and top-most reinforcement.
+## v3.1.6 focused web/auth/live-navigation update
+
+- Google Sign-In no longer pushes an active participant session back to Start Session.
+- Persistent public navigation/footer with Launch/Download access, professional product sections and dedicated policy URLs.
+- Forgot Password reset-link flow plus admin-set password control.
+- Existing host-controlled session/PIN/STT/PDF behavior retained.
+- See `docs/17-v3.1.6-WEB-AUTH-LIVE-NAV.md`.
+
+## v3.1.5 host-controlled session/PDF patch
+
+This build keeps the v3.1.4 overlay/UI behavior and changes only session lifecycle ownership plus PDF header regeneration. Active PINs stay valid across participant Leave/reopen and host browser refresh; only Host **End Session** deactivates them. PDF downloads use the compact participant/timing header even for transcripts stored by older builds.

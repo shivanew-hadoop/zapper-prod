@@ -8,8 +8,8 @@ The repository now includes `.github/workflows/release-desktop.yml`.
 2. Tag the tested version:
 
 ```powershell
-git tag v3.1.0
-git push origin v3.1.0
+git tag v3.1.7
+git push origin v3.1.7
 ```
 
 3. GitHub Actions runs on Windows, builds `apps/desktop`, creates a GitHub Release and uploads:
@@ -39,7 +39,7 @@ npm run dist
 The EXE is under:
 
 ```text
-apps/desktop/dist/Zapper-v3.1.3/Zapper-Setup-x64.exe
+apps/desktop/dist/Zapper-v3.1.7/Zapper-Setup-x64.exe
 ```
 
 In GitHub: **Repository → Releases → Draft a new release → choose/create tag → upload `Zapper-Setup-x64.exe` → Publish release**.

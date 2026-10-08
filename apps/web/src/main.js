@@ -84,10 +84,22 @@ setDownloadLinks();
 
 function refreshHeaderState() {
   const loggedIn = Boolean(token && account);
-  $('navLogin').classList.toggle('hidden', loggedIn);
-  $('navSignup').classList.toggle('hidden', loggedIn);
-  $('dashboardBtn').classList.toggle('hidden', !loggedIn);
-  $('navLogout').classList.toggle('hidden', !loggedIn);
+  ['navLogin', 'mobileLoginBtn'].forEach(id => $(id)?.classList.toggle('hidden', loggedIn));
+  ['navSignup', 'mobileSignupBtn'].forEach(id => $(id)?.classList.toggle('hidden', loggedIn));
+  ['dashboardBtn', 'mobileDashboardBtn'].forEach(id => $(id)?.classList.toggle('hidden', !loggedIn));
+  ['navLogout', 'mobileLogoutBtn'].forEach(id => $(id)?.classList.toggle('hidden', !loggedIn));
+}
+function closeMobileNav() {
+  $('mobileNav')?.classList.add('hidden');
+  $('mobileMenuBtn')?.setAttribute('aria-expanded', 'false');
+}
+function toggleMobileNav() {
+  const panel = $('mobileNav');
+  const button = $('mobileMenuBtn');
+  if (!panel || !button) return;
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !opening);
+  button.setAttribute('aria-expanded', opening ? 'true' : 'false');
 }
 function showPublic(section = '') {
   $('publicSite').classList.remove('hidden');
@@ -98,6 +110,7 @@ function showPublic(section = '') {
 }
 function hideAuth() { $('authModal').classList.add('hidden'); }
 function openAuth(nextMode = 'login') {
+  closeMobileNav();
   setMode(nextMode);
   $('authModal').classList.remove('hidden');
   const target = nextMode === 'reset' ? $('password') : $('email');
@@ -130,9 +143,10 @@ function setMode(next) {
   $('authSuccess').textContent = '';
 }
 function logout() {
+  closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken'); refreshHeaderState(); showPublic('home');
 }
-function openPublicSection(section) { showPublic(section); }
+function openPublicSection(section) { closeMobileNav(); showPublic(section); }
 
 $('navLogin').onclick = () => openAuth('login');
 $('footerLogin').onclick = () => openAuth('login');
@@ -144,6 +158,11 @@ $('forgotPasswordBtn').onclick = () => setMode('forgot');
 $('backToLoginBtn').onclick = () => setMode('login');
 $('dashboardBtn').onclick = () => loadPortal();
 $('navLogout').onclick = logout;
+$('mobileMenuBtn').onclick = toggleMobileNav;
+$('mobileLoginBtn').onclick = () => openAuth('login');
+$('mobileSignupBtn').onclick = () => openAuth('register');
+$('mobileDashboardBtn').onclick = () => { closeMobileNav(); loadPortal(); };
+$('mobileLogoutBtn').onclick = logout;
 document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => openPublicSection(el.dataset.section)));
 document.querySelectorAll('[data-close-auth]').forEach(el => el.addEventListener('click', hideAuth));
 document.getElementById('hostLogout')?.addEventListener('click', logout);

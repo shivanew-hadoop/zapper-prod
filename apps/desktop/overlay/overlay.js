@@ -23,7 +23,35 @@ const chatClearBtn = document.getElementById('chatClearBtn');
 const chatSendForm = document.getElementById('chatSendForm');
 const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
+const appVersionEl = document.getElementById('appVersion');
+const latestVersionBtn = document.getElementById('latestVersionBtn');
 let privateCursor = null;
+
+async function initAppVersionAndDownload() {
+  try {
+    const version = await window.electronAPI.getAppVersion();
+    if (appVersionEl) appVersionEl.textContent = version ? `v${version}` : 'v—';
+  } catch (_) {
+    if (appVersionEl) appVersionEl.textContent = 'v—';
+  }
+
+  latestVersionBtn?.addEventListener('click', async () => {
+    const previousText = latestVersionBtn.textContent;
+    latestVersionBtn.disabled = true;
+    latestVersionBtn.textContent = 'Opening…';
+    try {
+      const result = await window.electronAPI.openLatestDownload();
+      if (!result?.success) throw new Error(result?.error || 'Could not open the latest installer.');
+    } catch (err) {
+      loginAlert.textContent = err?.message || 'Could not open the latest Zapper installer.';
+      loginAlert.classList.remove('hidden');
+    } finally {
+      latestVersionBtn.disabled = false;
+      latestVersionBtn.textContent = previousText || 'Get latest';
+    }
+  });
+}
+
 
 let finalLines = [];
 let transcriptArchive = [];
@@ -83,6 +111,7 @@ function removeHoverTooltips() {
 }
 
 removeHoverTooltips();
+initAppVersionAndDownload();
 new MutationObserver(removeHoverTooltips).observe(document.documentElement, {
   subtree: true,
   attributes: true,

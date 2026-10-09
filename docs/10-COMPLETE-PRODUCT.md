@@ -44,7 +44,7 @@ Do not delete the `/data` Railway volume. The existing SQLite DB is migrated in 
 
 ```text
 VITE_API_BASE_URL=https://api.zapperapp.in
-VITE_DESKTOP_DOWNLOAD_URL=https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe
+VITE_DESKTOP_DOWNLOAD_URL=https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe
 ```
 
 Redeploy Vercel after changing a `VITE_*` value because Vite embeds it during the build.
@@ -71,7 +71,7 @@ Use `https://zapper-prod.vercel.app` until the full flow passes:
 See `11-GITHUB-RELEASES.md`. The website download link uses the stable GitHub URL:
 
 ```text
-https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe
+https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe
 ```
 
 ## 6. Final domain

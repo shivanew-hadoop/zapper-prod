@@ -1,6 +1,12 @@
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
-const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe';
-const DESKTOP_DOWNLOAD_URL = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || DEFAULT_RELEASE_URL).trim();
+const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
+const configuredReleaseUrl = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
+// Migrate safely from the old source-repository release URL. This keeps the
+// public Download Zapper button working even if Vercel still has the legacy
+// zapper-prod release URL cached in its environment settings.
+const DESKTOP_DOWNLOAD_URL = (!configuredReleaseUrl || /github\.com\/shivanew-hadoop\/zapper-prod\/releases\//i.test(configuredReleaseUrl))
+  ? DEFAULT_RELEASE_URL
+  : configuredReleaseUrl;
 
 let mode = 'login';
 let token = localStorage.getItem('zapperToken') || '';

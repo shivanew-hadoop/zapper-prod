@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearGoogleProfile: () => ipcRenderer.invoke('clear-google-profile'),
   checkGoogleLogin: () => ipcRenderer.invoke('check-google-login'),
   getAppConfig: () => ipcRenderer.invoke('get-app-config'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  openLatestDownload: () => ipcRenderer.invoke('open-latest-download'),
   redeemSessionPin: (pin) => ipcRenderer.invoke('redeem-session-pin', pin),
   saveSessionTranscript: (data) => ipcRenderer.invoke('save-session-transcript', data),
   endBackendSession: (sessionToken) => ipcRenderer.invoke('end-backend-session', sessionToken),

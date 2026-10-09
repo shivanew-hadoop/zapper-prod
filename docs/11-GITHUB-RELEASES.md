@@ -1,34 +1,38 @@
 # GitHub Releases — Zapper Windows download
 
-The repository now includes `.github/workflows/release-desktop.yml`.
+## Repository split
 
-## Recommended: automatic release from a Git tag
+Keep the application source repository private:
 
-1. Commit/push the complete source to `main`.
-2. Tag the tested version:
-
-```powershell
-git tag v3.1.7
-git push origin v3.1.7
+```text
+https://github.com/shivanew-hadoop/zapper-prod
 ```
 
-3. GitHub Actions runs on Windows, builds `apps/desktop`, creates a GitHub Release and uploads:
+Use the public binary-only repository for customer downloads:
+
+```text
+https://github.com/shivanew-hadoop/zapper-downloads
+```
+
+Do not copy application source into `zapper-downloads`. It only needs a small README and GitHub Release assets.
+
+## Stable customer download URL
+
+Every published release in `zapper-downloads` must contain an asset named exactly:
 
 ```text
 Zapper-Setup-x64.exe
 ```
 
-4. The website Download Zapper button uses:
+The website and desktop overlay use this permanent URL:
 
 ```text
-https://github.com/shivanew-hadoop/zapper-prod/releases/latest/download/Zapper-Setup-x64.exe
+https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe
 ```
 
-That URL remains stable across future releases as long as the asset keeps the same filename.
+The installed desktop version is displayed inside the Zapper overlay from `apps/desktop/package.json`.
 
-## Manual alternative
-
-Build locally on Windows:
+## Build locally on Windows
 
 ```powershell
 cd apps\desktop
@@ -36,10 +40,20 @@ npm install
 npm run dist
 ```
 
-The EXE is under:
+For version 3.1.8 the installer is under:
 
 ```text
-apps/desktop/dist/Zapper-v3.1.7/Zapper-Setup-x64.exe
+apps/desktop/dist/Zapper-v3.1.8/Zapper-Setup-x64.exe
 ```
 
-In GitHub: **Repository → Releases → Draft a new release → choose/create tag → upload `Zapper-Setup-x64.exe` → Publish release**.
+## Publish manually to the public downloads repository
+
+1. Open `https://github.com/shivanew-hadoop/zapper-downloads`.
+2. Open **Releases** → **Draft a new release**.
+3. Create a version tag, for example `v3.1.8`.
+4. Release title: `Zapper v3.1.8`.
+5. Upload the built file **without renaming it**: `Zapper-Setup-x64.exe`.
+6. Publish it as a normal release (not draft/prerelease) when it should become the latest customer download.
+7. Verify the stable `/releases/latest/download/Zapper-Setup-x64.exe` link downloads the new installer.
+
+For the next version, update `apps/desktop/package.json`, rebuild, publish a new release/tag, and upload the same fixed asset filename. No Vercel URL change is needed.

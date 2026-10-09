@@ -1,5 +1,5 @@
 // main.js — Electron main process
-const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -7,6 +7,8 @@ const DEFAULT_BACKEND_URL = 'https://api.zapperapp.in';
 let APP_CONFIG = {};
 try { APP_CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, 'app-config.json'), 'utf8')); } catch (_) {}
 const BACKEND_URL = String(APP_CONFIG.backendUrl || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '');
+const DEFAULT_DOWNLOAD_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
+const DOWNLOAD_URL = String(APP_CONFIG.downloadUrl || DEFAULT_DOWNLOAD_URL).trim();
 
 // Permanent app data folder. Keep this value unchanged so Google cookies/session persist
 // across app restarts, packaging, and future builds on the same machine.
@@ -310,7 +312,7 @@ function normalizeBackendHttpUrl(rawUrl) {
 }
 
 function getAppConfig() {
-  return { backendUrl: BACKEND_URL };
+  return { backendUrl: BACKEND_URL, downloadUrl: DOWNLOAD_URL };
 }
 
 function sendStatus(msg) {
@@ -544,6 +546,12 @@ function createOverlayWindow() {
 }
 
 ipcMain.handle('get-app-config', async () => getAppConfig());
+ipcMain.handle('get-app-version', async () => app.getVersion());
+ipcMain.handle('open-latest-download', async () => {
+  if (!/^https:\/\//i.test(DOWNLOAD_URL)) return { success: false, error: 'Download URL is not configured.' };
+  await shell.openExternal(DOWNLOAD_URL);
+  return { success: true };
+});
 
 ipcMain.handle('redeem-session-pin', async (_, pin) => {
   try { return await redeemSessionPin(pin); }

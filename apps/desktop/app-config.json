@@ -1,3 +1,4 @@
 {
-  "backendUrl": "https://api.zapperapp.in"
+  "backendUrl": "https://api.zapperapp.in",
+  "downloadUrl": "https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe"
 }

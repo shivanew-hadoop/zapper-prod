@@ -386,10 +386,10 @@ async function openAdminEdit(userId) {
   $('editUserTitle').textContent = editingUser.name || editingUser.email;
   $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
   const pendingApproval = editingUser.status === 'pending';
-  $('editSubStatus').value = pendingApproval ? 'active' : (editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive');
+  $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
   $('editAccountStatus').value = ['pending', 'active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
-  $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || (pendingApproval ? Date.now() : null));
-  $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil || (pendingApproval ? Date.now() + 30 * 86400000 : null));
+  $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || null);
+  $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil || null);
   $('approveUser').classList.toggle('hidden', !pendingApproval || editingUser.role === 'admin');
   $('editError').textContent = '';
   $('adminNewPassword').value = '';
@@ -416,15 +416,12 @@ $('approveUser').onclick = async () => {
   if (!editingUser || editingUser.role === 'admin') return;
   $('editError').textContent = '';
   try {
-    const startedAt = fromLocalInput($('editStart').value) || Date.now();
-    const validUntil = fromLocalInput($('editEnd').value);
-    if (!validUntil || validUntil <= startedAt) throw new Error('Choose a subscription end date later than the start date before approving.');
-    await api(`/api/admin/users/${editingUser.id}/subscription`, {
-      method: 'POST',
-      body: JSON.stringify({ subscriptionStatus: 'active', startedAt, validUntil }),
-    });
-    await api(`/api/admin/users/${editingUser.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'active' }) });
-    closeAdminEdit();
+    const data = await api(`/api/admin/users/${editingUser.id}/approve`, { method: 'POST' });
+    editingUser = data.user || { ...editingUser, status: 'active' };
+    $('approveUser').classList.add('hidden');
+    $('editAccountStatus').value = 'active';
+    $('editError').textContent = '';
+    $('adminPasswordStatus').textContent = data.message || 'Registration approved. Configure subscription access as required.';
     await loadAdminUsers($('adminSearch').value.trim());
   } catch (error) { $('editError').textContent = error.message; }
 };

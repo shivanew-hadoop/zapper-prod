@@ -15,7 +15,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       password_hash TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'host',
-      status TEXT NOT NULL DEFAULT 'active',
+      status TEXT NOT NULL DEFAULT 'pending',
       subscription_status TEXT NOT NULL DEFAULT 'inactive',
       subscription_started_at_ms INTEGER,
       subscription_valid_until_ms INTEGER,
@@ -823,6 +823,19 @@ module.exports = function createSessionControl({ app, dataDir }) {
       sessions: sessions.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })),
       transcripts: transcripts.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, googleEmail: r.google_email, startedAt: r.started_at_ms, endedAt: r.ended_at_ms, pdfFilename: r.pdf_filename })),
     });
+  });
+
+  app.post('/api/admin/users/:id/approve', adminAuth, (req, res) => {
+    const user = db.prepare('SELECT * FROM users WHERE id=?').get(Number(req.params.id));
+    if (!user) return res.status(404).json({ ok: false, error: 'User not found.' });
+    if (user.role === 'admin') return res.status(400).json({ ok: false, error: 'Administrator accounts are already approved.' });
+    if (user.status !== 'pending') return res.status(409).json({ ok: false, error: 'This registration is no longer pending approval.' });
+    // Approval is intentionally separate from subscription activation. The admin
+    // can approve the identity first, then use the existing subscription controls
+    // to set payment-backed start/end dates and active/inactive state.
+    db.prepare("UPDATE users SET status='active' WHERE id=? AND status='pending'").run(user.id);
+    const updated = db.prepare('SELECT * FROM users WHERE id=?').get(user.id);
+    res.json({ ok: true, user: adminUserSummary(updated), message: 'Registration approved. Configure the subscription dates/status as required.' });
   });
 
   app.post('/api/admin/users/:id/subscription', adminAuth, (req, res) => {

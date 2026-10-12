@@ -489,15 +489,21 @@ async function terminateApplicationCompletely() {
 
 function createOverlayWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  const overlayWidth = 625; // 50% default width
+  const overlayWidth = 625; // existing default width
+  const overlayHeight = 320; // existing default height
+  // Default launch position: horizontally centered near the top of the primary
+  // display, directly below the usual webcam/camera area. Users can still drag
+  // and resize the overlay normally after launch.
+  const defaultX = Math.round(workArea.x + (workArea.width - overlayWidth) / 2);
+  const defaultY = Math.round(workArea.y + 90);
 
   overlayWindow = new BrowserWindow({
     width: overlayWidth,
-    height: 320,
+    height: overlayHeight,
     minWidth: 420,
     minHeight: 44,
-    x: workArea.x + workArea.width - overlayWidth - 16,
-    y: workArea.y + 90,
+    x: defaultX,
+    y: defaultY,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',

@@ -67,15 +67,15 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
   if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
 
-  // Admin explicitly approves the host and sets exact subscription dates.
+  // Admin explicitly approves the host. Approval is separate from subscription
+  // activation so manual payment/subscription dates remain fully admin-controlled.
   const start = Date.now() - 60_000;
   const end = Date.now() + 30 * 86400000;
-  result = await invoke('POST', '/api/admin/users/:id/status', {
+  result = await invoke('POST', '/api/admin/users/:id/approve', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },
-    body: { status: 'active' },
   });
-  if (!result.payload?.ok || result.payload.user?.status !== 'active') throw new Error('admin approval failed');
+  if (!result.payload?.ok || result.payload.user?.status !== 'active' || result.payload.user?.subscriptionStatus === 'active') throw new Error('admin approval failed or auto-activated subscription');
   result = await invoke('POST', '/api/admin/users/:id/subscription', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },

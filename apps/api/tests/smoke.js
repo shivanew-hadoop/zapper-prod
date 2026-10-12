@@ -67,6 +67,17 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
   if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
 
+  // Even if another account-management path changes account status to active,
+  // the independent approval gate must still block first login until Approve registration.
+  result = await invoke('POST', '/api/admin/users/:id/status', {
+    headers: { authorization: `Bearer ${adminToken}` },
+    params: { id: String(hostId) },
+    body: { status: 'active' },
+  });
+  if (!result.payload?.ok) throw new Error('admin status update setup failed');
+  result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
+  if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('account status bypassed manual approval gate');
+
   // Admin explicitly approves the host. Approval is separate from subscription
   // activation so manual payment/subscription dates remain fully admin-controlled.
   const start = Date.now() - 60_000;

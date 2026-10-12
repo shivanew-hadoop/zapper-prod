@@ -19,6 +19,7 @@ let currentSessionId = '';
 let currentSessionPin = '';
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
 const $ = id => document.getElementById(id);
+function finishAuthRestore() { document.documentElement.classList.remove('auth-restoring'); }
 
 function escapeHTML(value) {
   return String(value ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
@@ -363,7 +364,7 @@ async function loadAdminUsers(query = '') {
         <td><strong>${escapeHTML(user.name || 'Unnamed')}</strong><small>${escapeHTML(user.email)}</small><small>${escapeHTML(user.role)}</small></td>
         <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmtDate(user.subscriptionStartedAt))} → ${escapeHTML(fmtDate(user.subscriptionValidUntil))}</small><small>${escapeHTML(monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
         <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
-        <td><span class="pill ${user.status === 'pending' ? 'pendingPill' : ''}">${escapeHTML(user.status === 'pending' ? 'Pending approval' : user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
+        <td><span class="pill ${user.approvalStatus !== 'approved' ? 'pendingPill' : ''}">${escapeHTML(user.approvalStatus !== 'approved' ? 'Pending approval' : user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
         <td><button class="ghostBtn compact" data-edit-user="${user.id}" type="button">Manage</button></td>
       </tr>`).join('')}
     </tbody></table>` : '<p class="empty">No users found.</p>';
@@ -385,7 +386,7 @@ async function openAdminEdit(userId) {
   if (!editingUser) return;
   $('editUserTitle').textContent = editingUser.name || editingUser.email;
   $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
-  const pendingApproval = editingUser.status === 'pending';
+  const pendingApproval = editingUser.approvalStatus !== 'approved';
   $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
   $('editAccountStatus').value = ['pending', 'active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
   $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || null);
@@ -417,7 +418,7 @@ $('approveUser').onclick = async () => {
   $('editError').textContent = '';
   try {
     const data = await api(`/api/admin/users/${editingUser.id}/approve`, { method: 'POST' });
-    editingUser = data.user || { ...editingUser, status: 'active' };
+    editingUser = data.user || { ...editingUser, approvalStatus: 'approved', status: 'active' };
     $('approveUser').classList.add('hidden');
     $('editAccountStatus').value = 'active';
     $('editError').textContent = '';
@@ -462,6 +463,7 @@ async function loadPortal() {
     hideAuth();
     if (account.role === 'admin') await loadAdminPortal();
     else await loadHostPortal();
+    finishAuthRestore();
   } catch (error) {
     token = '';
     account = null;
@@ -469,10 +471,11 @@ async function loadPortal() {
     showPublic();
     openAuth('login');
     $('authError').textContent = error.message;
+    finishAuthRestore();
   }
 }
 
 refreshHeaderState();
-if (resetToken) { showPublic('home'); openAuth('reset'); }
+if (resetToken) { showPublic('home'); openAuth('reset'); finishAuthRestore(); }
 else if (token) loadPortal();
-else showPublic('home');
+else { showPublic('home'); finishAuthRestore(); }

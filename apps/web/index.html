@@ -98,27 +98,7 @@
         </div>
       </section>
 
-      <section id="how" class="section sectionAlt"><div class="shellWide">
-        <div class="sectionIntro"><div class="eyebrow">HOW IT WORKS</div><h2>Two simple journeys. One meeting.</h2><p>Hosts manage the meeting session. Participants join Zapper without a website account.</p></div>
-        <div class="journeyGrid">
-          <article class="journeyPanel">
-            <div class="journeyHeader"><span class="roleBadge">FOR HOSTS</span><h3>Prepare and manage the session</h3></div>
-            <ol class="journeySteps">
-              <li><span>1</span><div><strong>Sign in as host</strong><p>Use your host account with an active subscription.</p></div></li>
-              <li><span>2</span><div><strong>Create the meeting session</strong><p>Enter the Google Meet link or meeting ID and create the session.</p></div></li>
-              <li><span>3</span><div><strong>Share the PIN</strong><p>Give the generated six-digit PIN to the participant and keep the session active until you end it.</p></div></li>
-            </ol>
-          </article>
-          <article class="journeyPanel participantJourney">
-            <div class="journeyHeader"><span class="roleBadge participantBadge">FOR PARTICIPANTS</span><h3>Join Zapper without a portal login</h3></div>
-            <ol class="journeySteps">
-              <li><span>1</span><div><strong>Launch Zapper</strong><p>Open the desktop app from the homepage or your installed shortcut.</p></div></li>
-              <li><span>2</span><div><strong>Enter the PIN</strong><p>Use the six-digit PIN provided by the host.</p></div></li>
-              <li><span>3</span><div><strong>Start transcription</strong><p>Follow the conversation with live voice-to-text and meeting chat.</p></div></li>
-            </ol>
-          </article>
-        </div>
-      </div></section>
+      <section id="how" class="section sectionAlt"><div id="howWorksRoot"></div></section>
 
       <section id="pricing" class="section shellWide"><div class="pricingWrap">
         <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>Simple host pricing.</h2><p>Participants can launch Zapper without purchasing a separate participant subscription.</p></div>
@@ -173,7 +153,7 @@
   <main id="hostPortal" class="portalShell hidden">
     <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
     <section class="portalGrid">
-      <div class="portalCard"><div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Enter your Google Meet ID or link. Your most recent Meet is remembered for quick reuse.</p><form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form><div id="sessionError" class="error" aria-live="polite"></div><div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div></div>
+      <div class="portalCard"><div class="eyebrow">CREATE SESSION</div><h2>Generate a 6-digit PIN</h2><p>Enter your Google Meet ID or link. Your most recent Meet is remembered for quick reuse. Each host session has a maximum duration of 3 hours 30 minutes.</p><form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session</button></form><div id="sessionError" class="error" aria-live="polite"></div><div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div></div>
       <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
     </section>
     <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Your current and recent meeting sessions.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>
@@ -182,16 +162,16 @@
 
   <main id="adminPortal" class="portalShell hidden">
     <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage accounts, access periods, password support and user activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>
-    <section class="adminQuickGrid"><div class="portalCard"><div class="eyebrow">ACCOUNT CONTROL</div><h3>Subscription management</h3><p>Edit exact start and end dates, activate or pause access and review recent account activity.</p></div><div class="portalCard"><div class="eyebrow">PASSWORD SUPPORT</div><h3>Reset user passwords</h3><p>Set a new temporary password for a user from the Manage panel. The user can then sign in and change it again through Forgot Password.</p></div><div class="portalCard"><div class="eyebrow">ACTIVITY</div><h3>Operational visibility</h3><p>Review retained session and transcript activity for each host account.</p></div></section>
+    <section class="adminQuickGrid"><div class="portalCard"><div class="eyebrow">ACCOUNT CONTROL</div><h3>Approvals & subscription management</h3><p>Review new registrations, approve host access, edit exact subscription start/end dates and manage account status.</p></div><div class="portalCard"><div class="eyebrow">PASSWORD SUPPORT</div><h3>Reset user passwords</h3><p>Set a new temporary password for a user from the Manage panel. The user can then sign in and change it again through Forgot Password.</p></div><div class="portalCard"><div class="eyebrow">ACTIVITY</div><h3>Operational visibility</h3><p>Review retained session and transcript activity for each host account.</p></div></section>
     <section class="portalCard sectionCard"><div class="sectionHead adminHead"><div><h2>Users</h2><p>Search by name or email and manage the selected account.</p></div><div class="adminToolbar"><input id="adminSearch" class="searchInput" placeholder="Search users..."/><button id="refreshAdmin" class="ghostBtn" type="button">Refresh</button></div></div><div id="adminUsers" class="adminTableWrap"></div></section>
   </main>
 
   <div id="adminEditModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modalBackdrop" data-close-admin></div><section class="adminEditCard"><button class="modalClose" data-close-admin type="button">×</button><div class="eyebrow">MANAGE USER</div><h2 id="editUserTitle">User</h2><p id="editUserMeta"></p>
-      <div class="formGrid"><label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label>Account status<select id="editAccountStatus"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label>Subscription start<input id="editStart" type="datetime-local"/></label><label>Subscription end<input id="editEnd" type="datetime-local"/></label></div>
+      <div class="formGrid"><label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label>Account status<select id="editAccountStatus"><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label>Subscription start<input id="editStart" type="datetime-local"/></label><label>Subscription end<input id="editEnd" type="datetime-local"/></label></div>
       <div class="quickAdjust"><button id="minus30" class="ghostBtn" type="button">−30 days</button><button id="plus30" class="ghostBtn" type="button">+30 days</button></div>
       <div class="passwordAdminBox"><h3>Password reset</h3><p>Set a new password for this user (minimum 8 characters).</p><div class="inlineForm"><input id="adminNewPassword" type="password" placeholder="New password" autocomplete="new-password"/><button id="adminResetPassword" class="ghostBtn" type="button">Reset password</button></div><div id="adminPasswordStatus" class="successText"></div></div>
-      <div id="editError" class="error"></div><div class="modalActions"><button id="saveUser" class="primaryBtn" type="button">Save account changes</button></div><div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
+      <div id="editError" class="error"></div><div class="modalActions"><button id="approveUser" class="primaryBtn hidden" type="button">Approve user & activate 30 days</button><button id="saveUser" class="primaryBtn" type="button">Save account changes</button></div><div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
     </section>
   </div>
 

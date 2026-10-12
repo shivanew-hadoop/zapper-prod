@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const path = require('path');
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
@@ -26,7 +27,8 @@ const DEEPGRAM_KEEPALIVE_MS = 5000;
 const BACKEND_CLIENT_PING_MS = 15000;
 const NO_SPEECH_KEEPALIVE_LIMIT_MS = 30 * 60 * 1000;
 const SILENCE_PCM_KEEPALIVE_AFTER_MS = 8000;
-const MAX_TRANSCRIPTION_SESSION_MS = 135 * 60 * 1000;
+const HOST_SESSION_MAX_MINUTES = Math.max(30, Math.min(210, Number(process.env.HOST_SESSION_MAX_MINUTES || 210)));
+const MAX_TRANSCRIPTION_SESSION_MS = HOST_SESSION_MAX_MINUTES * 60 * 1000;
 const SILENCE_PCM_100MS_16K_MONO = Buffer.alloc(16000 * 2 / 10);
 
 const app = express();
@@ -110,6 +112,83 @@ app.get('/', (_req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/stt' });
 
+// One authoritative live transcript is accumulated per host session. Multiple
+// desktops can listen to the same PIN, but only one capture source at a time is
+// persisted; another connected source is promoted automatically if the current
+// source leaves or stops producing final captions. This prevents duplicate PDF
+// paragraphs while still allowing participant failover.
+const sessionCaptureRegistry = new Map();
+function getCaptureState(sessionId) {
+  const key = String(sessionId || '');
+  let state = sessionCaptureRegistry.get(key);
+  if (!state) {
+    state = { leaderId: '', lastPersistedAt: 0, connections: new Map() };
+    sessionCaptureRegistry.set(key, state);
+  }
+  return state;
+}
+function registerCapture(sessionId, connectionId) {
+  const state = getCaptureState(sessionId);
+  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [] });
+  if (!state.leaderId) state.leaderId = connectionId;
+}
+function persistCaptureSegment(sessionId, connectionId, segment) {
+  const state = getCaptureState(sessionId);
+  const connection = state.connections.get(connectionId);
+  if (!connection) return;
+  connection.lastFinalAt = Number(segment.at || Date.now());
+  connection.buffer.push(segment);
+  const cutoff = Date.now() - 60000;
+  connection.buffer = connection.buffer.filter(item => Number(item.at || 0) >= cutoff).slice(-60);
+
+  const leader = state.connections.get(state.leaderId);
+  // If the leader has been silent while another connected source is producing
+  // final captions, promote the active source. During normal speech this picks
+  // whichever source completes first and keeps exactly one persistence path.
+  if (state.leaderId !== connectionId && (!leader || Date.now() - Number(leader.lastFinalAt || 0) > 12000)) {
+    state.leaderId = connectionId;
+    const replayFrom = Math.max(0, Number(state.lastPersistedAt || 0) - 5000);
+    const replay = connection.buffer.filter(item => Number(item.at || 0) >= replayFrom);
+    setImmediate(() => {
+      try { sessionControl.appendLiveTranscriptSegments(sessionId, replay, connectionId); }
+      catch (error) { console.error('[TRANSCRIPT] Failover persistence error:', error.message); }
+    });
+    if (replay.length) state.lastPersistedAt = Math.max(state.lastPersistedAt, ...replay.map(item => Number(item.at || 0)));
+    return;
+  }
+
+  if (state.leaderId === connectionId) {
+    state.lastPersistedAt = Math.max(Number(state.lastPersistedAt || 0), Number(segment.at || 0));
+    // Persist only after the live caption was already sent to the desktop, so
+    // SQLite work is never on the caption delivery critical path.
+    setImmediate(() => {
+      try { sessionControl.appendLiveTranscriptSegment(sessionId, segment.text, segment.at, connectionId); }
+      catch (error) { console.error('[TRANSCRIPT] Live persistence error:', error.message); }
+    });
+  }
+}
+function unregisterCapture(sessionId, connectionId) {
+  const key = String(sessionId || '');
+  const state = sessionCaptureRegistry.get(key);
+  if (!state) return;
+  state.connections.delete(connectionId);
+  if (state.leaderId === connectionId) {
+    const candidates = [...state.connections.entries()].sort((a, b) => Number(b[1].lastFinalAt || b[1].connectedAt) - Number(a[1].lastFinalAt || a[1].connectedAt));
+    state.leaderId = candidates[0]?.[0] || '';
+    const next = state.leaderId ? state.connections.get(state.leaderId) : null;
+    if (next?.buffer?.length) {
+      const replayFrom = Math.max(0, Number(state.lastPersistedAt || 0) - 5000);
+      const replay = next.buffer.filter(item => Number(item.at || 0) >= replayFrom);
+      setImmediate(() => {
+        try { sessionControl.appendLiveTranscriptSegments(sessionId, replay, state.leaderId); }
+        catch (error) { console.error('[TRANSCRIPT] Leader handoff persistence error:', error.message); }
+      });
+      if (replay.length) state.lastPersistedAt = Math.max(state.lastPersistedAt, ...replay.map(item => Number(item.at || 0)));
+    }
+  }
+  if (!state.connections.size) sessionCaptureRegistry.delete(key);
+}
+
 function buildDeepgramUrl() {
   const params = new URLSearchParams({
     model: 'nova-2', language: 'en-US', encoding: 'linear16', sample_rate: '16000', channels: '1',
@@ -122,6 +201,7 @@ function buildDeepgramUrl() {
 wss.on('connection', (clientWs, req) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const sessionToken = String(requestUrl.searchParams.get('token') || '');
+  const googleEmail = String(requestUrl.searchParams.get('googleEmail') || '').trim().toLowerCase();
   const participant = sessionControl.verifyParticipantToken(sessionToken);
 
   if (!participant) {
@@ -135,7 +215,12 @@ wss.on('connection', (clientWs, req) => {
     return;
   }
 
-  console.log(`[STT] Connected session=${participant.session.id} host=${participant.user.email}`);
+  const connectionId = crypto.randomUUID();
+  registerCapture(participant.session.id, connectionId);
+  if (googleEmail) {
+    try { sessionControl.registerParticipantGoogleEmail(participant.session.id, googleEmail); } catch (_) {}
+  }
+  console.log(`[STT] Connected session=${participant.session.id} host=${participant.user.email} source=${connectionId.slice(0, 8)}`);
   let dgWs = null;
   let dgOpen = false;
   let dgConnecting = false;
@@ -173,7 +258,7 @@ wss.on('connection', (clientWs, req) => {
   const closeForLimit = () => {
     if (limitReached) return;
     limitReached = true;
-    sendClient({ type: 'limit_reached', message: 'Transcript limit reached: 2 hours 15 minutes. Captions are disconnecting now.' });
+    sendClient({ type: 'limit_reached', message: `Session limit reached: ${HOST_SESSION_MAX_MINUTES} minutes. Captions are disconnecting now.` });
     cleanupDeepgram();
     try { clientWs.close(1000, 'transcript limit reached'); } catch (_) {}
   };
@@ -234,8 +319,10 @@ wss.on('connection', (clientWs, req) => {
         const alt = msg?.channel?.alternatives?.[0];
         const text = String(alt?.transcript || '');
         if (!text) return;
-        sendClient({ type: 'transcript', text, isFinal: Boolean(msg.is_final), speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) });
+        const isFinal = Boolean(msg.is_final);
+        sendClient({ type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) });
         const now = Date.now();
+        if (isFinal) persistCaptureSegment(participant.session.id, connectionId, { text, at: now });
         if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(participant.session.id, now)); }
       } catch (error) { console.error('[STT] Deepgram parse error:', error.message); }
     });
@@ -284,7 +371,13 @@ wss.on('connection', (clientWs, req) => {
     }
   });
 
-  const cleanup = () => { clearTimers(); cleanupDeepgram(); pendingAudio = []; };
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    clearTimers(); cleanupDeepgram(); pendingAudio = [];
+    unregisterCapture(participant.session.id, connectionId);
+  };
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });
 });

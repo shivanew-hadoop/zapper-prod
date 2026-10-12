@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   joinMeet: (data) => ipcRenderer.invoke('join-meet', data),
   leaveMeet: () => ipcRenderer.invoke('leave-meet'),
+  detachLiveSession: () => ipcRenderer.invoke('detach-live-session'),
   closeOverlay: () => ipcRenderer.invoke('close-overlay'),
   googleSignIn: () => ipcRenderer.invoke('google-signin'),
   clearGoogleProfile: () => ipcRenderer.invoke('clear-google-profile'),

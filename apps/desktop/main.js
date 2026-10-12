@@ -73,6 +73,10 @@ let overlayResizeGuard = null;
 let overlayResizeState = null;
 let sessionStatusPoller = null;
 let forceExitScheduled = false;
+let activeCaptureSessionId = '';
+let activeCaptureSessionToken = '';
+let activeCaptureGoogleEmail = '';
+let captureStopInProgress = false;
 
 
 // Keep the overlay private from supported OS capture APIs and continuously
@@ -294,6 +298,9 @@ function resetRuntimeFlags() {
   remoteSttStarted = false;
   audioRelayStarted = false;
   transcriptLimitReached = false;
+  activeCaptureSessionId = '';
+  activeCaptureSessionToken = '';
+  activeCaptureGoogleEmail = '';
 }
 
 function normalizeBackendHttpUrl(rawUrl) {
@@ -403,6 +410,21 @@ function stopSessionStatusPoller() {
   sessionStatusPoller = null;
 }
 
+async function stopActiveCaptureRuntime(statusText = 'Stopped') {
+  if (captureStopInProgress) return;
+  captureStopInProgress = true;
+  try {
+    stopSessionStatusPoller();
+    onAudioChunk(() => {});
+    stopRemoteTranscriptStream();
+    await leaveMeet().catch(() => {});
+    resetRuntimeFlags();
+    sendStatus(statusText);
+  } finally {
+    captureStopInProgress = false;
+  }
+}
+
 function startSessionStatusPoller(sessionToken) {
   stopSessionStatusPoller();
   const token = String(sessionToken || '');
@@ -419,8 +441,7 @@ function startSessionStatusPoller(sessionToken) {
         ? 'The host ended this Zapper session. This PIN is no longer valid.'
         : 'This Zapper session is no longer active. Ask the host for a new PIN.';
       overlayWindow.webContents.send('session-ended', message);
-      stopSessionStatusPoller();
-      stopRemoteTranscriptStream();
+      await stopActiveCaptureRuntime('Host ended session.');
     } catch (_) {
       // A temporary network error must not terminate a valid meeting.
     } finally {
@@ -583,8 +604,17 @@ ipcMain.handle('check-google-login', async () => {
   return { loggedIn };
 });
 
-ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
-  if (started) return { success: true, started: true };
+ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessionId }) => {
+  if (started) {
+    if (String(sessionId || '') && String(sessionId || '') === activeCaptureSessionId) {
+      return { success: true, started: true, resumed: true, googleEmail: activeCaptureGoogleEmail };
+    }
+    return {
+      success: false,
+      backgroundSessionActive: true,
+      error: 'Another Zapper session is still capturing in the background until its host ends it. Reopen that same PIN or close Zapper before starting a different session.'
+    };
+  }
 
   try {
     if (!String(sessionToken || '').trim()) return { success: false, sessionRequired: true, error: 'Enter a valid 6-digit Zapper session PIN.' };
@@ -615,6 +645,9 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
 
     const googleEmail = await getGoogleAccountEmail().catch(() => '');
     started = true;
+    activeCaptureSessionId = String(sessionId || '');
+    activeCaptureSessionToken = String(sessionToken || '');
+    activeCaptureGoogleEmail = String(googleEmail || '');
 
     sendStatus('Session verified. Opening Meet...');
     startSessionStatusPoller(sessionToken);
@@ -631,7 +664,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
         remoteSttStarted = true;
         sendStatus('Meet audio detected. Connecting to low-latency captions...');
 
-        startRemoteTranscriptStream({ backendUrl: BACKEND_URL, sessionToken }, payload => {
+        startRemoteTranscriptStream({ backendUrl: BACKEND_URL, sessionToken, googleEmail }, payload => {
           if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
           if (payload.error) {
@@ -646,7 +679,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
 
           if (payload.type === 'session_ended') {
             overlayWindow.webContents.send('session-ended', payload.text || 'This Zapper session is no longer active.');
-            stopRemoteTranscriptStream();
+            stopActiveCaptureRuntime('Host ended session.').catch(() => {});
             return;
           }
 
@@ -703,19 +736,17 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken }) => {
   }
 });
 
+ipcMain.handle('detach-live-session', async () => {
+  // Participant Leave only detaches the overlay view. The hidden Meet/audio/STT
+  // capture stays alive until the host explicitly ends the session in the portal.
+  // This keeps the session-level PDF complete without putting persistence work
+  // in the live-caption path.
+  if (started) sendStatus('Live view left. Transcript capture continues in the background until the host ends the session.');
+  return { success: true, capturing: started, sessionId: activeCaptureSessionId };
+});
+
 ipcMain.handle('leave-meet', async () => {
-  resetRuntimeFlags();
-
-  // Keep the local relay server alive for the lifetime of the desktop app.
-  // Closing and immediately reopening port 9999 caused a race where a rejoin
-  // could connect to a relay that was still shutting down. Detach only the
-  // previous session's callback; the next Start Session installs a fresh one.
-  onAudioChunk(() => {});
-  await leaveMeet();
-  stopRemoteTranscriptStream();
-
-  sendStatus('Stopped');
-
+  await stopActiveCaptureRuntime('Stopped');
   return { success: true };
 });
 

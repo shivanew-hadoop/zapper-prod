@@ -649,6 +649,7 @@ form.addEventListener('submit', async (e) => {
     guestName: getRandomGuestName(),
     meetUrl: activeMeetUrl,
     sessionToken: activeSessionToken,
+    sessionId: activeSessionId,
   });
   if (!res.success) {
     activeSessionToken = '';
@@ -664,14 +665,20 @@ form.addEventListener('submit', async (e) => {
   activeGoogleEmail = String(res.googleEmail || '').trim();
 });
 
-async function finalizeActiveSession({ endBackend = false, reason = 'You left this Zapper view. The host session and PIN remain active.' } = {}) {
+async function finalizeActiveSession({
+  endBackend = false,
+  keepBackgroundCapture = false,
+  reason = 'You left this Zapper view. The host session and PIN remain active.'
+} = {}) {
   if (finalizingSession) return;
   finalizingSession = true;
   try {
     const endedAt = Date.now();
     const transcriptText = transcriptArchive.join('\n').trim();
     if (activeSessionToken && transcriptText) {
-      statusEl.textContent = 'Saving transcript...';
+      // Fallback sync only. The backend continuously stores final captions and
+      // the host End Session action is the only operation that finalizes the PDF.
+      statusEl.textContent = 'Syncing transcript...';
       const saved = await window.electronAPI.saveSessionTranscript({
         sessionToken: activeSessionToken,
         transcriptText,
@@ -680,12 +687,16 @@ async function finalizeActiveSession({ endBackend = false, reason = 'You left th
         endedAt,
         googleEmail: activeGoogleEmail
       }).catch(e => ({ success: false, error: e.message }));
-      if (!saved.success) statusEl.textContent = `Transcript save warning: ${saved.error || 'Could not save transcript.'}`;
+      if (!saved.success) statusEl.textContent = `Transcript sync warning: ${saved.error || 'Could not sync transcript.'}`;
     }
     if (endBackend && activeSessionToken && window.electronAPI.endBackendSession) {
       await window.electronAPI.endBackendSession(activeSessionToken).catch(() => null);
     }
-    await window.electronAPI.leaveMeet();
+    if (keepBackgroundCapture && window.electronAPI.detachLiveSession) {
+      await window.electronAPI.detachLiveSession().catch(() => null);
+    } else {
+      await window.electronAPI.leaveMeet();
+    }
     finalLines = [];
     transcriptArchive = [];
     transcriptSegments = [];
@@ -698,7 +709,7 @@ async function finalizeActiveSession({ endBackend = false, reason = 'You left th
     activeGoogleEmail = '';
     renderTranscript();
     renderMeetChat();
-    statusEl.textContent = 'Stopped';
+    statusEl.textContent = keepBackgroundCapture ? 'Background capture active' : 'Stopped';
     showJoin();
     setSessionInfo(reason);
     joinBtn.disabled = false;
@@ -707,7 +718,11 @@ async function finalizeActiveSession({ endBackend = false, reason = 'You left th
   }
 }
 
-leaveBtn.addEventListener('click', async () => finalizeActiveSession({ endBackend: false, reason: 'You left the meeting. This PIN remains active until the host ends the session.' }));
+leaveBtn.addEventListener('click', async () => finalizeActiveSession({
+  endBackend: false,
+  keepBackgroundCapture: true,
+  reason: 'You left the live view. Transcript capture continues in the background until the host ends this session.'
+}));
 
 window.electronAPI.onStatus((msg) => {
   statusEl.textContent = msg;

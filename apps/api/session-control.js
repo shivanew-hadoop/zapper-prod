@@ -51,6 +51,16 @@ module.exports = function createSessionControl({ app, dataDir }) {
       FOREIGN KEY(host_session_id) REFERENCES host_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS session_live_segments(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      host_session_id TEXT NOT NULL,
+      source_id TEXT NOT NULL DEFAULT '',
+      text TEXT NOT NULL,
+      normalized_text TEXT NOT NULL,
+      captured_at_ms INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      FOREIGN KEY(host_session_id) REFERENCES host_sessions(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS password_reset_tokens(
       id TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -63,6 +73,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON host_sessions(user_id, created_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_transcripts_user ON transcripts(user_id, ended_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(host_session_id, ended_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_live_segments_session ON session_live_segments(host_session_id, captured_at_ms ASC);
     CREATE INDEX IF NOT EXISTS idx_password_reset_hash ON password_reset_tokens(token_hash);
   `);
 
@@ -81,6 +92,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('host_sessions', 'participant_started_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'last_speech_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'end_reason', 'TEXT');
+  ensureColumn('host_sessions', 'participant_google_email', "TEXT NOT NULL DEFAULT ''");
   // Normalize the explicit active flag for databases created by earlier builds.
   db.exec("UPDATE host_sessions SET active=CASE WHEN status='active' AND ended_at_ms IS NULL THEN 1 ELSE 0 END;");
 
@@ -91,8 +103,14 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const defaultTrialDays = Math.max(0, Number(process.env.DEFAULT_TRIAL_DAYS || 0));
   const planPriceInr = Math.max(1, Number(process.env.PLAN_PRICE_INR || 1000));
   const portalTokenDays = Math.max(1, Number(process.env.PORTAL_TOKEN_DAYS || 7));
-  const participantTokenMinutes = Math.max(30, Number(process.env.PARTICIPANT_TOKEN_MINUTES || 180));
-  const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12)); // legacy metadata only; host controls session end
+  // Hard product limit: a host session can remain active for at most 3h 30m.
+  // Railway may lower this value for testing, but it can never exceed 210 minutes.
+  const hostSessionMaxMinutes = Math.max(30, Math.min(210, Number(process.env.HOST_SESSION_MAX_MINUTES || 210)));
+  const hostSessionMaxMs = hostSessionMaxMinutes * 60000;
+  // Existing Railway values such as 180 must not make participant auth expire
+  // before the allowed host session duration.
+  const participantTokenMinutes = Math.max(hostSessionMaxMinutes, Number(process.env.PARTICIPANT_TOKEN_MINUTES || hostSessionMaxMinutes));
+  const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12)); // legacy compatibility only
   const sessionRetention = Math.max(1, Math.min(50, Number(process.env.SESSION_RETENTION || 15)));
   const transcriptRetention = Math.max(1, Math.min(50, Number(process.env.TRANSCRIPT_RETENTION || 15)));
   // Kept for backwards-compatible config reporting only. Active sessions are host-controlled and are never auto-ended for silence.
@@ -237,7 +255,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
       const payload = verifyToken(raw, 'zapper-portal');
       if (payload.type !== 'portal') throw new Error('wrong token');
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
-      if (!user || user.status !== 'active') return res.status(403).json({ ok: false, error: 'Account access is disabled.' });
+      if (!user) return res.status(403).json({ ok: false, error: 'Account access is unavailable.' });
+      if (user.status === 'pending') return res.status(403).json({ ok: false, error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator.' });
+      if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'Account access is disabled.' });
       req.authUser = user;
       next();
     } catch (_) {
@@ -256,19 +276,38 @@ module.exports = function createSessionControl({ app, dataDir }) {
     });
   }
 
-  // Session lifecycle rule: once a host creates a session, only the host's explicit
-  // End Session action may deactivate it. Browser refresh, participant Leave, silence,
-  // and the legacy expires_at_ms value must not invalidate an active PIN.
-  function expireClockSessions() { return 0; }
-  function sweepIdleSessions() { return 0; }
+  // Session lifecycle rule: participant Leave, browser refresh and silence do not
+  // end a PIN. The host may end it earlier, and the backend enforces one hard
+  // maximum duration of 3h 30m (or a lower HOST_SESSION_MAX_MINUTES override).
+  function endSessionAtLimit(session, now = Date.now()) {
+    if (!session || Number(session.active || 0) !== 1 || session.status !== 'active') return false;
+    const hardEndAt = Number(session.created_at_ms || 0) + hostSessionMaxMs;
+    if (!hardEndAt || now < hardEndAt) return false;
+    const result = db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='max_duration' WHERE id=? AND active=1 AND status='active'")
+      .run(hardEndAt, session.id);
+    if (Number(result.changes || 0)) {
+      try { finalizeSessionTranscript(session.id, hardEndAt); } catch (error) { console.error('[SESSION] Max-duration PDF finalization failed:', error.message); }
+      return true;
+    }
+    return false;
+  }
+  function expireClockSessions(now = Date.now()) {
+    const cutoff = Number(now) - hostSessionMaxMs;
+    const rows = db.prepare("SELECT * FROM host_sessions WHERE active=1 AND status='active' AND created_at_ms<=?").all(cutoff);
+    let ended = 0;
+    for (const row of rows) if (endSessionAtLimit(row, Number(now))) ended += 1;
+    return ended;
+  }
+  function sweepIdleSessions(now = Date.now()) { return expireClockSessions(now); }
 
   function participantTokenState(rawToken) {
     try {
       const payload = verifyToken(rawToken, 'zapper-desktop', 'zapper-electron');
       if (payload.type !== 'participant') return null;
-      const session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
+      let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
       const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!session || !user) return null;
+      if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
       const active = Number(session.active || 0) === 1 && session.status === 'active';
       return { payload, session, user, active, subscriptionValid: subscriptionState(user).valid };
     } catch (_) { return null; }
@@ -311,6 +350,122 @@ module.exports = function createSessionControl({ app, dataDir }) {
     db.prepare(`DELETE FROM transcripts WHERE user_id=? AND id NOT IN (
       SELECT id FROM transcripts WHERE user_id=? ORDER BY ended_at_ms DESC, created_at_ms DESC LIMIT ?
     )`).run(userId, userId, transcriptRetention);
+  }
+
+  function normalizeTranscriptText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s']/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function transcriptSimilarity(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (Math.min(a.length, b.length) >= 18 && (a.includes(b) || b.includes(a))) return 0.95;
+    const aWords = new Set(a.split(' ').filter(Boolean));
+    const bWords = new Set(b.split(' ').filter(Boolean));
+    if (!aWords.size || !bWords.size) return 0;
+    let intersection = 0;
+    for (const word of aWords) if (bWords.has(word)) intersection += 1;
+    const union = new Set([...aWords, ...bWords]).size;
+    return union ? intersection / union : 0;
+  }
+
+  function registerParticipantGoogleEmail(sessionId, email) {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return false;
+    const result = db.prepare(`UPDATE host_sessions SET participant_google_email=CASE
+      WHEN participant_google_email IS NULL OR participant_google_email='' THEN ?
+      ELSE participant_google_email END
+      WHERE id=?`).run(normalized, String(sessionId || ''));
+    return Number(result.changes || 0) > 0;
+  }
+
+  function appendLiveTranscriptSegments(sessionId, segments, sourceId = '') {
+    const id = String(sessionId || '');
+    if (!id || !Array.isArray(segments) || !segments.length) return 0;
+    const session = db.prepare('SELECT id,active,status,ended_at_ms FROM host_sessions WHERE id=?').get(id);
+    if (!session) return 0;
+    const endedAt = Number(session.ended_at_ms || 0);
+    const graceDeadline = endedAt ? endedAt + 5000 : 0;
+    if (Number(session.active || 0) !== 1 && (!endedAt || Date.now() > graceDeadline)) return 0;
+
+    const recentStmt = db.prepare(`SELECT normalized_text,captured_at_ms FROM session_live_segments
+      WHERE host_session_id=? AND captured_at_ms BETWEEN ? AND ? ORDER BY captured_at_ms DESC LIMIT 12`);
+    const insertStmt = db.prepare(`INSERT INTO session_live_segments(host_session_id,source_id,text,normalized_text,captured_at_ms,created_at_ms)
+      VALUES(?,?,?,?,?,?)`);
+    let inserted = 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const raw of segments) {
+        const text = String(raw?.text || '').trim().slice(0, 12000);
+        if (!text) continue;
+        let at = Math.max(1, Number(raw?.at) || Date.now());
+        if (endedAt) at = Math.min(at, endedAt);
+        const normalized = normalizeTranscriptText(text);
+        if (!normalized) continue;
+        const nearby = recentStmt.all(id, Math.max(1, at - 12000), at + 12000);
+        const duplicate = nearby.some(row => transcriptSimilarity(normalized, String(row.normalized_text || '')) >= 0.82);
+        if (duplicate) continue;
+        insertStmt.run(id, String(sourceId || '').slice(0, 120), text, normalized, at, Date.now());
+        inserted += 1;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+    if (inserted && endedAt) finalizeSessionTranscript(id, endedAt);
+    return inserted;
+  }
+
+  function appendLiveTranscriptSegment(sessionId, text, capturedAt = Date.now(), sourceId = '') {
+    return appendLiveTranscriptSegments(sessionId, [{ text, at: capturedAt }], sourceId);
+  }
+
+  function finalizeSessionTranscript(sessionId, forcedEndedAt = null) {
+    const session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(String(sessionId || ''));
+    if (!session) return null;
+    const user = db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
+    if (!user) return null;
+    const segmentRows = db.prepare(`SELECT text,captured_at_ms FROM session_live_segments
+      WHERE host_session_id=? ORDER BY captured_at_ms ASC,id ASC`).all(session.id);
+    const segments = segmentRows.map(row => ({ text: String(row.text || ''), at: Number(row.captured_at_ms || 0) })).filter(row => row.text);
+    const endedAt = Math.max(1, Number(forcedEndedAt || session.ended_at_ms || Date.now()));
+    const firstSegmentAt = segments.length ? Number(segments[0].at || 0) : 0;
+    const startedAt = Math.max(1, Math.min(endedAt, Number(session.participant_started_at_ms || firstSegmentAt || session.created_at_ms || endedAt)));
+    const transcriptText = segments.map(segment => segment.text).join('\n').trim();
+    const transcriptId = `session-${session.id}`;
+    const rowForPdf = {
+      started_at_ms: startedAt,
+      ended_at_ms: endedAt,
+      google_email: normalizeEmail(session.participant_google_email),
+      transcript_text: transcriptText,
+      transcript_segments: segments,
+    };
+    const pdf = buildTranscriptPdf(rowForPdf, user, session);
+    const pdfFilename = safePdfFilename(endedAt);
+
+    // One authoritative transcript/PDF per host session. Remove any older
+    // participant-local transcript rows created by builds prior to v3.1.9.
+    db.prepare('DELETE FROM transcripts WHERE host_session_id=? AND id<>?').run(session.id, transcriptId);
+    db.prepare(`INSERT INTO transcripts(id,host_session_id,user_id,google_email,started_at_ms,ended_at_ms,transcript_text,pdf_blob,pdf_filename,created_at_ms,transcript_segments_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET
+        google_email=excluded.google_email,
+        started_at_ms=excluded.started_at_ms,
+        ended_at_ms=excluded.ended_at_ms,
+        transcript_text=excluded.transcript_text,
+        pdf_blob=excluded.pdf_blob,
+        pdf_filename=excluded.pdf_filename,
+        created_at_ms=excluded.created_at_ms,
+        transcript_segments_json=excluded.transcript_segments_json`)
+      .run(transcriptId, session.id, user.id, rowForPdf.google_email, startedAt, endedAt, transcriptText, pdf, pdfFilename, Date.now(), JSON.stringify(segments));
+    trimTranscripts(user.id);
+    trimUserSessions(user.id);
+    return { transcriptId, pdfFilename, segmentCount: segments.length, startedAt, endedAt };
   }
 
   function pdfSafe(value) {
@@ -415,7 +570,13 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const safePdfFilename = endedAt => `Zapper_${new Date(Number(endedAt)).toISOString().replace(/[:.]/g, '-')}.pdf`;
 
   app.get('/api/public/config', (_req, res) => {
-    res.json({ ok: true, plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention }, sessionIdleTimeoutMinutes });
+    res.json({
+      ok: true,
+      plan: { priceInr: planPriceInr, billing: 'monthly' },
+      retention: { sessions: sessionRetention, transcripts: transcriptRetention },
+      sessionIdleTimeoutMinutes,
+      hostSessionMaxMinutes,
+    });
   });
 
   app.post('/api/auth/register', (req, res) => {
@@ -427,12 +588,17 @@ module.exports = function createSessionControl({ app, dataDir }) {
       if (!name) return res.status(400).json({ ok: false, error: 'Enter your name.' });
       if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return res.status(400).json({ ok: false, error: 'Use a valid email and a password with at least 8 characters.' });
       const now = Date.now();
-      const trialStart = defaultTrialDays > 0 ? now : null;
-      const validUntil = defaultTrialDays > 0 ? now + defaultTrialDays * 86400000 : null;
+      // New host registrations require administrator approval before sign-in.
+      // Subscription dates remain administrator-controlled exactly as before.
       const info = db.prepare(`INSERT INTO users(email,password_hash,name,role,status,subscription_status,subscription_started_at_ms,subscription_valid_until_ms,created_at_ms)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(email, hashPassword(password), name, 'host', 'active', validUntil ? 'active' : 'inactive', trialStart, validUntil, now);
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(email, hashPassword(password), name, 'host', 'pending', 'inactive', null, null, now);
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid);
-      res.json({ ok: true, token: portalSign(user), user: publicUser(user) });
+      res.json({
+        ok: true,
+        approvalPending: true,
+        user: publicUser(user),
+        message: 'Registration submitted. Your account is pending administrator approval. Please follow up with the Zapper administrator before signing in.'
+      });
     } catch (_) {
       res.status(409).json({ ok: false, error: 'This email is already registered.' });
     }
@@ -441,6 +607,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.post('/api/auth/login', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE email=?').get(normalizeEmail(req.body?.email));
     if (!user || !verifyPassword(String(req.body?.password || ''), user.password_hash)) return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
+    if (user.status === 'pending') return res.status(403).json({ ok: false, error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator.' });
     if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'This account is currently disabled. Contact the Zapper administrator.' });
     const now = Date.now();
     db.prepare('UPDATE users SET last_login_at_ms=? WHERE id=?').run(now, user.id);
@@ -492,31 +659,34 @@ module.exports = function createSessionControl({ app, dataDir }) {
     // Do not supersede an existing active session, even for the same Meet URL.
     // Every created PIN stays active until the host explicitly ends that specific session.
     const pin = uniquePin(); const id = crypto.randomUUID();
-    const legacyExpiresAt = now + Math.max(sessionHours, 24 * 365 * 20) * 3600000;
+    const expiresAt = now + hostSessionMaxMs;
     db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?,?)')
-      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, legacyExpiresAt);
+      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, expiresAt);
     trimUserSessions(req.authUser.id);
-    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt: null } });
+    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes } });
   });
 
   app.get('/api/sessions', auth, (req, res) => {
+    sweepIdleSessions(Date.now());
     // Always return every active session so the host can still see and explicitly end it.
     // Fill the remaining history slots with the newest ended sessions.
     const activeRows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=1 ORDER BY created_at_ms DESC').all(req.authUser.id);
     const endedLimit = Math.max(0, sessionRetention - activeRows.length);
     const endedRows = endedLimit ? db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, endedLimit) : [];
     const rows = [...activeRows, ...endedRows].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0));
-    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: null, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
+    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {
     const endedAt = Date.now();
     const result = db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='host_ended' WHERE id=? AND user_id=? AND active=1 AND status='active'").run(endedAt, req.params.id, req.authUser.id);
     if (!Number(result.changes || 0)) return res.status(404).json({ ok: false, error: 'Active session not found or it has already ended.' });
-    res.json({ ok: true, endedAt });
+    const finalized = finalizeSessionTranscript(req.params.id, endedAt);
+    res.json({ ok: true, endedAt, transcriptId: finalized?.transcriptId || null, pdfFinalized: Boolean(finalized) });
   });
 
   app.post('/api/desktop/redeem-pin', (req, res) => {
+    sweepIdleSessions(Date.now());
     const pin = String(req.body?.pin || '').replace(/\D/g, '').slice(0, 6);
     if (!/^\d{6}$/.test(pin)) return res.status(400).json({ ok: false, error: 'Enter the 6-digit session PIN.' });
     const now = Date.now();
@@ -525,7 +695,16 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (!session || !user) return res.status(404).json({ ok: false, error: 'This is not a valid active PIN. It may have been ended or expired. Ask the host for a current 6-digit PIN.' });
     db.prepare(`UPDATE host_sessions SET participant_started_at_ms=COALESCE(participant_started_at_ms, ?), last_speech_at_ms=COALESCE(last_speech_at_ms, ?) WHERE id=? AND active=1`).run(now, now, session.id);
     const refreshedSession = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
-    res.set('Cache-Control', 'no-store').json({ ok: true, meetUrl: refreshedSession.meet_url, sessionId: refreshedSession.id, sessionToken: participantSign(user, refreshedSession), idleTimeoutMinutes: sessionIdleTimeoutMinutes, host: { name: user.name || user.email, email: user.email } });
+    res.set('Cache-Control', 'no-store').json({
+      ok: true,
+      meetUrl: refreshedSession.meet_url,
+      sessionId: refreshedSession.id,
+      sessionToken: participantSign(user, refreshedSession),
+      idleTimeoutMinutes: sessionIdleTimeoutMinutes,
+      expiresAt: refreshedSession.expires_at_ms,
+      maxMinutes: hostSessionMaxMinutes,
+      host: { name: user.name || user.email, email: user.email }
+    });
   });
 
   app.get('/api/desktop/session-status', (req, res) => {
@@ -551,26 +730,30 @@ module.exports = function createSessionControl({ app, dataDir }) {
   });
 
   app.post('/api/desktop/transcripts', (req, res) => {
+    // Backward-compatible/fallback sync only. Participant Leave must never
+    // finalize a PDF or end a host session. The authoritative PDF is produced
+    // only by the host End Session action from the session-level live ledger.
     const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), { allowEnded: true });
     if (!verified) return res.status(401).json({ ok: false, error: 'Session authorization expired. Enter the session PIN again.' });
-    const text = String(req.body?.transcriptText || '').trim().slice(0, 500000);
-    if (!text) return res.status(400).json({ ok: false, error: 'Transcript is empty.' });
-    const endedAt = Math.min(Date.now() + 60000, Math.max(1, Number(req.body?.endedAt) || Date.now()));
+    registerParticipantGoogleEmail(verified.session.id, req.body?.googleEmail);
+    const endedAt = Math.min(Number(verified.session.ended_at_ms || 0) || Date.now(), Math.max(1, Number(req.body?.endedAt) || Date.now()));
     const startedAt = Math.max(1, Math.min(endedAt, Number(req.body?.startedAt) || endedAt));
     const rawSegments = Array.isArray(req.body?.transcriptSegments) ? req.body.transcriptSegments.slice(0, 10000) : [];
-    const transcriptSegments = rawSegments.map(segment => ({
+    let segments = rawSegments.map(segment => ({
       text: String(segment?.text || '').trim().slice(0, 12000),
       at: Math.max(startedAt, Math.min(endedAt, Number(segment?.at) || startedAt)),
     })).filter(segment => segment.text);
-    const id = crypto.randomUUID();
-    const rowForPdf = { started_at_ms: startedAt, ended_at_ms: endedAt, google_email: normalizeEmail(req.body?.googleEmail), transcript_text: text, transcript_segments: transcriptSegments };
-    const pdf = buildTranscriptPdf(rowForPdf, verified.user, verified.session);
-    const pdfFilename = safePdfFilename(endedAt);
-    db.prepare(`INSERT INTO transcripts(id,host_session_id,user_id,google_email,started_at_ms,ended_at_ms,transcript_text,pdf_blob,pdf_filename,created_at_ms,transcript_segments_json)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id, verified.session.id, verified.user.id, rowForPdf.google_email, startedAt, endedAt, text, pdf, pdfFilename, Date.now(), JSON.stringify(transcriptSegments));
-    trimTranscripts(verified.user.id);
-    trimUserSessions(verified.user.id);
-    res.json({ ok: true, transcriptId: id, pdfSaved: true, retained: Math.min(transcriptRetention, db.prepare('SELECT COUNT(*) c FROM transcripts WHERE user_id=?').get(verified.user.id).c) });
+    if (!segments.length) {
+      const text = String(req.body?.transcriptText || '').trim().slice(0, 500000);
+      if (text) segments = text.split(/\n+/).map((line, index) => ({ text: line.trim(), at: Math.min(endedAt, startedAt + index) })).filter(segment => segment.text);
+    }
+    const appended = appendLiveTranscriptSegments(verified.session.id, segments, 'desktop-fallback');
+    const sessionNow = db.prepare('SELECT active,ended_at_ms FROM host_sessions WHERE id=?').get(verified.session.id);
+    let finalized = null;
+    if (sessionNow && Number(sessionNow.active || 0) === 0 && Number(sessionNow.ended_at_ms || 0)) {
+      finalized = finalizeSessionTranscript(verified.session.id, Number(sessionNow.ended_at_ms));
+    }
+    res.json({ ok: true, appended, finalized: Boolean(finalized), transcriptId: finalized?.transcriptId || null, pdfSaved: Boolean(finalized) });
   });
 
   app.get('/api/transcripts', auth, (req, res) => {
@@ -583,6 +766,11 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const row = db.prepare('SELECT * FROM transcripts WHERE id=? AND user_id=?').get(String(req.params.id || ''), req.authUser.id);
     if (!row) return res.status(404).json({ ok: false, error: 'Transcript not found.' });
     const session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(row.host_session_id);
+    if (session && Number(session.active || 0) === 0 && Number(session.ended_at_ms || 0)) {
+      finalizeSessionTranscript(session.id, Number(session.ended_at_ms));
+      const refreshed = db.prepare('SELECT * FROM transcripts WHERE id=? AND user_id=?').get(row.id, req.authUser.id);
+      if (refreshed) Object.assign(row, refreshed);
+    }
     // Always regenerate using the current PDF layout so transcripts saved by older
     // versions do not keep obsolete host-account/Meet metadata in their stored blob.
     try { row.transcript_segments = JSON.parse(row.transcript_segments_json || '[]'); } catch (_) { row.transcript_segments = []; }
@@ -658,8 +846,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(Number(req.params.id));
     if (!user) return res.status(404).json({ ok: false, error: 'User not found.' });
     const status = String(req.body?.status || '').toLowerCase();
-    if (!['active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be active or disabled.' });
-    if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be disabled from this panel.' });
+    if (!['pending', 'active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be pending, active or disabled.' });
+    if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be moved out of active status from this panel.' });
     db.prepare('UPDATE users SET status=? WHERE id=?').run(status, user.id);
     res.json({ ok: true, user: adminUserSummary(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
   });
@@ -689,5 +877,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
     res.json({ ok: true, email, startedAt: start, validUntil: until, subscriptionStatus: status });
   });
 
-  return { db, dbPath, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl, planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes };
+  return {
+    db, dbPath, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
+    registerParticipantGoogleEmail, appendLiveTranscriptSegment, appendLiveTranscriptSegments, finalizeSessionTranscript,
+    planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes, hostSessionMaxMinutes
+  };
 };

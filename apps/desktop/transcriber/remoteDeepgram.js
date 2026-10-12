@@ -176,7 +176,7 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
   });
 }
 
-function startRemoteTranscriptStream({ backendUrl, sessionToken }, onTranscript) {
+function startRemoteTranscriptStream({ backendUrl, sessionToken, googleEmail = '' }, onTranscript) {
   stopRemoteTranscriptStream();
   const generation = ++streamGeneration;
 
@@ -186,7 +186,8 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken }, onTranscript)
   if (!token) throw new Error('Session authorization is required');
 
   const base = normalizeBackendUrl(backendUrl);
-  currentUrl = `${base}?token=${encodeURIComponent(token)}`;
+  const email = String(googleEmail || '').trim().toLowerCase();
+  currentUrl = `${base}?token=${encodeURIComponent(token)}${email ? `&googleEmail=${encodeURIComponent(email)}` : ''}`;
 
   manuallyStopped = false;
   permanentClose = false;

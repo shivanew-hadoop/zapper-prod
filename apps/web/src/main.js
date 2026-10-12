@@ -1,3 +1,4 @@
+import { mountHowItWorks } from './how-it-works.jsx';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
 const configuredReleaseUrl = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
@@ -87,6 +88,7 @@ function launchDesktop() {
 }
 document.querySelectorAll('[data-launch]').forEach(button => button.addEventListener('click', launchDesktop));
 setDownloadLinks();
+mountHowItWorks();
 
 function refreshHeaderState() {
   const loggedIn = Boolean(token && account);
@@ -144,7 +146,7 @@ function setMode(next) {
   $('password').autocomplete = loginMode ? 'current-password' : 'new-password';
   $('authSubmit').textContent = loginMode ? 'Login' : registerMode ? 'Create account' : forgotMode ? 'Generate reset link' : 'Set new password';
   $('authTitle').textContent = loginMode ? 'Sign in to Zapper' : registerMode ? 'Create a host account' : forgotMode ? 'Reset your password' : 'Choose a new password';
-  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account to manage subscriptions, sessions and transcripts.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
+  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account. New registrations are reviewed by the administrator before first sign-in.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
   $('authError').textContent = '';
   $('authSuccess').textContent = '';
 }
@@ -193,6 +195,12 @@ $('authForm').onsubmit = async event => {
       return;
     }
     const data = await api(`/api/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }) });
+    if (mode === 'register' && data.approvalPending) {
+      setMode('login');
+      $('email').value = data.user?.email || $('email').value.trim();
+      $('authSuccess').textContent = data.message || 'Registration submitted. Your account is pending administrator approval.';
+      return;
+    }
     token = data.token; localStorage.setItem('zapperToken', token); hideAuth(); await loadPortal();
   } catch (error) { $('authError').textContent = error.message; }
 };
@@ -355,7 +363,7 @@ async function loadAdminUsers(query = '') {
         <td><strong>${escapeHTML(user.name || 'Unnamed')}</strong><small>${escapeHTML(user.email)}</small><small>${escapeHTML(user.role)}</small></td>
         <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmtDate(user.subscriptionStartedAt))} → ${escapeHTML(fmtDate(user.subscriptionValidUntil))}</small><small>${escapeHTML(monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
         <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
-        <td><span class="pill">${escapeHTML(user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
+        <td><span class="pill ${user.status === 'pending' ? 'pendingPill' : ''}">${escapeHTML(user.status === 'pending' ? 'Pending approval' : user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
         <td><button class="ghostBtn compact" data-edit-user="${user.id}" type="button">Manage</button></td>
       </tr>`).join('')}
     </tbody></table>` : '<p class="empty">No users found.</p>';
@@ -377,10 +385,12 @@ async function openAdminEdit(userId) {
   if (!editingUser) return;
   $('editUserTitle').textContent = editingUser.name || editingUser.email;
   $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
-  $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
-  $('editAccountStatus').value = editingUser.status === 'disabled' ? 'disabled' : 'active';
-  $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt);
-  $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil);
+  const pendingApproval = editingUser.status === 'pending';
+  $('editSubStatus').value = pendingApproval ? 'active' : (editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive');
+  $('editAccountStatus').value = ['pending', 'active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
+  $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || (pendingApproval ? Date.now() : null));
+  $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil || (pendingApproval ? Date.now() + 30 * 86400000 : null));
+  $('approveUser').classList.toggle('hidden', !pendingApproval || editingUser.role === 'admin');
   $('editError').textContent = '';
   $('adminNewPassword').value = '';
   $('adminPasswordStatus').textContent = '';
@@ -402,6 +412,22 @@ function adjustEnd(days) {
 }
 $('minus30').onclick = () => adjustEnd(-30);
 $('plus30').onclick = () => adjustEnd(30);
+$('approveUser').onclick = async () => {
+  if (!editingUser || editingUser.role === 'admin') return;
+  $('editError').textContent = '';
+  try {
+    const startedAt = fromLocalInput($('editStart').value) || Date.now();
+    const validUntil = fromLocalInput($('editEnd').value);
+    if (!validUntil || validUntil <= startedAt) throw new Error('Choose a subscription end date later than the start date before approving.');
+    await api(`/api/admin/users/${editingUser.id}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ subscriptionStatus: 'active', startedAt, validUntil }),
+    });
+    await api(`/api/admin/users/${editingUser.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'active' }) });
+    closeAdminEdit();
+    await loadAdminUsers($('adminSearch').value.trim());
+  } catch (error) { $('editError').textContent = error.message; }
+};
 $('saveUser').onclick = async () => {
   if (!editingUser) return;
   $('editError').textContent = '';

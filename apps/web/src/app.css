@@ -40,3 +40,5 @@ body{padding-top:78px}
 @media(max-width:480px){
   .brandMark{width:34px;height:34px}.brandLockup strong{font-size:16px}.mobileNav nav,.mobileAccountActions{grid-template-columns:1fr}.participantPrimaryActions,.supportActions{grid-template-columns:1fr}.heroMeta{display:grid;gap:8px}.trustGrid{grid-template-columns:1fr!important;text-align:left}.section{padding:54px 0}.journeyPanel{padding:18px}.journeySteps li{grid-template-columns:34px 1fr;gap:11px}.footer{grid-template-columns:1fr!important}.footerColumn{padding-top:8px}.adminStats{grid-template-columns:1fr 1fr!important}.adminStats>div:last-child{grid-column:1/-1}.portalCard{padding:18px}.pinBox strong{font-size:34px}.sectionHead .ghostBtn{width:100%}
 }
+
+.pendingPill{border-color:rgba(245,180,55,.45)!important;background:rgba(245,180,55,.12)!important;color:#ffd987!important}

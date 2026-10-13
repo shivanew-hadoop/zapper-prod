@@ -138,6 +138,13 @@
       <h2 id="authTitle">Sign in to Zapper</h2>
       <p id="authLead">Hosts sign in to create meeting sessions. Administrators use the same login and are routed automatically.</p>
       <div id="authTabs" class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
+      <section id="pendingApprovalPanel" class="pendingApprovalPanel hidden" aria-live="polite">
+        <div class="pendingApprovalIcon">✓</div>
+        <h3>Registration submitted</h3>
+        <p>Your account is pending administrator approval. You will be able to sign in only after the administrator approves your registration.</p>
+        <p class="pendingContact">Please follow up with the Zapper administrator at <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a>.</p>
+        <button id="pendingBackToLogin" class="ghostBtn" type="button">Back to sign in</button>
+      </section>
       <form id="authForm">
         <input id="name" class="hidden" placeholder="Full name" autocomplete="name" />
         <input id="email" type="email" placeholder="Email" autocomplete="email" required />

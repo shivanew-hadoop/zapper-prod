@@ -21,7 +21,37 @@ const app = {};
 for (const method of ['get', 'post']) app[method] = (route, ...handlers) => routes.set(`${method.toUpperCase()} ${route}`, handlers);
 app.use = () => {};
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'zapper-smoke-'));
+
+// Seed one account that existed before the strict manual-approval rollout. The
+// one-time migration must grandfather it as approved/active, while every account
+// registered after startup must remain pending until explicit admin approval.
+const { DatabaseSync } = require('node:sqlite');
+const legacyDb = new DatabaseSync(path.join(temp, 'zapper.db'));
+legacyDb.exec(`
+  CREATE TABLE users(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'host',
+    status TEXT NOT NULL DEFAULT 'pending',
+    approval_status TEXT NOT NULL DEFAULT 'pending',
+    subscription_status TEXT NOT NULL DEFAULT 'inactive',
+    subscription_started_at_ms INTEGER,
+    subscription_valid_until_ms INTEGER,
+    last_login_at_ms INTEGER,
+    created_at_ms INTEGER NOT NULL
+  );
+`);
+legacyDb.prepare(`INSERT INTO users(email,password_hash,name,role,status,approval_status,subscription_status,created_at_ms) VALUES(?,?,?,?,?,?,?,?)`)
+  .run('legacy-existing@example.com', 'legacy-hash', 'Existing User', 'host', 'pending', 'pending', 'inactive', Date.now() - 86400000);
+legacyDb.close();
+
 const control = createSessionControl({ app, dataDir: temp });
+const grandfathered = control.db.prepare('SELECT status,approval_status FROM users WHERE email=?').get('legacy-existing@example.com');
+if (!grandfathered || grandfathered.approval_status !== 'approved' || grandfathered.status !== 'active') {
+  throw new Error('existing account was not grandfathered as approved/active');
+}
 
 function routeFor(method, route) {
   const handlers = routes.get(`${method} ${route}`);
@@ -67,24 +97,25 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
   if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
 
-  // Even if another account-management path changes account status to active,
-  // the independent approval gate must still block first login until Approve registration.
+  // A pending registration cannot be made active through the ordinary status
+  // editor. Explicit approval is required and uses the long-standing /status route.
   result = await invoke('POST', '/api/admin/users/:id/status', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },
     body: { status: 'active' },
   });
-  if (!result.payload?.ok) throw new Error('admin status update setup failed');
+  if (result.statusCode !== 400 || !/Approve registration first/i.test(result.payload?.error || '')) throw new Error('pending account was activated without explicit approval');
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
-  if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('account status bypassed manual approval gate');
+  if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending approval login gate failed');
 
-  // Admin explicitly approves the host. Approval is separate from subscription
-  // activation so manual payment/subscription dates remain fully admin-controlled.
+  // Admin explicitly approves the host using the existing status endpoint. Approval
+  // is separate from subscription activation/payment dates.
   const start = Date.now() - 60_000;
   const end = Date.now() + 30 * 86400000;
-  result = await invoke('POST', '/api/admin/users/:id/approve', {
+  result = await invoke('POST', '/api/admin/users/:id/status', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },
+    body: { status: 'active', approveRegistration: true },
   });
   if (!result.payload?.ok || result.payload.user?.status !== 'active' || result.payload.user?.subscriptionStatus === 'active') throw new Error('admin approval failed or auto-activated subscription');
   result = await invoke('POST', '/api/admin/users/:id/subscription', {

@@ -42,3 +42,5 @@ body{padding-top:78px}
 }
 
 .pendingPill{border-color:rgba(245,180,55,.45)!important;background:rgba(245,180,55,.12)!important;color:#ffd987!important}
+
+.pendingApprovalPanel{margin-top:20px;padding:22px;border:1px solid #315b86;border-radius:18px;background:linear-gradient(180deg,#0c223a,#091827);text-align:center}.pendingApprovalIcon{width:46px;height:46px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;background:#123d2d;color:#83f2b4;font-size:24px;font-weight:900}.pendingApprovalPanel h3{margin:0 0 8px;font-size:22px}.pendingApprovalPanel p{margin:8px 0;color:#a9bad0}.pendingApprovalPanel .pendingContact{padding:12px;border-radius:12px;background:#081523;color:#c7d9ef}.pendingApprovalPanel .pendingContact a{color:#7db6ff;font-weight:800}.pendingApprovalPanel .ghostBtn{margin-top:10px}

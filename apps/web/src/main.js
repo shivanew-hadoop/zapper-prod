@@ -50,7 +50,9 @@ function restoreLastMeetUrl() {
   const input = $('meetUrl');
   if (!key || !input) return;
   const saved = String(localStorage.getItem(key) || '').trim();
-  if (saved && !input.value.trim()) input.value = saved;
+  // Always bind the field to the current account. This prevents a Meet URL left
+  // in the SPA DOM by a previous host login from leaking into another host.
+  input.value = saved;
 }
 function rememberMeetUrl(value) {
   const key = hostMeetStorageKey();
@@ -68,7 +70,13 @@ async function api(path, opts = {}) {
     },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.code = data.code || '';
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -127,6 +135,8 @@ function openAuth(nextMode = 'login') {
 }
 function setMode(next) {
   mode = next;
+  $('pendingApprovalPanel')?.classList.add('hidden');
+  $('authForm')?.classList.remove('hidden');
   const loginMode = mode === 'login';
   const registerMode = mode === 'register';
   const forgotMode = mode === 'forgot';
@@ -151,9 +161,27 @@ function setMode(next) {
   $('authError').textContent = '';
   $('authSuccess').textContent = '';
 }
+function showPendingApproval(email = '') {
+  // Registration must never inherit an earlier browser login. Clear every portal
+  // auth reference before showing the pending state.
+  token = '';
+  account = null;
+  localStorage.removeItem('zapperToken');
+  refreshHeaderState();
+  $('authTabs')?.classList.add('hidden');
+  $('authForm')?.classList.add('hidden');
+  $('pendingApprovalPanel')?.classList.remove('hidden');
+  $('authTitle').textContent = 'Pending administrator approval';
+  $('authLead').textContent = email
+    ? `${email} has been registered successfully.`
+    : 'Your account has been registered successfully.';
+  $('authModal').classList.remove('hidden');
+}
 function logout() {
   closeMobileNav();
-  token = ''; account = null; localStorage.removeItem('zapperToken'); refreshHeaderState(); showPublic('home');
+  token = ''; account = null; localStorage.removeItem('zapperToken');
+  if ($('meetUrl')) $('meetUrl').value = '';
+  refreshHeaderState(); showPublic('home');
 }
 function openPublicSection(section) { closeMobileNav(); showPublic(section); }
 
@@ -165,6 +193,7 @@ $('loginTab').onclick = () => setMode('login');
 $('registerTab').onclick = () => setMode('register');
 $('forgotPasswordBtn').onclick = () => setMode('forgot');
 $('backToLoginBtn').onclick = () => setMode('login');
+$('pendingBackToLogin').onclick = () => setMode('login');
 $('dashboardBtn').onclick = () => loadPortal();
 $('navLogout').onclick = logout;
 $('mobileMenuBtn').onclick = toggleMobileNav;
@@ -196,14 +225,21 @@ $('authForm').onsubmit = async event => {
       return;
     }
     const data = await api(`/api/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }) });
-    if (mode === 'register' && data.approvalPending) {
-      setMode('login');
+    if (mode === 'register') {
+      // Registration never logs the browser in. The backend returns no token; we
+      // also clear any stale token from a previous host before showing Pending.
       $('email').value = data.user?.email || $('email').value.trim();
-      $('authSuccess').textContent = data.message || 'Registration submitted. Your account is pending administrator approval.';
+      showPendingApproval($('email').value.trim());
       return;
     }
     token = data.token; localStorage.setItem('zapperToken', token); hideAuth(); await loadPortal();
-  } catch (error) { $('authError').textContent = error.message; }
+  } catch (error) {
+    if (error.code === 'PENDING_APPROVAL' || /pending administrator approval/i.test(error.message || '')) {
+      showPendingApproval($('email').value.trim());
+      return;
+    }
+    $('authError').textContent = error.message;
+  }
 };
 
 async function loadAccount() {
@@ -417,7 +453,10 @@ $('approveUser').onclick = async () => {
   if (!editingUser || editingUser.role === 'admin') return;
   $('editError').textContent = '';
   try {
-    const data = await api(`/api/admin/users/${editingUser.id}/approve`, { method: 'POST' });
+    const data = await api(`/api/admin/users/${editingUser.id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status: 'active', approveRegistration: true }),
+    });
     editingUser = data.user || { ...editingUser, approvalStatus: 'approved', status: 'active' };
     $('approveUser').classList.add('hidden');
     $('editAccountStatus').value = 'active';

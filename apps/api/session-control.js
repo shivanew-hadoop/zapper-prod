@@ -276,7 +276,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       if (payload.type !== 'portal') throw new Error('wrong token');
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!user) return res.status(403).json({ ok: false, error: 'Account access is unavailable.' });
-      if (user.role !== 'admin' && user.status === 'pending') return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
+      if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
       if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'Account access is disabled.' });
       req.authUser = user;
       next();
@@ -628,7 +628,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.post('/api/auth/login', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE email=?').get(normalizeEmail(req.body?.email));
     if (!user || !verifyPassword(String(req.body?.password || ''), user.password_hash)) return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
-    if (user.role !== 'admin' && user.status === 'pending') return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
+    if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
     if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'This account is currently disabled. Contact the Zapper administrator.' });
     const now = Date.now();
     db.prepare('UPDATE users SET last_login_at_ms=? WHERE id=?').run(now, user.id);
@@ -902,7 +902,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const status = String(req.body?.status || '').toLowerCase();
     if (!['pending', 'active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be pending, active or disabled.' });
     if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be moved out of active status from this panel.' });
-    if (user.role !== 'admin' && user.status === 'pending' && status === 'active') {
+    if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved') && status === 'active') {
       return res.status(400).json({ ok: false, error: 'This registration is still pending. Use Approve registration first.' });
     }
     db.prepare('UPDATE users SET status=? WHERE id=?').run(status, user.id);

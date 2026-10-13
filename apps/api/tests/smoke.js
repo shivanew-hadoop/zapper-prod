@@ -97,6 +97,12 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
 
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
   if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
+  // A stale or inconsistent active status must never bypass explicit approval.
+  control.db.prepare("UPDATE users SET status='active', approval_status='pending' WHERE id=?").run(hostId);
+  result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
+  if (result.statusCode !== 403 || result.payload?.code !== 'PENDING_APPROVAL') throw new Error('unapproved active account bypassed login gate');
+  control.db.prepare("UPDATE users SET status='pending' WHERE id=?").run(hostId);
+
 
   // A pending registration cannot be made active through the ordinary status
   // editor. Explicit approval is required and uses the long-standing /status route.

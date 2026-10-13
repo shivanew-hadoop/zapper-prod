@@ -22,7 +22,7 @@ for (const method of ['get', 'post']) app[method] = (route, ...handlers) => rout
 app.use = () => {};
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'zapper-smoke-'));
 
-// Seed one existing active account. Existing active accounts stay approved, while
+// Seed an inconsistent active account. It must remain pending, while
 // every account registered after startup is pending until explicit admin approval.
 const { DatabaseSync } = require('node:sqlite');
 const legacyDb = new DatabaseSync(path.join(temp, 'zapper.db'));
@@ -48,8 +48,8 @@ legacyDb.close();
 
 const control = createSessionControl({ app, dataDir: temp });
 const grandfathered = control.db.prepare('SELECT status,approval_status FROM users WHERE email=?').get('legacy-existing@example.com');
-if (!grandfathered || grandfathered.approval_status !== 'approved' || grandfathered.status !== 'active') {
-  throw new Error('existing active account was not preserved as approved/active');
+if (!grandfathered || grandfathered.approval_status !== 'pending' || grandfathered.status !== 'active') {
+  throw new Error('startup incorrectly approved an unapproved active account');
 }
 
 function routeFor(method, route) {

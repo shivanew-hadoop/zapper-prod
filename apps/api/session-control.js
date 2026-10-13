@@ -94,16 +94,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'subscription_started_at_ms', 'INTEGER');
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
 
-  // Registration approval is intentionally status-driven. Existing active/disabled
-  // accounts remain approved; only accounts whose status is explicitly pending are
-  // blocked from login. This normalization never promotes a pending registration.
-  // It only keeps the legacy approval metadata aligned for older clients/admin UIs.
-  db.prepare(`UPDATE users SET
-    approval_status=CASE WHEN role='admin' OR status<>'pending' THEN 'approved' ELSE 'pending' END,
-    registration_approved_at_ms=CASE
-      WHEN role='admin' OR status<>'pending' THEN COALESCE(registration_approved_at_ms, created_at_ms, ?)
-      ELSE NULL
-    END`).run(Date.now());
+  // Never infer approval from account or subscription status. In particular,
+  // existing pending approvals must survive process restarts and deployments.
+  // The administrator approval endpoint is the only promotion path.
+  db.prepare("UPDATE users SET approval_status='approved', registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms, ?) WHERE role='admin'").run(Date.now());
   ensureColumn('transcripts', 'pdf_blob', 'BLOB');
   ensureColumn('transcripts', 'pdf_filename', 'TEXT');
   ensureColumn('transcripts', 'transcript_segments_json', "TEXT NOT NULL DEFAULT '[]'");
@@ -154,7 +148,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   };
 
   function subscriptionState(user) {
-    if (!user || user.status !== 'active') return { valid: false, status: 'inactive', startedAt: null, validUntil: null };
+    if (!user || user.status !== 'active' || (user.role !== 'admin' && user.approval_status !== 'approved')) return { valid: false, status: 'inactive', startedAt: null, validUntil: null };
     const startedAt = Number(user.subscription_started_at_ms || 0) || null;
     const until = Number(user.subscription_valid_until_ms || 0) || null;
     const valid = user.subscription_status === 'active' && Boolean(until) && until > Date.now();
@@ -174,7 +168,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' || user.status !== 'pending' ? 'approved' : 'pending',
+      approvalStatus: user.role === 'admin' ? 'approved' : (user.approval_status === 'approved' ? 'approved' : 'pending'),
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,
@@ -813,7 +807,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' || user.status !== 'pending' ? 'approved' : 'pending',
+      approvalStatus: user.role === 'admin' ? 'approved' : (user.approval_status === 'approved' ? 'approved' : 'pending'),
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,

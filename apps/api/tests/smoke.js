@@ -22,9 +22,8 @@ for (const method of ['get', 'post']) app[method] = (route, ...handlers) => rout
 app.use = () => {};
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'zapper-smoke-'));
 
-// Seed one account that existed before the strict manual-approval rollout. The
-// one-time migration must grandfather it as approved/active, while every account
-// registered after startup must remain pending until explicit admin approval.
+// Seed one existing active account. Existing active accounts stay approved, while
+// every account registered after startup is pending until explicit admin approval.
 const { DatabaseSync } = require('node:sqlite');
 const legacyDb = new DatabaseSync(path.join(temp, 'zapper.db'));
 legacyDb.exec(`
@@ -44,13 +43,13 @@ legacyDb.exec(`
   );
 `);
 legacyDb.prepare(`INSERT INTO users(email,password_hash,name,role,status,approval_status,subscription_status,created_at_ms) VALUES(?,?,?,?,?,?,?,?)`)
-  .run('legacy-existing@example.com', 'legacy-hash', 'Existing User', 'host', 'pending', 'pending', 'inactive', Date.now() - 86400000);
+  .run('legacy-existing@example.com', 'legacy-hash', 'Existing User', 'host', 'active', 'pending', 'inactive', Date.now() - 86400000);
 legacyDb.close();
 
 const control = createSessionControl({ app, dataDir: temp });
 const grandfathered = control.db.prepare('SELECT status,approval_status FROM users WHERE email=?').get('legacy-existing@example.com');
 if (!grandfathered || grandfathered.approval_status !== 'approved' || grandfathered.status !== 'active') {
-  throw new Error('existing account was not grandfathered as approved/active');
+  throw new Error('existing active account was not preserved as approved/active');
 }
 
 function routeFor(method, route) {
@@ -93,6 +92,8 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('POST', '/api/auth/register', { body: { email, password: 'Password123!', name: 'Smoke Host' } });
   if (!result.payload?.ok || !result.payload?.approvalPending || result.payload?.token) throw new Error('pending registration failed');
   const hostId = result.payload.user.id;
+  let pendingRow = control.db.prepare('SELECT status,approval_status,registration_approved_at_ms,subscription_status FROM users WHERE id=?').get(hostId);
+  if (!pendingRow || pendingRow.status !== 'pending' || pendingRow.approval_status !== 'pending' || pendingRow.registration_approved_at_ms !== null || pendingRow.subscription_status !== 'inactive') throw new Error('new registration was not stored as strict pending');
 
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
   if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
@@ -117,7 +118,16 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
     params: { id: String(hostId) },
     body: { status: 'active', approveRegistration: true },
   });
-  if (!result.payload?.ok || result.payload.user?.status !== 'active' || result.payload.user?.subscriptionStatus === 'active') throw new Error('admin approval failed or auto-activated subscription');
+  if (!result.payload?.ok || result.payload.user?.status !== 'active' || result.payload.user?.approvalStatus !== 'approved' || result.payload.user?.subscriptionStatus === 'active') throw new Error('admin approval failed or auto-activated subscription');
+  const approvedRow = control.db.prepare('SELECT status,approval_status,registration_approved_at_ms,subscription_status FROM users WHERE id=?').get(hostId);
+  if (!approvedRow || approvedRow.status !== 'active' || approvedRow.approval_status !== 'approved' || !approvedRow.registration_approved_at_ms || approvedRow.subscription_status !== 'inactive') throw new Error('approval DB state is inconsistent');
+  // Approval is idempotent and must remain visibly approved if clicked again.
+  result = await invoke('POST', '/api/admin/users/:id/status', {
+    headers: { authorization: `Bearer ${adminToken}` },
+    params: { id: String(hostId) },
+    body: { status: 'active', approveRegistration: true },
+  });
+  if (!result.payload?.ok || result.payload.user?.approvalStatus !== 'approved' || result.payload.user?.status !== 'active') throw new Error('repeat approval was not idempotent');
   result = await invoke('POST', '/api/admin/users/:id/subscription', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },

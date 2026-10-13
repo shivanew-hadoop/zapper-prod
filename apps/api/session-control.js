@@ -94,21 +94,16 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'subscription_started_at_ms', 'INTEGER');
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
 
-  // One-time v3.1.14 upgrade rule: every account already present at deployment
-  // is grandfathered as approved. Future registrations are authoritative pending
-  // rows because registration_approved_at_ms is NULL until the administrator clicks
-  // Approve registration. This timestamp is the login gate; account/subscription
-  // status alone can never bypass manual approval.
-  const approvalMigrationKey = 'manual_registration_approval_v3_1_14';
-  const approvalMigrationDone = db.prepare('SELECT value FROM app_meta WHERE key=?').get(approvalMigrationKey);
-  if (!approvalMigrationDone) {
-    const migratedAt = Date.now();
-    db.prepare(`UPDATE users
-      SET approval_status='approved',
-          registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms, ?),
-          status=CASE WHEN role='admin' THEN 'active' WHEN status='pending' THEN 'active' ELSE status END`).run(migratedAt);
-    db.prepare('INSERT INTO app_meta(key,value) VALUES(?,?)').run(approvalMigrationKey, String(migratedAt));
-  }
+  // Registration approval is intentionally status-driven. Existing active/disabled
+  // accounts remain approved; only accounts whose status is explicitly pending are
+  // blocked from login. This normalization never promotes a pending registration.
+  // It only keeps the legacy approval metadata aligned for older clients/admin UIs.
+  db.prepare(`UPDATE users SET
+    approval_status=CASE WHEN role='admin' OR status<>'pending' THEN 'approved' ELSE 'pending' END,
+    registration_approved_at_ms=CASE
+      WHEN role='admin' OR status<>'pending' THEN COALESCE(registration_approved_at_ms, created_at_ms, ?)
+      ELSE NULL
+    END`).run(Date.now());
   ensureColumn('transcripts', 'pdf_blob', 'BLOB');
   ensureColumn('transcripts', 'pdf_filename', 'TEXT');
   ensureColumn('transcripts', 'transcript_segments_json', "TEXT NOT NULL DEFAULT '[]'");
@@ -179,7 +174,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' || Number(user.registration_approved_at_ms || 0) > 0 ? 'approved' : 'pending',
+      approvalStatus: user.role === 'admin' || user.status !== 'pending' ? 'approved' : 'pending',
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,
@@ -281,7 +276,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       if (payload.type !== 'portal') throw new Error('wrong token');
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!user) return res.status(403).json({ ok: false, error: 'Account access is unavailable.' });
-      if (user.role !== 'admin' && (Number(user.registration_approved_at_ms || 0) <= 0 || user.status === 'pending')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
+      if (user.role !== 'admin' && user.status === 'pending') return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
       if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'Account access is disabled.' });
       req.authUser = user;
       next();
@@ -633,7 +628,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.post('/api/auth/login', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE email=?').get(normalizeEmail(req.body?.email));
     if (!user || !verifyPassword(String(req.body?.password || ''), user.password_hash)) return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
-    if (user.role !== 'admin' && (Number(user.registration_approved_at_ms || 0) <= 0 || user.status === 'pending')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
+    if (user.role !== 'admin' && user.status === 'pending') return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
     if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'This account is currently disabled. Contact the Zapper administrator.' });
     const now = Date.now();
     db.prepare('UPDATE users SET last_login_at_ms=? WHERE id=?').run(now, user.id);
@@ -818,7 +813,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' || Number(user.registration_approved_at_ms || 0) > 0 ? 'approved' : 'pending',
+      approvalStatus: user.role === 'admin' || user.status !== 'pending' ? 'approved' : 'pending',
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,
@@ -834,10 +829,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(Number(userId));
     if (!user) return { status: 404, error: 'User not found.' };
     if (user.role === 'admin') return { status: 400, error: 'Administrator accounts are already approved.' };
-    if (Number(user.registration_approved_at_ms || 0) > 0) {
-      return { status: 409, error: 'This registration is already approved.' };
-    }
-    db.prepare("UPDATE users SET approval_status='approved', registration_approved_at_ms=?, status='active' WHERE id=? AND registration_approved_at_ms IS NULL").run(Date.now(), user.id);
+    // Idempotent on purpose: clicking Approve always leaves the account in the one
+    // state that is allowed to sign in. Subscription activation remains separate.
+    db.prepare("UPDATE users SET status='active', approval_status='approved', registration_approved_at_ms=COALESCE(registration_approved_at_ms, ?) WHERE id=?")
+      .run(Date.now(), user.id);
     const updated = db.prepare('SELECT * FROM users WHERE id=?').get(user.id);
     return { status: 200, user: updated };
   }
@@ -907,7 +902,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const status = String(req.body?.status || '').toLowerCase();
     if (!['pending', 'active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be pending, active or disabled.' });
     if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be moved out of active status from this panel.' });
-    if (user.role !== 'admin' && Number(user.registration_approved_at_ms || 0) <= 0 && status === 'active') {
+    if (user.role !== 'admin' && user.status === 'pending' && status === 'active') {
       return res.status(400).json({ ok: false, error: 'This registration is still pending. Use Approve registration first.' });
     }
     db.prepare('UPDATE users SET status=? WHERE id=?').run(status, user.id);

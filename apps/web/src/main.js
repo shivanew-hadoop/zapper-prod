@@ -463,6 +463,9 @@ $('approveUser').onclick = async () => {
     $('editError').textContent = '';
     $('adminPasswordStatus').textContent = data.message || 'Registration approved. Configure subscription access as required.';
     await loadAdminUsers($('adminSearch').value.trim());
+    editingUser = adminUsers.find(user => Number(user.id) === Number(editingUser.id)) || editingUser;
+    $('approveUser').classList.toggle('hidden', editingUser.approvalStatus === 'approved' || editingUser.role === 'admin');
+    $('editAccountStatus').value = editingUser.status || 'active';
   } catch (error) { $('editError').textContent = error.message; }
 };
 $('saveUser').onclick = async () => {

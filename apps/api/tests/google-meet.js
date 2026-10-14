@@ -111,6 +111,23 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     assert.ok(saved.refresh_token_encrypted.startsWith('v1.'));
     r = await invoke('GET', '/api/google/meet/status', { headers });
     assert.equal(r.payload.connected, true);
+    // Google authorizations are private to each Zapper host, even when both
+    // use the same app-level OAuth client ID.
+    let secondHost = await invoke('POST', '/api/auth/register', { body: {
+      email: 'another-meet-host@example.com', password: 'Password123!', name: 'Second Meet Host',
+    } });
+    assert.equal(secondHost.status, 200);
+    secondHost = await invoke('POST', '/api/auth/login', { body: {
+      email: 'another-meet-host@example.com', password: 'Password123!',
+    } });
+    const secondHeaders = { authorization: `Bearer ${secondHost.payload.token}`, origin: 'https://zapperapp.in' };
+    secondHost = await invoke('GET', '/api/google/meet/status', { headers: secondHeaders });
+    assert.equal(secondHost.payload.connected, false, "another Zapper host must not inherit the first host's Google connection");
+    secondHost = await invoke('POST', '/api/google/meet/start', {
+      headers: secondHeaders, body: { requestId: 'second-host-connect-request' },
+    });
+    assert.equal(secondHost.payload.requiresGoogleSignIn, true, 'second host must authorize a separate Google account');
+    assert.equal(control.db.prepare('SELECT COUNT(*) AS count FROM google_meet_connections').get().count, 1);
     r = await invoke('POST', '/api/google/meet/start', { headers, body: { requestId: 'another-session-create' } });
     assert.equal(r.status, 200);
     assert.equal(r.payload.reusedGoogleConnection, true);
@@ -186,7 +203,7 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     assert.equal(r.status, 402);
     assert.equal(r.payload.code, 'SUBSCRIPTION_INACTIVE');
     global.fetch = originalFetch;
-    console.log(JSON.stringify({ ok: true, version: '3.1.21', storedRefreshTokenEncrypted: true, noRepeatGoogleLogin: true, revokedConnectionReconnect: true, oauthPkceAndOrigin: true, openMeetingCreation: true, pinCreated: true, replayProtection: true, fourZapperSeats: true, deviceRejoinDoesNotUseAnotherSeat: true, seatRelease: true, manualFlowUnchanged: true, restrictedMeetRejected: true, subscriptionGate: true }));
+    console.log(JSON.stringify({ ok: true, version: require('../package.json').version, storedRefreshTokenEncrypted: true, noRepeatGoogleLogin: true, perHostGoogleConnections: true, revokedConnectionReconnect: true, oauthPkceAndOrigin: true, openMeetingCreation: true, pinCreated: true, replayProtection: true, fourZapperSeats: true, deviceRejoinDoesNotUseAnotherSeat: true, seatRelease: true, manualFlowUnchanged: true, restrictedMeetRejected: true, subscriptionGate: true }));
   } finally {
     control.db.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

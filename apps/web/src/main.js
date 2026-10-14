@@ -18,6 +18,7 @@ let searchTimer = null;
 let currentSessionId = '';
 let currentSessionPin = '';
 let googleMeetConnected = false;
+let googleMeetAvailable = false;
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
 const $ = id => document.getElementById(id);
 function finishAuthRestore() { document.documentElement.classList.remove('auth-restoring'); }
@@ -266,9 +267,11 @@ async function loadHostPortal() {
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
   $('createSessionBtn').disabled = !active;
   googleMeetConnected = false;
+  googleMeetAvailable = false;
   $('autoMeetDetails').classList.add('hidden');
   $('googleMeetCreateBtn').disabled = true;
   $('googleMeetStatus').textContent = active ? 'Checking Google Meet connection…' : 'Your subscription must be active to create a Google Meet.';
+  $('manualMeetCreateLink').classList.add('hidden');
   $('sessionError').textContent = !active ? 'Your trial or subscription has ended. Contact the Zapper administrator to renew access.' : '';
   restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
@@ -359,17 +362,28 @@ async function loadTranscripts() {
 }
 
 async function refreshGoogleMeetAvailability() {
+  const eligible = account?.role !== 'admin' && account?.subscriptionStatus === 'active';
   try {
     const data = await api('/api/google/meet/status');
-    const eligible = account?.role !== 'admin' && account?.subscriptionStatus === 'active';
+    googleMeetAvailable = Boolean(data.enabled);
     googleMeetConnected = Boolean(data.enabled && data.connected);
-    $('googleMeetCreateBtn').disabled = !(data.enabled && eligible);
-    $('googleMeetStatus').textContent = data.enabled
-      ? (googleMeetConnected ? 'Google connected. New sessions can be created without signing in again.' : 'Ready. Click Create Session to connect your Google account once.')
-      : 'One-time Google Cloud OAuth setup is still required on Railway. Until configured, use the manual link below.';
+    $('googleMeetCreateBtn').disabled = !eligible;
+    $('manualMeetCreateLink').classList.toggle('hidden', googleMeetAvailable || !eligible);
+    $('googleMeetStatus').textContent = !eligible
+      ? 'Your trial or subscription must be active to create a session.'
+      : googleMeetAvailable
+        ? (googleMeetConnected
+          ? 'Your Google account is connected to this host profile. New sessions do not require another Google login unless Google requests it.'
+          : 'Click Create Session to connect your own Google account. Zapper and Google sign-ins remain separate.')
+        : 'Automatic meeting creation needs a one-time Google OAuth configuration for Zapper (not a shared Google account). You can open Google Meet with your own account now, but must copy the link into the manual field below.';
   } catch (_) {
-    $('googleMeetCreateBtn').disabled = true;
-    $('googleMeetStatus').textContent = 'Automatic Google Meet is unavailable on this backend. The manual Meet link still works.';
+    googleMeetAvailable = false;
+    googleMeetConnected = false;
+    $('googleMeetCreateBtn').disabled = !eligible;
+    $('manualMeetCreateLink').classList.toggle('hidden', !eligible);
+    $('googleMeetStatus').textContent = eligible
+      ? 'Automatic meeting creation is unavailable on this backend. You can open Google Meet with your own account and paste the link below.'
+      : 'Your trial or subscription must be active to create a session.';
   }
 }
 
@@ -400,6 +414,15 @@ function showCreatedSession(session) {
 
 $('googleMeetCreateBtn').onclick = async () => {
   $('sessionError').textContent = '';
+  if (!googleMeetAvailable) {
+    // A signed-in Google browser session cannot authorize cross-origin Meet API
+    // access. This is a transparent assisted/manual path, never fake automation.
+    const manual = document.querySelector('.meetManualOption');
+    if (manual) manual.open = true;
+    $('googleMeetStatus').textContent = 'Google Meet is opening in another tab. Sign in with your own Google account, create a meeting, then copy its link into the field below to generate your Zapper PIN. The link cannot be copied automatically without Google OAuth setup.';
+    window.open('https://meet.google.com/new', '_blank', 'noopener,noreferrer');
+    return;
+  }
   const button = $('googleMeetCreateBtn');
   // Open before fetch only for a first-time Google connection: mobile and
   // desktop browsers may block popups started after an async request.

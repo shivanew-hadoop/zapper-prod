@@ -288,9 +288,9 @@ async function loadHostPortal() {
 // audio by itself. With explicit browser permission, capture the HOST's own
 // microphone and use the existing /stt -> Deepgram -> transcript/PDF pipeline.
 function updateHostMicButtons(recording = false) {
-  $('hostMicStart').disabled = recording;
-  $('hostMicStop').disabled = !recording;
-  $('hostMicLive').textContent = recording ? 'Listening' : 'Not listening';
+  $('hostMicToggle').disabled = false;
+  $('hostMicToggle').textContent = recording ? 'Mute' : 'Unmute';
+  $('hostMicLive').textContent = recording ? 'Listening' : 'Muted';
   $('hostMicLive').classList.toggle('active', recording);
 }
 
@@ -303,8 +303,7 @@ function stopHostMicrophone(message = '', hide = false) {
   if (message) $('hostMicStatus').textContent = message;
   if (hide) {
     $('hostMicrophonePanel').classList.add('hidden');
-    $('hostMicTranscript').textContent = ''; // Never show host A's captions to host B.
-    $('hostMicStatus').textContent = 'Click Start microphone and allow access to capture your own voice.';
+    $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
   }
 }
 
@@ -318,7 +317,7 @@ function showHostMicPanel(session) {
   $('hostMicrophonePanel').classList.remove('hidden');
   updateHostMicButtons(Boolean(hostMicCapture));
   if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
-    $('hostMicStatus').textContent = 'Click Start microphone and allow access to capture your own voice.';
+    $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
   }
 }
 
@@ -329,24 +328,21 @@ async function startHostMicForSession(sessionId) {
   hostMicSessionId = sessionId;
   const generation = ++hostMicRequestGeneration;
   $('hostMicrophonePanel').classList.remove('hidden');
-  $('hostMicTranscript').textContent = '';
-  $('hostMicStart').disabled = true;
-  $('hostMicStop').disabled = false; // Permission prompts can be cancelled.
+  $('hostMicToggle').disabled = true;
+  $('hostMicToggle').textContent = 'Connecting…';
   $('hostMicStatus').textContent = 'Waiting for microphone permission. Your camera will not be used.';
-  const recentFinals = [];
   try {
     const capture = await startHostMicrophone({
       apiBase: API_BASE,
       sessionId,
       fetchCaptureToken: async id => (await api(`/api/sessions/${encodeURIComponent(id)}/host-audio-token`, { method: 'POST' })).captureToken,
-      onStatus: text => { if (generation === hostMicRequestGeneration) $('hostMicStatus').textContent = text; },
-      onTranscript: event => {
+      // Live captions continue through the API relay and saved PDF pipeline.
+      // They are intentionally not rendered in the host dashboard.
+      onStatus: text => {
         if (generation !== hostMicRequestGeneration) return;
-        const text = String(event.text || '').trim();
-        if (!text) return;
-        if (event.isFinal) { recentFinals.push(text); if (recentFinals.length > 12) recentFinals.shift(); }
-        $('hostMicTranscript').textContent = [...recentFinals, ...(event.isFinal ? [] : [text])].join('\n');
-        $('hostMicTranscript').scrollTop = $('hostMicTranscript').scrollHeight;
+        $('hostMicStatus').textContent = /(?:connected|active|listening)/i.test(text)
+          ? 'Microphone active. Speech is sent to PIN devices and saved for PDF.'
+          : text;
       },
       onStopped: reason => {
         if (generation !== hostMicRequestGeneration) return;
@@ -366,26 +362,36 @@ async function startHostMicForSession(sessionId) {
     hostMicCapture = null;
     updateHostMicButtons();
     $('hostMicStatus').textContent = error.name === 'NotAllowedError'
-      ? 'Microphone permission was denied. Allow the microphone for zapperapp.in in your browser, then click Start microphone.'
+      ? 'Microphone permission was denied. Allow the microphone for zapperapp.in in your browser, then click Unmute.'
       : `Microphone could not start: ${error.message}`;
   }
 }
 
-$('hostMicStart').onclick = () => { if (hostMicSessionId) void startHostMicForSession(hostMicSessionId); };
-$('hostMicStop').onclick = () => stopHostMicrophone('Microphone stopped. The session PIN is still active.');
+$('hostMicToggle').onclick = () => {
+  if (hostMicCapture) stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.');
+  else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
+};
 
-async function endHostSession(sessionId, pin = '') {
-  if (!sessionId) return;
+async function endHostSession(sessionId, pin = '', button = null) {
+  if (!sessionId) return false;
   const label = pin ? `PIN ${pin}` : 'this session';
-  if (!window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return;
-  await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
-  if (hostMicSessionId === sessionId) stopHostMicrophone('Session ended. Microphone stopped.', true);
-  if (currentSessionId === sessionId) {
-    $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
-    $('endCurrentSession').disabled = true;
-    currentSessionId = '';
+  // Cancel must not disable the End Session button or touch the active PIN.
+  if (!window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return false;
+  if (button) button.disabled = true;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
+    if (hostMicSessionId === sessionId) stopHostMicrophone('Session ended. Microphone stopped.', true);
+    if (currentSessionId === sessionId) {
+      $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
+      $('endCurrentSession').disabled = true;
+      currentSessionId = '';
+    }
+    await loadSessions();
+    return true;
+  } catch (error) {
+    if (button) button.disabled = false;
+    throw error;
   }
-  await loadSessions();
 }
 
 async function loadSessions() {
@@ -410,7 +416,7 @@ async function loadSessions() {
     const active = session.active !== false && session.status === 'active';
     return `
     <div class="dataRow">
-      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span>${escapeHTML(session.meetUrl)}</span><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
+      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
       <div class="rowActions">
         ${active ? `<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
       </div>
@@ -424,9 +430,8 @@ async function loadSessions() {
   });
   $('sessions').querySelectorAll('[data-end]').forEach(button => {
     button.onclick = async () => {
-      button.disabled = true;
-      try { await endHostSession(button.dataset.end, button.dataset.pin); }
-      catch (error) { alert(error.message); button.disabled = false; }
+      try { await endHostSession(button.dataset.end, button.dataset.pin, button); }
+      catch (error) { alert(error.message); }
     };
   });
 }
@@ -435,7 +440,7 @@ async function loadTranscripts() {
   const data = await api('/api/transcripts');
   $('transcripts').innerHTML = data.sessions.length ? data.sessions.map(session => `
     <div class="dataRow">
-      <div><strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong><div class="meta"><span>PIN ${escapeHTML(session.pin)}</span><span>${escapeHTML(session.meetUrl)}</span>${session.googleEmail ? `<span>${escapeHTML(session.googleEmail)}</span>` : ''}</div></div>
+      <div><strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong><div class="meta"><span>PIN ${escapeHTML(session.pin)}</span></div></div>
       <button class="ghostBtn compact" data-pdf="${escapeHTML(session.id)}" type="button">Download PDF</button>
     </div>`).join('') : '<p class="empty">No saved transcripts yet.</p>';
   $('transcripts').querySelectorAll('[data-pdf]').forEach(button => {
@@ -467,6 +472,8 @@ async function refreshGoogleMeetAvailability() {
     googleMeetConnected = Boolean(data.enabled && data.connected);
     $('googleMeetCreateBtn').disabled = !eligible;
     $('manualMeetCreateLink').classList.toggle('hidden', googleMeetAvailable || !eligible);
+    document.querySelector('.meetManualOption')?.classList.toggle('hidden', googleMeetAvailable || !eligible);
+    $('googleMeetStatus').classList.toggle('visuallyHidden', googleMeetAvailable && eligible);
     $('googleMeetStatus').textContent = !eligible
       ? 'Your trial or subscription must be active to create a session.'
       : googleMeetAvailable
@@ -479,6 +486,8 @@ async function refreshGoogleMeetAvailability() {
     googleMeetConnected = false;
     $('googleMeetCreateBtn').disabled = !eligible;
     $('manualMeetCreateLink').classList.toggle('hidden', !eligible);
+    document.querySelector('.meetManualOption')?.classList.toggle('hidden', !eligible);
+    $('googleMeetStatus').classList.remove('visuallyHidden');
     $('googleMeetStatus').textContent = eligible
       ? 'Automatic meeting creation is unavailable on this backend. You can open Google Meet with your own account and paste the link below.'
       : 'Your trial or subscription must be active to create a session.';
@@ -608,9 +617,8 @@ $('copyPin').onclick = async () => {
 };
 $('endCurrentSession').onclick = async () => {
   if (!currentSessionId) return;
-  $('endCurrentSession').disabled = true;
-  try { await endHostSession(currentSessionId, currentSessionPin); }
-  catch (error) { $('sessionError').textContent = error.message; $('endCurrentSession').disabled = false; }
+  try { await endHostSession(currentSessionId, currentSessionPin, $('endCurrentSession')); }
+  catch (error) { $('sessionError').textContent = error.message; }
 };
 $('refreshSessions').onclick = loadSessions;
 $('refreshTranscripts').onclick = loadTranscripts;

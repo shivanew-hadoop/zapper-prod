@@ -163,7 +163,34 @@
   <main id="hostPortal" class="portalShell hidden">
     <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
     <section class="portalGrid">
-      <div class="portalCard"><div class="eyebrow">CREATE SESSION</div><h2>Create session</h2><p>Click Create Session. Connect your Google account only the first time; Zapper then creates an open Google Meet and the existing six-digit PIN automatically. Each host session lasts up to 3 hours 30 minutes.</p><button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button><p id="googleMeetStatus" class="meta" aria-live="polite">Checking Google Meet availability…</p><p><a id="manualMeetCreateLink" class="hidden" href="https://meet.google.com/new" target="_blank" rel="noopener noreferrer">Open Google Meet in a new tab</a></p><p class="meta">Up to four Zapper desktop participants can redeem this session's PIN. The Google Meet link itself is not restricted to four attendees.</p><div id="autoMeetDetails" class="hidden"><label for="autoMeetUrl">Created Google Meet link (read-only)</label><div class="inlineForm"><input id="autoMeetUrl" type="url" readonly aria-label="Automatically created Google Meet link"/><a id="openAutoMeet" class="secondaryBtn" href="#" target="_blank" rel="noopener noreferrer">Open Meet</a></div></div><details class="meetManualOption"><summary>Use an existing Google Meet link (manual fallback)</summary><form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="abc-defg-hij" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session from link</button></form></details><div id="sessionError" class="error" aria-live="polite"></div><section id="hostMicrophonePanel" class="hostMicrophonePanel hidden" aria-label="Host microphone transcription"><div class="micHeader"><strong>Host microphone transcription</strong><span id="hostMicLive" class="micLive" aria-live="polite">Not listening</span></div><p class="meta">After you create a Google Meet session, allow microphone access to transcribe <strong>your voice</strong> in the Zapper dashboard without opening Meet. Keep this tab open. This does not capture voices from other people in Meet.</p><div class="micButtons"><button id="hostMicStart" class="ghostBtn" type="button">Start microphone</button><button id="hostMicStop" class="ghostBtn" type="button" disabled>Stop microphone</button></div><p id="hostMicStatus" class="meta" role="status" aria-live="polite">Your browser will request microphone permission.</p><div id="hostMicTranscript" class="hostMicTranscript" aria-live="polite"></div></section><div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet"></span><div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div><span id="pinStatus" class="pinStatus"></span></div></div>
+      <div class="portalCard">
+        <div class="eyebrow">CREATE SESSION</div>
+        <h2>Create session</h2>
+        <p>Click Create Session to start voice-to-text transcription. If this is your first time, sign in with your Google account. Zapper will create a six-digit PIN to share with participants. Each session lasts up to 3 hours 30 minutes.</p>
+        <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
+        <p id="googleMeetStatus" class="meta visuallyHidden" aria-live="polite">Checking session availability…</p>
+        <p class="meta">Up to four Zapper desktop participants can redeem a session PIN.</p>
+        <!-- Keep Meet fields for the existing OAuth/manual backend workflow, but do not display them on the normal host dashboard. -->
+        <div id="autoMeetDetails" class="hidden hostMeetInternal" aria-hidden="true">
+          <label for="autoMeetUrl">Created Google Meet link</label>
+          <div class="inlineForm"><input id="autoMeetUrl" type="url" readonly/><a id="openAutoMeet" href="#" target="_blank" rel="noopener noreferrer">Open Meet</a></div>
+        </div>
+        <details class="meetManualOption hidden"><summary>Manual session fallback</summary>
+          <p><a id="manualMeetCreateLink" class="hidden" href="https://meet.google.com/new" target="_blank" rel="noopener noreferrer">Open Google Meet</a></p>
+          <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="Meeting link" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session from link</button></form>
+        </details>
+        <div id="sessionError" class="error" aria-live="polite"></div>
+        <section id="hostMicrophonePanel" class="hostMicrophonePanel hidden" aria-label="Host microphone transcription">
+          <div class="micHeader"><strong>Host microphone transcription</strong><span id="hostMicLive" class="micLive" aria-live="polite">Muted</span></div>
+          <p class="meta">Your microphone sends voice-to-text captions to PIN-connected participants and saves them for the session PDF. Keep this tab open.</p>
+          <div class="micButtons"><button id="hostMicToggle" class="ghostBtn" type="button">Unmute</button></div>
+          <p id="hostMicStatus" class="meta" role="status" aria-live="polite">Your browser will request microphone permission.</p>
+        </section>
+        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet" class="hidden"></span>
+          <div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div>
+          <span id="pinStatus" class="pinStatus"></span>
+        </div>
+      </div>
       <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
     </section>
     <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Your current and recent meeting sessions.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>

@@ -1,4 +1,5 @@
 import { mountHowItWorks } from './how-it-works.jsx';
+import { startHostMicrophone } from './host-microphone.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
 const configuredReleaseUrl = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
@@ -17,6 +18,9 @@ let editingUser = null;
 let searchTimer = null;
 let currentSessionId = '';
 let currentSessionPin = '';
+let hostMicCapture = null;
+let hostMicSessionId = '';
+let hostMicRequestGeneration = 0;
 let googleMeetConnected = false;
 let googleMeetAvailable = false;
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
@@ -181,6 +185,7 @@ function showTrialWelcome(user) {
   $('authModal').classList.remove('hidden');
 }
 function logout() {
+  stopHostMicrophone('Microphone stopped on logout.', true);
   closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken');
   if ($('meetUrl')) $('meetUrl').value = '';
@@ -279,11 +284,102 @@ async function loadHostPortal() {
   window.scrollTo({ top: 0 });
 }
 
+// A created Google Meet room is only a link: it cannot supply microphone
+// audio by itself. With explicit browser permission, capture the HOST's own
+// microphone and use the existing /stt -> Deepgram -> transcript/PDF pipeline.
+function updateHostMicButtons(recording = false) {
+  $('hostMicStart').disabled = recording;
+  $('hostMicStop').disabled = !recording;
+  $('hostMicLive').textContent = recording ? 'Listening' : 'Not listening';
+  $('hostMicLive').classList.toggle('active', recording);
+}
+
+function stopHostMicrophone(message = '', hide = false) {
+  ++hostMicRequestGeneration; // Discard a pending microphone permission request.
+  if (hostMicCapture) hostMicCapture.stop();
+  hostMicCapture = null;
+  if (hide) hostMicSessionId = '';
+  updateHostMicButtons();
+  if (message) $('hostMicStatus').textContent = message;
+  if (hide) {
+    $('hostMicrophonePanel').classList.add('hidden');
+    $('hostMicTranscript').textContent = ''; // Never show host A's captions to host B.
+    $('hostMicStatus').textContent = 'Click Start microphone and allow access to capture your own voice.';
+  }
+}
+
+function showHostMicPanel(session) {
+  if (!session?.googleCreated || session?.status !== 'active' || session?.active === false) {
+    stopHostMicrophone('', true);
+    return;
+  }
+  if (hostMicSessionId && hostMicSessionId !== session.id) stopHostMicrophone('', true);
+  hostMicSessionId = session.id;
+  $('hostMicrophonePanel').classList.remove('hidden');
+  updateHostMicButtons(Boolean(hostMicCapture));
+  if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
+    $('hostMicStatus').textContent = 'Click Start microphone and allow access to capture your own voice.';
+  }
+}
+
+async function startHostMicForSession(sessionId) {
+  if (!sessionId || hostMicCapture && hostMicSessionId === sessionId) return;
+  // Stop any previous recording, without changing the session/PIN lifecycle.
+  stopHostMicrophone();
+  hostMicSessionId = sessionId;
+  const generation = ++hostMicRequestGeneration;
+  $('hostMicrophonePanel').classList.remove('hidden');
+  $('hostMicTranscript').textContent = '';
+  $('hostMicStart').disabled = true;
+  $('hostMicStop').disabled = false; // Permission prompts can be cancelled.
+  $('hostMicStatus').textContent = 'Waiting for microphone permission. Your camera will not be used.';
+  const recentFinals = [];
+  try {
+    const capture = await startHostMicrophone({
+      apiBase: API_BASE,
+      sessionId,
+      fetchCaptureToken: async id => (await api(`/api/sessions/${encodeURIComponent(id)}/host-audio-token`, { method: 'POST' })).captureToken,
+      onStatus: text => { if (generation === hostMicRequestGeneration) $('hostMicStatus').textContent = text; },
+      onTranscript: event => {
+        if (generation !== hostMicRequestGeneration) return;
+        const text = String(event.text || '').trim();
+        if (!text) return;
+        if (event.isFinal) { recentFinals.push(text); if (recentFinals.length > 12) recentFinals.shift(); }
+        $('hostMicTranscript').textContent = [...recentFinals, ...(event.isFinal ? [] : [text])].join('\n');
+        $('hostMicTranscript').scrollTop = $('hostMicTranscript').scrollHeight;
+      },
+      onStopped: reason => {
+        if (generation !== hostMicRequestGeneration) return;
+        hostMicCapture = null;
+        updateHostMicButtons();
+        if (reason) $('hostMicStatus').textContent = reason;
+      },
+    });
+    if (generation !== hostMicRequestGeneration || hostMicSessionId !== sessionId) {
+      capture.stop();
+      return;
+    }
+    hostMicCapture = capture;
+    updateHostMicButtons(true);
+  } catch (error) {
+    if (generation !== hostMicRequestGeneration) return;
+    hostMicCapture = null;
+    updateHostMicButtons();
+    $('hostMicStatus').textContent = error.name === 'NotAllowedError'
+      ? 'Microphone permission was denied. Allow the microphone for zapperapp.in in your browser, then click Start microphone.'
+      : `Microphone could not start: ${error.message}`;
+  }
+}
+
+$('hostMicStart').onclick = () => { if (hostMicSessionId) void startHostMicForSession(hostMicSessionId); };
+$('hostMicStop').onclick = () => stopHostMicrophone('Microphone stopped. The session PIN is still active.');
+
 async function endHostSession(sessionId, pin = '') {
   if (!sessionId) return;
   const label = pin ? `PIN ${pin}` : 'this session';
   if (!window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return;
   await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
+  if (hostMicSessionId === sessionId) stopHostMicrophone('Session ended. Microphone stopped.', true);
   if (currentSessionId === sessionId) {
     $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
     $('endCurrentSession').disabled = true;
@@ -301,10 +397,12 @@ async function loadSessions() {
     $('pinValue').textContent = activeSession.pin;
     $('pinMeet').textContent = activeSession.meetUrl;
     showAutoMeetUrl(activeSession);
+    showHostMicPanel(activeSession);
     $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
     $('endCurrentSession').disabled = false;
     $('pinBox').classList.remove('hidden');
   } else if (!currentSessionId) {
+    stopHostMicrophone('', true);
     $('pinBox').classList.add('hidden');
     $('autoMeetDetails').classList.add('hidden');
   }
@@ -401,6 +499,8 @@ function showCreatedSession(session) {
   $('pinValue').textContent = session.pin;
   $('pinMeet').textContent = session.meetUrl;
   showAutoMeetUrl(session);
+  showHostMicPanel(session);
+  if (session.googleCreated) void startHostMicForSession(session.id);
   // The manual fallback keeps its own editable link; Google-created links
   // are displayed separately in the non-editable field above.
   if (!session.googleCreated) {

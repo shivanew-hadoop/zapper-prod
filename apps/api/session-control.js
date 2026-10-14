@@ -407,6 +407,36 @@ module.exports = function createSessionControl({ app, dataDir }) {
     } catch (_) { return null; }
   }
 
+  // Web dashboard microphone captures use a separate, short-lived token. They
+  // do not redeem the PIN, consume a desktop seat, or authorize other sessions.
+  function hostAudioTokenState(rawToken) {
+    try {
+      const payload = verifyToken(rawToken, 'zapper-host-audio', 'zapper-web');
+      if (payload.type !== 'host_audio') return null;
+      let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
+      const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
+      if (!session || !user || user.status !== 'active' || user.role === 'admin') return null;
+      if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
+      return { payload, session, user, active: Number(session.active || 0) === 1 && session.status === 'active' };
+    } catch (_) { return null; }
+  }
+
+  function verifyHostAudioToken(rawToken) {
+    const state = hostAudioTokenState(rawToken);
+    return state?.active ? { payload: state.payload, session: state.session, user: state.user } : null;
+  }
+
+  // Called only for a previously authenticated host microphone socket. The
+  // one-hour connection token may expire while a 3h30m session is still live;
+  // the backend must nevertheless see End Session and stop audio promptly.
+  function hostAudioSessionState(sessionId, userId) {
+    let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(sessionId, userId);
+    const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(userId);
+    if (!session || !user) return { active: false };
+    if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
+    return { active: user.status === 'active' && session.status === 'active' && Number(session.active || 0) === 1 };
+  }
+
   function verifyParticipantToken(rawToken, options = {}) {
     const state = participantTokenState(rawToken);
     if (!state) return null;
@@ -789,6 +819,20 @@ module.exports = function createSessionControl({ app, dataDir }) {
     res.json({ ok: true, session: createHostSession(req.authUser, meetUrl) });
   });
 
+  // The host captures ONLY their own microphone in the browser. Google Meet
+  // creation does not capture meeting audio, and the browser still asks consent.
+  app.post('/api/sessions/:id/host-audio-token', auth, (req, res) => {
+    if (req.authUser.role === 'admin') return res.status(403).json({ ok: false, error: 'Host account required.' });
+    let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(String(req.params.id || ''), req.authUser.id);
+    if (!session) return res.status(404).json({ ok: false, error: 'Session not found.' });
+    if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
+    if (session.status !== 'active' || !Number(session.active || 0)) return res.status(409).json({ ok: false, error: 'The session has ended.' });
+    const remaining = Math.min(60 * 60 * 1000, Number(session.expires_at_ms || 0) - Date.now());
+    if (remaining <= 0) return res.status(409).json({ ok: false, error: 'The session has expired.' });
+    const captureToken = signToken({ sub: Number(req.authUser.id), sessionId: session.id, type: 'host_audio' }, remaining, 'zapper-host-audio', 'zapper-web');
+    res.set('Cache-Control', 'no-store').json({ ok: true, captureToken });
+  });
+
   app.get('/api/sessions', auth, (req, res) => {
     sweepIdleSessions(Date.now());
     // Always return every active session so the host can still see and explicitly end it.
@@ -1069,7 +1113,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   });
 
   return {
-    db, dbPath, expireSubscriptions, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
+    db, dbPath, expireSubscriptions, verifyParticipantToken, participantTokenState, verifyHostAudioToken, hostAudioTokenState, hostAudioSessionState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
     registerParticipantGoogleEmail, appendLiveTranscriptSegment, appendLiveTranscriptSegments, finalizeSessionTranscript,
     planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes, hostSessionMaxMinutes
   };

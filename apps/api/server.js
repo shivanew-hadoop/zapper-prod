@@ -203,9 +203,17 @@ wss.on('connection', (clientWs, req) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const sessionToken = String(requestUrl.searchParams.get('token') || '');
   const googleEmail = String(requestUrl.searchParams.get('googleEmail') || '').trim().toLowerCase();
+  // Existing desktop PIN path is unchanged. Host microphone connections have
+  // their own token and require an allowed Zapper browser origin.
   const participant = sessionControl.verifyParticipantToken(sessionToken);
+  const hostAudio = !participant && sessionControl.verifyHostAudioToken(sessionToken);
+  const capture = participant || hostAudio;
+  if (hostAudio && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
+    try { clientWs.close(1008, 'origin not allowed'); } catch (_) {}
+    return;
+  }
 
-  if (!participant) {
+  if (!capture) {
     try { clientWs.send(JSON.stringify({ type: 'error', message: 'Session authorization is invalid or expired. Enter the 6-digit PIN again.' })); } catch (_) {}
     clientWs.close(1008, 'invalid session');
     return;
@@ -217,11 +225,11 @@ wss.on('connection', (clientWs, req) => {
   }
 
   const connectionId = crypto.randomUUID();
-  registerCapture(participant.session.id, connectionId);
-  if (googleEmail) {
-    try { sessionControl.registerParticipantGoogleEmail(participant.session.id, googleEmail); } catch (_) {}
+  registerCapture(capture.session.id, connectionId);
+  if (participant && googleEmail) {
+    try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
-  console.log(`[STT] Connected session=${participant.session.id} host=${participant.user.email} source=${connectionId.slice(0, 8)}`);
+  console.log(`[STT] Connected session=${capture.session.id} host=${capture.user.email} source=${connectionId.slice(0, 8)}`);
   let dgWs = null;
   let dgOpen = false;
   let dgConnecting = false;
@@ -275,7 +283,7 @@ wss.on('connection', (clientWs, req) => {
   // an authorization token minted before the host ended the session.
   sessionStateTimer = setInterval(() => {
     if (clientWs.readyState !== WebSocket.OPEN) return;
-    const state = sessionControl.participantTokenState(sessionToken);
+    const state = hostAudio ? sessionControl.hostAudioSessionState(hostAudio.session.id, hostAudio.user.id) : sessionControl.participantTokenState(sessionToken);
     // A temporary auth/token/network issue must not terminate a meeting. Only a
     // confirmed backend session row marked inactive (host End Session) stops it.
     if (state && !state.active) {
@@ -314,7 +322,7 @@ wss.on('connection', (clientWs, req) => {
         if (msg.type === 'SpeechStarted') {
           sendClient({ type: 'speech_started' });
           const now = Date.now();
-          if (now - lastSpeechDbTouchAt >= 5000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(participant.session.id, now)); }
+          if (now - lastSpeechDbTouchAt >= 5000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
           return;
         }
         const alt = msg?.channel?.alternatives?.[0];
@@ -323,8 +331,8 @@ wss.on('connection', (clientWs, req) => {
         const isFinal = Boolean(msg.is_final);
         sendClient({ type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) });
         const now = Date.now();
-        if (isFinal) persistCaptureSegment(participant.session.id, connectionId, { text, at: now });
-        if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(participant.session.id, now)); }
+        if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
+        if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
       } catch (error) { console.error('[STT] Deepgram parse error:', error.message); }
     });
     dgWs.on('unexpected-response', (_request, response) => {
@@ -377,7 +385,7 @@ wss.on('connection', (clientWs, req) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
-    unregisterCapture(participant.session.id, connectionId);
+    unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });

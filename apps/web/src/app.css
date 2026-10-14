@@ -54,3 +54,13 @@ body{padding-top:78px}
 @media(max-width:480px){
   .participantPrimaryActions.hostDashboardVisible{grid-template-columns:1fr}
 }
+
+/* v4.1.1: host-only microphone capture; existing Meet/participant UI unchanged. */
+.hostMicrophonePanel{margin:16px 0;padding:15px;border:1px solid #2a5577;border-radius:14px;background:#091a2a}
+.micHeader{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.micLive{padding:5px 9px;border-radius:999px;background:#243144;color:#b4c5d8;font-size:12px;font-weight:750}
+.micLive.active{background:#16452f;color:#9ff2c1}
+.micButtons{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.hostMicrophonePanel .meta{font-size:12px;line-height:1.6}
+.hostMicTranscript{min-height:36px;max-height:156px;overflow:auto;margin-top:10px;padding:9px 12px;border:1px solid #203f5b;border-radius:9px;color:#cfe4fa;font-size:13px;line-height:1.7;white-space:pre-wrap}
+.hostMicTranscript:empty{display:none}

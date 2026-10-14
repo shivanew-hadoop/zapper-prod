@@ -30,7 +30,6 @@ ADMIN_PASSWORD=<8+ char password, needed to bootstrap a new admin account>
 ADMIN_NAME=Zapper Admin
 WEB_ORIGINS=https://zapper-prod.vercel.app,https://zapperapp.in,https://www.zapperapp.in
 PLAN_PRICE_INR=1000
-DEFAULT_TRIAL_DAYS=0
 PORTAL_TOKEN_DAYS=7
 HOST_SESSION_HOURS=12
 PARTICIPANT_TOKEN_MINUTES=180

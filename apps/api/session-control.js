@@ -18,6 +18,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
       status TEXT NOT NULL DEFAULT 'pending',
       approval_status TEXT NOT NULL DEFAULT 'pending',
       registration_approved_at_ms INTEGER,
+      trial_started_at_ms INTEGER,
+      trial_ends_at_ms INTEGER,
       subscription_status TEXT NOT NULL DEFAULT 'inactive',
       subscription_started_at_ms INTEGER,
       subscription_valid_until_ms INTEGER,
@@ -91,13 +93,14 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'host'");
   ensureColumn('users', 'approval_status', "TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn('users', 'registration_approved_at_ms', 'INTEGER');
+  ensureColumn('users', 'trial_started_at_ms', 'INTEGER');
+  ensureColumn('users', 'trial_ends_at_ms', 'INTEGER');
   ensureColumn('users', 'subscription_started_at_ms', 'INTEGER');
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
 
-  // Never infer approval from account or subscription status. In particular,
-  // existing pending approvals must survive process restarts and deployments.
-  // The administrator approval endpoint is the only promotion path.
-  db.prepare("UPDATE users SET approval_status='approved', registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms, ?) WHERE role='admin'").run(Date.now());
+  // Registration is self-service. Unlock legacy pending hosts without resetting
+  // subscriptions or giving existing accounts a new trial. Disabled users stay disabled.
+  db.prepare("UPDATE users SET approval_status='approved', registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms), status=CASE WHEN status='pending' THEN 'active' ELSE status END WHERE approval_status <> 'approved' OR status='pending'").run();
   ensureColumn('transcripts', 'pdf_blob', 'BLOB');
   ensureColumn('transcripts', 'pdf_filename', 'TEXT');
   ensureColumn('transcripts', 'transcript_segments_json', "TEXT NOT NULL DEFAULT '[]'");
@@ -113,7 +116,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const jwtSecret = jwtSecretRaw || crypto.randomBytes(48).toString('hex');
   if (!jwtSecretRaw) console.warn('[AUTH] JWT_SECRET is not set. Set a stable 32+ character JWT_SECRET on Railway.');
 
-  const defaultTrialDays = Math.max(0, Number(process.env.DEFAULT_TRIAL_DAYS || 0));
+  const trialDurationMs = 24 * 60 * 60 * 1000; // One-time trial starts at registration, not first session.
   const planPriceInr = Math.max(1, Number(process.env.PLAN_PRICE_INR || 1000));
   const portalTokenDays = Math.max(1, Number(process.env.PORTAL_TOKEN_DAYS || 7));
   // Hard product limit: a host session can remain active for at most 3h 30m.
@@ -147,14 +150,28 @@ module.exports = function createSessionControl({ app, dataDir }) {
     return code ? `https://meet.google.com/${code.toLowerCase()}` : null;
   };
 
+  // Expiry is enforced in the database even when a user keeps an old JWT.
+  // A periodic sweep also persists inactive status if nobody visits the site.
+  function expireSubscriptions(now = Date.now()) {
+    return db.prepare("UPDATE users SET subscription_status='inactive' WHERE subscription_status='active' AND subscription_valid_until_ms IS NOT NULL AND subscription_valid_until_ms<=?").run(now).changes;
+  }
+  expireSubscriptions();
+  const subscriptionSweepTimer = setInterval(() => {
+    try { expireSubscriptions(); } catch (error) { console.error('[SUBSCRIPTION] Expiry sweep failed:', error.message); }
+  }, 60 * 1000);
+  subscriptionSweepTimer.unref();
+
   function subscriptionState(user) {
-    if (!user || user.status !== 'active' || (user.role !== 'admin' && user.approval_status !== 'approved')) return { valid: false, status: 'inactive', startedAt: null, validUntil: null };
+    if (!user || user.status !== 'active') return { valid: false, status: 'inactive', startedAt: null, validUntil: null };
+    if (user.subscription_status === 'active' && Number(user.subscription_valid_until_ms || 0) <= Date.now()) {
+      expireSubscriptions();
+    }
     const startedAt = Number(user.subscription_started_at_ms || 0) || null;
     const until = Number(user.subscription_valid_until_ms || 0) || null;
     const valid = user.subscription_status === 'active' && Boolean(until) && until > Date.now();
     return {
       valid,
-      status: valid ? 'active' : (until && until <= Date.now() ? 'expired' : 'inactive'),
+      status: valid ? 'active' : 'inactive',
       startedAt,
       validUntil: until,
     };
@@ -168,7 +185,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' ? 'approved' : (user.approval_status === 'approved' ? 'approved' : 'pending'),
+      approvalStatus: 'approved', // retained for compatibility with previously deployed clients
+      trialStartedAt: user.trial_started_at_ms || null,
+      trialEndsAt: user.trial_ends_at_ms || null,
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,
@@ -270,7 +289,6 @@ module.exports = function createSessionControl({ app, dataDir }) {
       if (payload.type !== 'portal') throw new Error('wrong token');
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!user) return res.status(403).json({ ok: false, error: 'Account access is unavailable.' });
-      if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
       if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'Account access is disabled.' });
       req.authUser = user;
       next();
@@ -602,17 +620,17 @@ module.exports = function createSessionControl({ app, dataDir }) {
       if (!name) return res.status(400).json({ ok: false, error: 'Enter your name.' });
       if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return res.status(400).json({ ok: false, error: 'Use a valid email and a password with at least 8 characters.' });
       const now = Date.now();
-      // New host registrations require administrator approval before sign-in.
-      // Subscription dates remain administrator-controlled exactly as before.
-      const info = db.prepare(`INSERT INTO users(email,password_hash,name,role,status,approval_status,registration_approved_at_ms,subscription_status,subscription_started_at_ms,subscription_valid_until_ms,created_at_ms)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(email, hashPassword(password), name, 'host', 'pending', 'pending', null, 'inactive', null, null, now);
+      const trialEndsAt = now + trialDurationMs;
+      // Unique email is enforced by SQLite. The trial is granted once, when
+      // the user row is first inserted, and is never refreshed at login.
+      const info = db.prepare(`INSERT INTO users(email,password_hash,name,role,status,approval_status,registration_approved_at_ms,trial_started_at_ms,trial_ends_at_ms,subscription_status,subscription_started_at_ms,subscription_valid_until_ms,created_at_ms)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(email, hashPassword(password), name, 'host', 'active', 'approved', now, now, trialEndsAt, 'active', now, trialEndsAt, now);
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid);
       res.json({
         ok: true,
-        approvalPending: true,
-        code: 'PENDING_APPROVAL',
+        approvalPending: false,
         user: publicUser(user),
-        message: 'Registration submitted successfully. Please follow up with the Zapper administrator at zapperapp.support@gmail.com to proceed further.'
+        message: 'Account created. Your free 24-hour trial starts now. Sign in to begin; contact support after the trial to continue.'
       });
     } catch (_) {
       res.status(409).json({ ok: false, error: 'This email is already registered.' });
@@ -622,7 +640,6 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.post('/api/auth/login', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE email=?').get(normalizeEmail(req.body?.email));
     if (!user || !verifyPassword(String(req.body?.password || ''), user.password_hash)) return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
-    if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved')) return res.status(403).json({ ok: false, code: 'PENDING_APPROVAL', error: 'Your registration is pending administrator approval. Please follow up with the Zapper administrator at zapperapp.support@gmail.com.' });
     if (user.status !== 'active') return res.status(403).json({ ok: false, error: 'This account is currently disabled. Contact the Zapper administrator.' });
     const now = Date.now();
     db.prepare('UPDATE users SET last_login_at_ms=? WHERE id=?').run(now, user.id);
@@ -667,7 +684,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   app.post('/api/sessions', auth, (req, res) => {
     if (req.authUser.role === 'admin') return res.status(403).json({ ok: false, error: 'Admin accounts manage Zapper; use a host account to create meeting sessions.' });
     const sub = subscriptionState(req.authUser);
-    if (!sub.valid) return res.status(402).json({ ok: false, error: 'Your Zapper subscription is not active. Please activate or renew the Rs. 1,000 monthly host plan.' });
+    if (!sub.valid) return res.status(402).json({ ok: false, code: 'SUBSCRIPTION_INACTIVE', error: 'Your trial or subscription has ended. Please contact the Zapper administrator to activate or renew your plan.' });
     const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
     if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
     const now = Date.now();
@@ -807,7 +824,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
       name: user.name,
       role: user.role || 'host',
       status: user.status,
-      approvalStatus: user.role === 'admin' ? 'approved' : (user.approval_status === 'approved' ? 'approved' : 'pending'),
+      approvalStatus: 'approved',
+      trialStartedAt: user.trial_started_at_ms || null,
+      trialEndsAt: user.trial_ends_at_ms || null,
       subscriptionStatus: sub.status,
       subscriptionStartedAt: sub.startedAt,
       subscriptionValidUntil: sub.validUntil,
@@ -832,6 +851,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   }
 
   app.get('/api/admin/users', adminAuth, (req, res) => {
+    expireSubscriptions();
     const query = String(req.query?.q || '').trim().toLowerCase();
     const rows = query
       ? db.prepare("SELECT * FROM users WHERE lower(email) LIKE ? OR lower(name) LIKE ? ORDER BY created_at_ms DESC LIMIT 500").all(`%${query}%`, `%${query}%`)
@@ -894,11 +914,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     }
 
     const status = String(req.body?.status || '').toLowerCase();
-    if (!['pending', 'active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be pending, active or disabled.' });
+    if (!['active', 'disabled'].includes(status)) return res.status(400).json({ ok: false, error: 'Account status must be active or disabled.' });
     if (user.role === 'admin' && status !== 'active') return res.status(400).json({ ok: false, error: 'Admin accounts cannot be moved out of active status from this panel.' });
-    if (user.role !== 'admin' && (user.status === 'pending' || user.approval_status !== 'approved') && status === 'active') {
-      return res.status(400).json({ ok: false, error: 'This registration is still pending. Use Approve registration first.' });
-    }
     db.prepare('UPDATE users SET status=? WHERE id=?').run(status, user.id);
     res.json({ ok: true, user: adminUserSummary(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
   });
@@ -929,7 +946,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   });
 
   return {
-    db, dbPath, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
+    db, dbPath, expireSubscriptions, verifyParticipantToken, participantTokenState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
     registerParticipantGoogleEmail, appendLiveTranscriptSegment, appendLiveTranscriptSegments, finalizeSessionTranscript,
     planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes, hostSessionMaxMinutes
   };

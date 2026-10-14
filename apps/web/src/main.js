@@ -135,7 +135,7 @@ function openAuth(nextMode = 'login') {
 }
 function setMode(next) {
   mode = next;
-  $('pendingApprovalPanel')?.classList.add('hidden');
+  $('trialWelcomePanel')?.classList.add('hidden');
   $('authForm')?.classList.remove('hidden');
   const loginMode = mode === 'login';
   const registerMode = mode === 'register';
@@ -157,24 +157,22 @@ function setMode(next) {
   $('password').autocomplete = loginMode ? 'current-password' : 'new-password';
   $('authSubmit').textContent = loginMode ? 'Login' : registerMode ? 'Create account' : forgotMode ? 'Generate reset link' : 'Set new password';
   $('authTitle').textContent = loginMode ? 'Sign in to Zapper' : registerMode ? 'Create a host account' : forgotMode ? 'Reset your password' : 'Choose a new password';
-  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account. New registrations are reviewed by the administrator before first sign-in.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
+  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account and get one free 24-hour trial, starting immediately.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
   $('authError').textContent = '';
   $('authSuccess').textContent = '';
 }
-function showPendingApproval(email = '') {
-  // Registration must never inherit an earlier browser login. Clear every portal
-  // auth reference before showing the pending state.
+function showTrialWelcome(user) {
+  // Keep registration separate from login and clear any previous account token.
   token = '';
   account = null;
   localStorage.removeItem('zapperToken');
   refreshHeaderState();
-  $('authTabs')?.classList.add('hidden');
-  $('authForm')?.classList.add('hidden');
-  $('pendingApprovalPanel')?.classList.remove('hidden');
-  $('authTitle').textContent = 'Pending administrator approval';
-  $('authLead').textContent = email
-    ? `${email} has been registered successfully.`
-    : 'Your account has been registered successfully.';
+  $('authTabs').classList.add('hidden');
+  $('authForm').classList.add('hidden');
+  $('trialWelcomePanel').classList.remove('hidden');
+  $('authTitle').textContent = 'Account created — trial activated';
+  $('authLead').textContent = `${user?.email || 'Your account'} is ready to sign in.`;
+  $('trialExpiry').textContent = user?.trialEndsAt ? fmt(user.trialEndsAt) : '24 hours from registration';
   $('authModal').classList.remove('hidden');
 }
 function logout() {
@@ -193,7 +191,7 @@ $('loginTab').onclick = () => setMode('login');
 $('registerTab').onclick = () => setMode('register');
 $('forgotPasswordBtn').onclick = () => setMode('forgot');
 $('backToLoginBtn').onclick = () => setMode('login');
-$('pendingBackToLogin').onclick = () => setMode('login');
+$('trialBackToLogin').onclick = () => setMode('login');
 $('dashboardBtn').onclick = () => loadPortal();
 $('navLogout').onclick = logout;
 $('mobileMenuBtn').onclick = toggleMobileNav;
@@ -226,18 +224,13 @@ $('authForm').onsubmit = async event => {
     }
     const data = await api(`/api/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }) });
     if (mode === 'register') {
-      // Registration never logs the browser in. The backend returns no token; we
-      // also clear any stale token from a previous host before showing Pending.
+      // Registration succeeds immediately, but sign-in remains a separate step.
       $('email').value = data.user?.email || $('email').value.trim();
-      showPendingApproval($('email').value.trim());
+      showTrialWelcome(data.user);
       return;
     }
     token = data.token; localStorage.setItem('zapperToken', token); hideAuth(); await loadPortal();
   } catch (error) {
-    if (error.code === 'PENDING_APPROVAL' || /pending administrator approval/i.test(error.message || '')) {
-      showPendingApproval($('email').value.trim());
-      return;
-    }
     $('authError').textContent = error.message;
   }
 };
@@ -254,14 +247,15 @@ async function loadHostPortal() {
   refreshHeaderState();
   $('hostPortal').classList.remove('hidden');
   $('welcome').textContent = `Welcome${account.name ? `, ${account.name}` : ''}`;
-  const start = account.subscriptionStartedAt ? fmtDate(account.subscriptionStartedAt) : 'not set';
-  const until = account.subscriptionValidUntil ? fmtDate(account.subscriptionValidUntil) : 'not activated';
-  $('subText').textContent = `${account.email} · Subscription ${account.subscriptionStatus} · ${start} → ${until}`;
+  const start = account.subscriptionStartedAt ? fmt(account.subscriptionStartedAt) : 'not set';
+  const until = account.subscriptionValidUntil ? fmt(account.subscriptionValidUntil) : 'not activated';
   const active = account.subscriptionStatus === 'active';
-  $('planBadge').textContent = active ? 'Active' : account.subscriptionStatus;
+  const onTrial = active && account.trialEndsAt && account.subscriptionValidUntil === account.trialEndsAt;
+  $('subText').textContent = `${account.email} · ${onTrial ? 'Free 24-hour trial' : 'Subscription ' + account.subscriptionStatus} · ${start} → ${until}`;
+  $('planBadge').textContent = onTrial ? 'Trial active' : active ? 'Active' : account.subscriptionStatus;
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
   $('createSessionBtn').disabled = !active;
-  if (!active) $('sessionError').textContent = 'Your host subscription is not active. Contact the Zapper administrator to activate or renew it.';
+  $('sessionError').textContent = !active ? 'Your trial or subscription has ended. Contact the Zapper administrator to renew access.' : '';
   restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
   window.scrollTo({ top: 0 });
@@ -365,7 +359,10 @@ $('sessionForm').onsubmit = async event => {
     $('endCurrentSession').disabled = false;
     $('pinBox').classList.remove('hidden');
     await loadSessions();
-  } catch (error) { $('sessionError').textContent = error.message; }
+  } catch (error) {
+    $('sessionError').textContent = error.message;
+    if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
+  }
 };
 $('copyPin').onclick = async () => {
   const pin = $('pinValue').textContent.trim();
@@ -398,9 +395,9 @@ async function loadAdminUsers(query = '') {
     <table class="adminTable"><thead><tr><th>User</th><th>Subscription</th><th>Activity</th><th>Account</th><th></th></tr></thead><tbody>
       ${adminUsers.map(user => `<tr>
         <td><strong>${escapeHTML(user.name || 'Unnamed')}</strong><small>${escapeHTML(user.email)}</small><small>${escapeHTML(user.role)}</small></td>
-        <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmtDate(user.subscriptionStartedAt))} → ${escapeHTML(fmtDate(user.subscriptionValidUntil))}</small><small>${escapeHTML(monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
+        <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmt(user.subscriptionStartedAt))} → ${escapeHTML(fmt(user.subscriptionValidUntil))}</small><small>${escapeHTML(user.trialEndsAt && user.subscriptionValidUntil === user.trialEndsAt ? 'One-time 24-hour trial' : monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
         <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
-        <td><span class="pill ${user.approvalStatus !== 'approved' ? 'pendingPill' : ''}">${escapeHTML(user.approvalStatus !== 'approved' ? 'Pending approval' : user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
+        <td><span class="pill">${escapeHTML(user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
         <td><button class="ghostBtn compact" data-edit-user="${user.id}" type="button">Manage</button></td>
       </tr>`).join('')}
     </tbody></table>` : '<p class="empty">No users found.</p>';
@@ -422,12 +419,10 @@ async function openAdminEdit(userId) {
   if (!editingUser) return;
   $('editUserTitle').textContent = editingUser.name || editingUser.email;
   $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
-  const pendingApproval = editingUser.approvalStatus !== 'approved';
   $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
-  $('editAccountStatus').value = ['pending', 'active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
+  $('editAccountStatus').value = ['active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
   $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || null);
   $('editEnd').value = toLocalInput(editingUser.subscriptionValidUntil || null);
-  $('approveUser').classList.toggle('hidden', !pendingApproval || editingUser.role === 'admin');
   $('editError').textContent = '';
   $('adminNewPassword').value = '';
   $('adminPasswordStatus').textContent = '';
@@ -449,25 +444,6 @@ function adjustEnd(days) {
 }
 $('minus30').onclick = () => adjustEnd(-30);
 $('plus30').onclick = () => adjustEnd(30);
-$('approveUser').onclick = async () => {
-  if (!editingUser || editingUser.role === 'admin') return;
-  $('editError').textContent = '';
-  try {
-    const data = await api(`/api/admin/users/${editingUser.id}/status`, {
-      method: 'POST',
-      body: JSON.stringify({ status: 'active', approveRegistration: true }),
-    });
-    editingUser = data.user || { ...editingUser, approvalStatus: 'approved', status: 'active' };
-    $('approveUser').classList.add('hidden');
-    $('editAccountStatus').value = 'active';
-    $('editError').textContent = '';
-    $('adminPasswordStatus').textContent = data.message || 'Registration approved. Configure subscription access as required.';
-    await loadAdminUsers($('adminSearch').value.trim());
-    editingUser = adminUsers.find(user => Number(user.id) === Number(editingUser.id)) || editingUser;
-    $('approveUser').classList.toggle('hidden', editingUser.approvalStatus === 'approved' || editingUser.role === 'admin');
-    $('editAccountStatus').value = editingUser.status || 'active';
-  } catch (error) { $('editError').textContent = error.message; }
-};
 $('saveUser').onclick = async () => {
   if (!editingUser) return;
   $('editError').textContent = '';

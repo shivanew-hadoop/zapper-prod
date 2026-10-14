@@ -138,12 +138,12 @@
       <h2 id="authTitle">Sign in to Zapper</h2>
       <p id="authLead">Hosts sign in to create meeting sessions. Administrators use the same login and are routed automatically.</p>
       <div id="authTabs" class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
-      <section id="pendingApprovalPanel" class="pendingApprovalPanel hidden" aria-live="polite">
+      <section id="trialWelcomePanel" class="pendingApprovalPanel hidden" aria-live="polite">
         <div class="pendingApprovalIcon">✓</div>
-        <h3>Registration submitted</h3>
-        <p>Your account is pending administrator approval. You will be able to sign in only after the administrator approves your registration.</p>
-        <p class="pendingContact">Please follow up with the Zapper administrator at <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a>.</p>
-        <button id="pendingBackToLogin" class="ghostBtn" type="button">Back to sign in</button>
+        <h3>Your free 24-hour trial is active</h3>
+        <p>Your trial starts now and ends at <strong id="trialExpiry"></strong>. You can sign in immediately and create sessions during this period.</p>
+        <p class="pendingContact">After your trial, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a> to continue using Zapper. This trial is available only once per account.</p>
+        <button id="trialBackToLogin" class="ghostBtn" type="button">Sign in</button>
       </section>
       <form id="authForm">
         <input id="name" class="hidden" placeholder="Full name" autocomplete="name" />
@@ -171,16 +171,16 @@
 
   <main id="adminPortal" class="portalShell hidden">
     <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage accounts, access periods, password support and user activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>
-    <section class="adminQuickGrid"><div class="portalCard"><div class="eyebrow">ACCOUNT CONTROL</div><h3>Approvals & subscription management</h3><p>Review new registrations, approve host access, edit exact subscription start/end dates and manage account status.</p></div><div class="portalCard"><div class="eyebrow">PASSWORD SUPPORT</div><h3>Reset user passwords</h3><p>Set a new temporary password for a user from the Manage panel. The user can then sign in and change it again through Forgot Password.</p></div><div class="portalCard"><div class="eyebrow">ACTIVITY</div><h3>Operational visibility</h3><p>Review retained session and transcript activity for each host account.</p></div></section>
+    <section class="adminQuickGrid"><div class="portalCard"><div class="eyebrow">ACCOUNT CONTROL</div><h3>Subscription management</h3><p>New registrations are active automatically with a one-time 24-hour trial. Edit subscription start/end dates and manage account access.</p></div><div class="portalCard"><div class="eyebrow">PASSWORD SUPPORT</div><h3>Reset user passwords</h3><p>Set a new temporary password for a user from the Manage panel. The user can then sign in and change it again through Forgot Password.</p></div><div class="portalCard"><div class="eyebrow">ACTIVITY</div><h3>Operational visibility</h3><p>Review retained session and transcript activity for each host account.</p></div></section>
     <section class="portalCard sectionCard"><div class="sectionHead adminHead"><div><h2>Users</h2><p>Search by name or email and manage the selected account.</p></div><div class="adminToolbar"><input id="adminSearch" class="searchInput" placeholder="Search users..."/><button id="refreshAdmin" class="ghostBtn" type="button">Refresh</button></div></div><div id="adminUsers" class="adminTableWrap"></div></section>
   </main>
 
   <div id="adminEditModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modalBackdrop" data-close-admin></div><section class="adminEditCard"><button class="modalClose" data-close-admin type="button">×</button><div class="eyebrow">MANAGE USER</div><h2 id="editUserTitle">User</h2><p id="editUserMeta"></p>
-      <div class="formGrid"><label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label>Account status<select id="editAccountStatus"><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label>Subscription start<input id="editStart" type="datetime-local"/></label><label>Subscription end<input id="editEnd" type="datetime-local"/></label></div>
+      <div class="formGrid"><label>Subscription status<select id="editSubStatus"><option value="active">Active</option><option value="inactive">Inactive</option></select></label><label>Account status<select id="editAccountStatus"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label>Subscription start<input id="editStart" type="datetime-local"/></label><label>Subscription end<input id="editEnd" type="datetime-local"/></label></div>
       <div class="quickAdjust"><button id="minus30" class="ghostBtn" type="button">−30 days</button><button id="plus30" class="ghostBtn" type="button">+30 days</button></div>
       <div class="passwordAdminBox"><h3>Password reset</h3><p>Set a new password for this user (minimum 8 characters).</p><div class="inlineForm"><input id="adminNewPassword" type="password" placeholder="New password" autocomplete="new-password"/><button id="adminResetPassword" class="ghostBtn" type="button">Reset password</button></div><div id="adminPasswordStatus" class="successText"></div></div>
-      <div id="editError" class="error"></div><div class="modalActions"><button id="approveUser" class="primaryBtn hidden" type="button">Approve registration</button><button id="saveUser" class="primaryBtn" type="button">Save account changes</button></div><div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
+      <div id="editError" class="error"></div><div class="modalActions"><button id="saveUser" class="primaryBtn" type="button">Save account changes</button></div><div class="activityBox"><h3>Recent activity</h3><div id="editActivity">Loading...</div></div>
     </section>
   </div>
 

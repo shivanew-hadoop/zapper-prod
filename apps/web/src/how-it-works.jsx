@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 
 const hostSteps = [
-  ['Sign in as host', 'Use your approved host account with an active subscription.'],
+  ['Sign in as host', 'Use your host account with a free 24-hour trial or an active subscription.'],
   ['Create the Google Meet link', 'Create the Google Meet from your Google account first.'],
   ['Enter the Google Meet in Zapper', 'Paste the created Google Meet link or meeting ID into Zapper and create the session.'],
   ['Share the PIN', 'Give the generated six-digit PIN to the participant and keep the session active until you end it.'],

@@ -7,7 +7,6 @@ process.env.ADMIN_KEY = process.env.ADMIN_KEY || 'smoke-admin-key';
 process.env.ADMIN_EMAIL = 'admin-smoke@example.com';
 process.env.ADMIN_PASSWORD = 'AdminPassword123!';
 process.env.ADMIN_NAME = 'Smoke Admin';
-process.env.DEFAULT_TRIAL_DAYS = '0';
 process.env.SESSION_RETENTION = '15';
 process.env.TRANSCRIPT_RETENTION = '15';
 process.env.SESSION_IDLE_TIMEOUT_MINUTES = '20';
@@ -22,8 +21,7 @@ for (const method of ['get', 'post']) app[method] = (route, ...handlers) => rout
 app.use = () => {};
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'zapper-smoke-'));
 
-// Seed an inconsistent active account. It must remain pending, while
-// every account registered after startup is pending until explicit admin approval.
+// Seed a legacy host. Migration auto-approves it but must NOT mint a new trial.
 const { DatabaseSync } = require('node:sqlite');
 const legacyDb = new DatabaseSync(path.join(temp, 'zapper.db'));
 legacyDb.exec(`
@@ -48,8 +46,11 @@ legacyDb.close();
 
 const control = createSessionControl({ app, dataDir: temp });
 const grandfathered = control.db.prepare('SELECT status,approval_status FROM users WHERE email=?').get('legacy-existing@example.com');
-if (!grandfathered || grandfathered.approval_status !== 'pending' || grandfathered.status !== 'active') {
-  throw new Error('startup incorrectly approved an unapproved active account');
+if (!grandfathered || grandfathered.approval_status !== 'approved' || grandfathered.status !== 'active') {
+  throw new Error('legacy accounts should no longer need administrator approval');
+}
+if (control.db.prepare('SELECT trial_started_at_ms FROM users WHERE email=?').get('legacy-existing@example.com').trial_started_at_ms !== null) {
+  throw new Error('migration improperly issued a trial to an existing user');
 }
 
 function routeFor(method, route) {
@@ -89,60 +90,53 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   const adminToken = result.payload.token;
 
   const email = `smoke-${Date.now()}@example.com`;
+  const beforeRegistration = Date.now();
   result = await invoke('POST', '/api/auth/register', { body: { email, password: 'Password123!', name: 'Smoke Host' } });
-  if (!result.payload?.ok || !result.payload?.approvalPending || result.payload?.token) throw new Error('pending registration failed');
+  if (!result.payload?.ok || result.payload?.approvalPending || result.payload?.token) throw new Error('self-service registration failed');
   const hostId = result.payload.user.id;
-  let pendingRow = control.db.prepare('SELECT status,approval_status,registration_approved_at_ms,subscription_status FROM users WHERE id=?').get(hostId);
-  if (!pendingRow || pendingRow.status !== 'pending' || pendingRow.approval_status !== 'pending' || pendingRow.registration_approved_at_ms !== null || pendingRow.subscription_status !== 'inactive') throw new Error('new registration was not stored as strict pending');
+  const row = control.db.prepare('SELECT status,approval_status,registration_approved_at_ms,trial_started_at_ms,trial_ends_at_ms,subscription_status,subscription_started_at_ms,subscription_valid_until_ms FROM users WHERE id=?').get(hostId);
+  const dayMs = 86400000;
+  if (!row || row.status !== 'active' || row.approval_status !== 'approved' || row.subscription_status !== 'active' || !row.registration_approved_at_ms) throw new Error('registration did not automatically activate account and trial');
+  if (row.trial_started_at_ms < beforeRegistration || row.trial_ends_at_ms !== row.trial_started_at_ms + dayMs || row.subscription_started_at_ms !== row.trial_started_at_ms || row.subscription_valid_until_ms !== row.trial_ends_at_ms) throw new Error('trial must last exactly 24 hours from registration');
+  if (result.payload.user.trialEndsAt !== row.trial_ends_at_ms) throw new Error('frontend trial expiry missing');
+
+  // Same email is unique (case-insensitive), no new account/trial is issued.
+  result = await invoke('POST', '/api/auth/register', { body: { email: email.toUpperCase(), password: 'Password123!', name: 'Repeated' } });
+  if (result.statusCode !== 409) throw new Error('duplicate registration unexpectedly gave a second trial');
 
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
-  if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending host login was not blocked');
-  // A stale or inconsistent active status must never bypass explicit approval.
-  control.db.prepare("UPDATE users SET status='active', approval_status='pending' WHERE id=?").run(hostId);
+  if (!result.payload?.ok || !result.payload?.token) throw new Error('automatic registration did not allow immediate login');
+  const portalToken = result.payload.token;
+  result = await invoke('POST', '/api/sessions', { headers: { authorization: `Bearer ${portalToken}` }, body: { meetUrl: 'abc-defg-hij' } });
+  if (!result.payload?.ok) throw new Error('new trial account cannot create a session');
+
+  // Expiration must persist in the database and block both old JWTs and new logins
+  // from generating fresh sessions, but login itself remains available for renewal.
+  control.expireSubscriptions(row.trial_ends_at_ms - 1);
+  if (control.db.prepare('SELECT subscription_status FROM users WHERE id=?').get(hostId).subscription_status !== 'active') throw new Error('trial ended before the full 24 hours');
+  control.expireSubscriptions(row.trial_ends_at_ms);
+  const ended = control.db.prepare('SELECT subscription_status,trial_started_at_ms,trial_ends_at_ms FROM users WHERE id=?').get(hostId);
+  if (ended.subscription_status !== 'inactive' || ended.trial_started_at_ms !== row.trial_started_at_ms || ended.trial_ends_at_ms !== row.trial_ends_at_ms) throw new Error('expiry did not persist or trial history was lost');
+  result = await invoke('POST', '/api/sessions', { headers: { authorization: `Bearer ${portalToken}` }, body: { meetUrl: 'abc-defg-hij' } });
+  if (result.statusCode !== 402 || result.payload.code !== 'SUBSCRIPTION_INACTIVE') throw new Error('expired trial allowed session creation');
+  result = await invoke('GET', '/api/account', { headers: { authorization: `Bearer ${portalToken}` } });
+  if (result.payload.user.subscriptionStatus !== 'inactive') throw new Error('expired trial displayed as active');
   result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
-  if (result.statusCode !== 403 || result.payload?.code !== 'PENDING_APPROVAL') throw new Error('unapproved active account bypassed login gate');
-  control.db.prepare("UPDATE users SET status='pending' WHERE id=?").run(hostId);
+  if (!result.payload?.ok || result.payload.user?.subscriptionStatus !== 'inactive') throw new Error('expired account should be allowed to sign in but not create sessions');
+  result = await invoke('POST', '/api/auth/register', { body: { email, password: 'Password123!', name: 'Re-register' } });
+  if (result.statusCode !== 409) throw new Error('expired account was able to get another trial');
 
-
-  // A pending registration cannot be made active through the ordinary status
-  // editor. Explicit approval is required and uses the long-standing /status route.
-  result = await invoke('POST', '/api/admin/users/:id/status', {
-    headers: { authorization: `Bearer ${adminToken}` },
-    params: { id: String(hostId) },
-    body: { status: 'active' },
-  });
-  if (result.statusCode !== 400 || !/Approve registration first/i.test(result.payload?.error || '')) throw new Error('pending account was activated without explicit approval');
-  result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
-  if (result.statusCode !== 403 || !/pending administrator approval/i.test(result.payload?.error || '')) throw new Error('pending approval login gate failed');
-
-  // Admin explicitly approves the host using the existing status endpoint. Approval
-  // is separate from subscription activation/payment dates.
+  // Admin may extend/reactivate subscriptions without changing historical trial dates.
   const start = Date.now() - 60_000;
-  const end = Date.now() + 30 * 86400000;
-  result = await invoke('POST', '/api/admin/users/:id/status', {
-    headers: { authorization: `Bearer ${adminToken}` },
-    params: { id: String(hostId) },
-    body: { status: 'active', approveRegistration: true },
-  });
-  if (!result.payload?.ok || result.payload.user?.status !== 'active' || result.payload.user?.approvalStatus !== 'approved' || result.payload.user?.subscriptionStatus === 'active') throw new Error('admin approval failed or auto-activated subscription');
-  const approvedRow = control.db.prepare('SELECT status,approval_status,registration_approved_at_ms,subscription_status FROM users WHERE id=?').get(hostId);
-  if (!approvedRow || approvedRow.status !== 'active' || approvedRow.approval_status !== 'approved' || !approvedRow.registration_approved_at_ms || approvedRow.subscription_status !== 'inactive') throw new Error('approval DB state is inconsistent');
-  // Approval is idempotent and must remain visibly approved if clicked again.
-  result = await invoke('POST', '/api/admin/users/:id/status', {
-    headers: { authorization: `Bearer ${adminToken}` },
-    params: { id: String(hostId) },
-    body: { status: 'active', approveRegistration: true },
-  });
-  if (!result.payload?.ok || result.payload.user?.approvalStatus !== 'approved' || result.payload.user?.status !== 'active') throw new Error('repeat approval was not idempotent');
+  const end = Date.now() + 30 * dayMs;
   result = await invoke('POST', '/api/admin/users/:id/subscription', {
     headers: { authorization: `Bearer ${adminToken}` },
     params: { id: String(hostId) },
     body: { subscriptionStatus: 'active', startedAt: start, validUntil: end },
   });
-  if (!result.payload?.ok || result.payload.user?.subscriptionStatus !== 'active') throw new Error('admin subscription edit failed');
-  result = await invoke('POST', '/api/auth/login', { body: { email, password: 'Password123!' } });
-  if (!result.payload?.ok || !result.payload?.token) throw new Error('approved host login failed');
-  const portalToken = result.payload.token;
+  if (!result.payload?.ok || result.payload.user?.subscriptionStatus !== 'active') throw new Error('admin subscription renewal failed');
+  const renewed = control.db.prepare('SELECT trial_started_at_ms,trial_ends_at_ms,subscription_valid_until_ms,subscription_status FROM users WHERE id=?').get(hostId);
+  if (renewed.trial_started_at_ms !== row.trial_started_at_ms || renewed.trial_ends_at_ms !== row.trial_ends_at_ms || renewed.subscription_valid_until_ms !== end || renewed.subscription_status !== 'active') throw new Error('admin renewal unexpectedly reset trial history');
 
   // Create several sessions for the same Meet. They must remain active independently
   // until the host explicitly ends each one. Browser/API refresh must not change state.
@@ -228,8 +222,17 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('GET', '/api/admin/users', { headers: { authorization: `Bearer ${adminToken}` } });
   if (!result.payload?.ok || !result.payload.users.some(user => user.email === email && user.sessionCount >= 3)) throw new Error('admin user activity failed');
 
-  console.log(JSON.stringify({ ok: true, admin: process.env.ADMIN_EMAIL, host: email, hostControlledSession: true, storedPdf: true, pin: latestSession.pin }, null, 2));
-  try { control.db.close(); } catch (_) {}
+  // A process restart must not restart/reissue the 24-hour trial.
+  control.db.close();
+  const reloadRoutes = new Map();
+  const reloadApp = { use() {} };
+  for (const method of ['get', 'post']) reloadApp[method] = (route, ...handlers) => reloadRoutes.set(`${method.toUpperCase()} ${route}`, handlers);
+  const reopened = createSessionControl({ app: reloadApp, dataDir: temp });
+  const restored = reopened.db.prepare('SELECT trial_started_at_ms,trial_ends_at_ms,subscription_started_at_ms,subscription_valid_until_ms FROM users WHERE id=?').get(hostId);
+  if (restored.trial_started_at_ms !== row.trial_started_at_ms || restored.trial_ends_at_ms !== row.trial_ends_at_ms || restored.subscription_valid_until_ms !== end) throw new Error('server restart reset the trial or manually renewed subscription');
+  if (reopened.db.prepare('SELECT trial_started_at_ms FROM users WHERE email=?').get('legacy-existing@example.com').trial_started_at_ms !== null) throw new Error('restart gave a trial to an old account');
+  reopened.db.close();
+  console.log(JSON.stringify({ ok: true, version: '3.1.17', newUserAutoApproved: true, oneDayTrial: true, duplicateEmailBlocked: true, automaticExpiry: true, adminRenewal: true, restartPersistence: true, hostControlledSession: true, storedPdf: true }, null, 2));
   fs.rmSync(temp, { recursive: true, force: true });
 })().catch(error => {
   console.error(error.stack || error.message);

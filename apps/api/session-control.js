@@ -773,7 +773,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
     db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms,google_meet_created) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(id, user.id, pin, meetUrl, 'active', 1, now, expiresAt, options.googleCreated ? 1 : 0);
     trimUserSessions(user.id);
-    return { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes };
+    return { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes, googleCreated: Boolean(options.googleCreated) };
   }
 
   googleMeetRoutes({ app, db, auth, isHostEligible: hostEligibility, createSession: createHostSession,
@@ -793,11 +793,11 @@ module.exports = function createSessionControl({ app, dataDir }) {
     sweepIdleSessions(Date.now());
     // Always return every active session so the host can still see and explicitly end it.
     // Fill the remaining history slots with the newest ended sessions.
-    const activeRows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=1 ORDER BY created_at_ms DESC').all(req.authUser.id);
+    const activeRows = db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason,google_meet_created FROM host_sessions WHERE user_id=? AND active=1 ORDER BY created_at_ms DESC').all(req.authUser.id);
     const endedLimit = Math.max(0, sessionRetention - activeRows.length);
-    const endedRows = endedLimit ? db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, endedLimit) : [];
+    const endedRows = endedLimit ? db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason,google_meet_created FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, endedLimit) : [];
     const rows = [...activeRows, ...endedRows].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0));
-    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '' })) });
+    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '', googleCreated: Number(r.google_meet_created || 0) === 1 })) });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {

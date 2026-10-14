@@ -29,8 +29,19 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     send(value) { html = value; return this; },
   };
   let nextIndex = 0;
-  const next = async () => { const fn = handlers[nextIndex++]; if (fn) await fn(req, res, next); };
-  await next();
+  // Express middleware may call next() without returning its promise. Wait for
+  // every dispatched handler, including async Google refresh/Meet requests.
+  const work = [];
+  const next = () => {
+    const fn = handlers[nextIndex++];
+    if (fn) {
+      const task = Promise.resolve().then(() => fn(req, res, next));
+      work.push(task);
+      return task;
+    }
+  };
+  next();
+  for (let i = 0; i < work.length; i++) await work[i];
   return { status, payload, html, responseHeaders };
 }
 
@@ -43,6 +54,7 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     const headers = { authorization: `Bearer ${token}`, origin: 'https://zapperapp.in' };
     const status = await invoke('GET', '/api/google/meet/status', { headers });
     assert.equal(status.payload.enabled, true);
+    assert.equal(status.payload.connected, false);
     assert.equal(status.payload.maxZapperParticipants, 4);
     assert.equal(status.payload.googleMeetParticipantCap, false);
 
@@ -60,9 +72,13 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     const originalFetch = global.fetch;
     global.fetch = async (url, args) => {
       if (url === 'https://oauth2.googleapis.com/token') {
+        if (args.body.get('grant_type') === 'refresh_token') {
+          assert.equal(args.body.get('refresh_token'), 'mock-google-refresh-token');
+          return { ok: true, status: 200, json: async () => ({ access_token: 'mock-google-access-token' }) };
+        }
         assert.equal(args.body.get('code'), 'mock-oauth-code');
         assert.ok(args.body.get('code_verifier'));
-        return { ok: true, status: 200, json: async () => ({ access_token: 'mock-google-access-token' }) };
+        return { ok: true, status: 200, json: async () => ({ access_token: 'mock-google-access-token', refresh_token: 'mock-google-refresh-token' }) };
       }
       if (url === 'https://meet.googleapis.com/v2/spaces') {
         createdCalls++;
@@ -86,6 +102,23 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     r = await invoke('GET', '/api/google/meet/callback', { query: { state, code: 'mock-oauth-code' } });
     assert.equal(r.status, 400, 'OAuth state must not be reusable');
     assert.equal(createdCalls, 1, 'replayed OAuth state should not call Google');
+
+    // A reusable Google authorization is encrypted in SQLite. The second
+    // Create Session call should create a PIN immediately without OAuth popup.
+    const saved = control.db.prepare('SELECT * FROM google_meet_connections WHERE user_id=?').get(2);
+    assert.ok(saved, 'Google refresh token must be retained for subsequent sessions');
+    assert.doesNotMatch(saved.refresh_token_encrypted, /mock-google-refresh-token/);
+    assert.ok(saved.refresh_token_encrypted.startsWith('v1.'));
+    r = await invoke('GET', '/api/google/meet/status', { headers });
+    assert.equal(r.payload.connected, true);
+    r = await invoke('POST', '/api/google/meet/start', { headers, body: { requestId: 'another-session-create' } });
+    assert.equal(r.status, 200);
+    assert.equal(r.payload.reusedGoogleConnection, true);
+    assert.ok(r.payload.session.googleCreated);
+    assert.match(r.payload.session.pin, /^\d{6}$/);
+    assert.equal(createdCalls, 2, 'should use refresh token and create another Meet');
+    const sessionList = await invoke('GET', '/api/sessions', { headers });
+    assert.equal(sessionList.payload.sessions.filter(s => s.googleCreated).length, 2);
 
     const seatTokens = [];
     for (let i = 0; i < 4; i++) {
@@ -118,6 +151,8 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
       assert.equal(redemption.payload.ok, true, 'legacy manual PIN behavior must remain unchanged');
     }
 
+    // Force a new OAuth request to test the callback's restricted-space case.
+    control.db.prepare('DELETE FROM google_meet_connections WHERE user_id=?').run(saved.user_id);
     // Do not create a PIN if Workspace policy refuses OPEN access.
     const denialStart = await invoke('POST', '/api/google/meet/start', { headers, body: { requestId: 'restricted-policy-test' } });
     const denialState = new URL(denialStart.payload.url).searchParams.get('state');
@@ -129,13 +164,29 @@ async function invoke(method, url, { body = {}, headers = {}, query = {}, params
     assert.match(denied.html, /did not confirm open access/);
     assert.equal(control.db.prepare('SELECT COUNT(*) AS total FROM host_sessions').get().total, before);
 
+    // Restore the encrypted connection to simulate later Google revocation.
+    control.db.prepare('INSERT INTO google_meet_connections(user_id,oauth_client_id,refresh_token_encrypted,connected_at_ms) VALUES(?,?,?,?)')
+      .run(saved.user_id, saved.oauth_client_id, saved.refresh_token_encrypted, saved.connected_at_ms);
+    // A revoked refresh token must require Google OAuth again, never silently
+    // create a PIN or reuse an unrelated Google account.
+    global.fetch = async (url, args) => {
+      if (url === 'https://oauth2.googleapis.com/token' && args.body.get('grant_type') === 'refresh_token') {
+        return { ok: false, status: 400, json: async () => ({ error: 'invalid_grant' }) };
+      }
+      throw Error('A revoked Google connection must not call Meet');
+    };
+    r = await invoke('POST', '/api/google/meet/start', { headers, body: { requestId: 'reconnect-google-request' } });
+    assert.equal(r.payload.requiresGoogleSignIn, true);
+    assert.ok(r.payload.url.startsWith('https://accounts.google.com/'));
+    assert.equal(control.db.prepare('SELECT COUNT(*) AS count FROM google_meet_connections').get().count, 0);
+
     // Subscription rechecked before OAuth is initiated.
     control.db.prepare("UPDATE users SET subscription_status='inactive' WHERE email='meet-host@example.com'").run();
     r = await invoke('POST', '/api/google/meet/start', { headers, body: { requestId: 'inactive-host-test' } });
     assert.equal(r.status, 402);
     assert.equal(r.payload.code, 'SUBSCRIPTION_INACTIVE');
     global.fetch = originalFetch;
-    console.log(JSON.stringify({ ok: true, version: '3.1.20', oauthPkceAndOrigin: true, openMeetingCreation: true, pinCreated: true, replayProtection: true, fourZapperSeats: true, deviceRejoinDoesNotUseAnotherSeat: true, seatRelease: true, manualFlowUnchanged: true, restrictedMeetRejected: true, subscriptionGate: true }));
+    console.log(JSON.stringify({ ok: true, version: '3.1.21', storedRefreshTokenEncrypted: true, noRepeatGoogleLogin: true, revokedConnectionReconnect: true, oauthPkceAndOrigin: true, openMeetingCreation: true, pinCreated: true, replayProtection: true, fourZapperSeats: true, deviceRejoinDoesNotUseAnotherSeat: true, seatRelease: true, manualFlowUnchanged: true, restrictedMeetRejected: true, subscriptionGate: true }));
   } finally {
     control.db.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

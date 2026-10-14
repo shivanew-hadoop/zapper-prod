@@ -17,6 +17,7 @@ let editingUser = null;
 let searchTimer = null;
 let currentSessionId = '';
 let currentSessionPin = '';
+let googleMeetConnected = false;
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
 const $ = id => document.getElementById(id);
 function finishAuthRestore() { document.documentElement.classList.remove('auth-restoring'); }
@@ -264,6 +265,8 @@ async function loadHostPortal() {
   $('planBadge').textContent = onTrial ? 'Trial active' : active ? 'Active' : account.subscriptionStatus;
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
   $('createSessionBtn').disabled = !active;
+  googleMeetConnected = false;
+  $('autoMeetDetails').classList.add('hidden');
   $('googleMeetCreateBtn').disabled = true;
   $('googleMeetStatus').textContent = active ? 'Checking Google Meet connection…' : 'Your subscription must be active to create a Google Meet.';
   $('sessionError').textContent = !active ? 'Your trial or subscription has ended. Contact the Zapper administrator to renew access.' : '';
@@ -294,11 +297,13 @@ async function loadSessions() {
     currentSessionPin = activeSession.pin;
     $('pinValue').textContent = activeSession.pin;
     $('pinMeet').textContent = activeSession.meetUrl;
+    showAutoMeetUrl(activeSession);
     $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
     $('endCurrentSession').disabled = false;
     $('pinBox').classList.remove('hidden');
   } else if (!currentSessionId) {
     $('pinBox').classList.add('hidden');
+    $('autoMeetDetails').classList.add('hidden');
   }
   $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => {
     const active = session.active !== false && session.status === 'active';
@@ -357,14 +362,23 @@ async function refreshGoogleMeetAvailability() {
   try {
     const data = await api('/api/google/meet/status');
     const eligible = account?.role !== 'admin' && account?.subscriptionStatus === 'active';
+    googleMeetConnected = Boolean(data.enabled && data.connected);
     $('googleMeetCreateBtn').disabled = !(data.enabled && eligible);
     $('googleMeetStatus').textContent = data.enabled
-      ? 'Ready. Google will ask you to sign in and authorize meeting creation.'
-      : 'Google Meet automatic creation needs OAuth setup by the administrator. You can still use the manual link below.';
+      ? (googleMeetConnected ? 'Google connected. New sessions can be created without signing in again.' : 'Ready. Click Create Session to connect your Google account once.')
+      : 'One-time Google Cloud OAuth setup is still required on Railway. Until configured, use the manual link below.';
   } catch (_) {
     $('googleMeetCreateBtn').disabled = true;
     $('googleMeetStatus').textContent = 'Automatic Google Meet is unavailable on this backend. The manual Meet link still works.';
   }
+}
+
+function showAutoMeetUrl(session) {
+  const generated = session?.googleCreated === true;
+  $('autoMeetDetails').classList.toggle('hidden', !generated);
+  if (!generated) return;
+  $('autoMeetUrl').value = session.meetUrl;
+  $('openAutoMeet').href = session.meetUrl;
 }
 
 function showCreatedSession(session) {
@@ -372,8 +386,13 @@ function showCreatedSession(session) {
   currentSessionPin = session.pin;
   $('pinValue').textContent = session.pin;
   $('pinMeet').textContent = session.meetUrl;
-  $('meetUrl').value = session.meetUrl;
-  rememberMeetUrl(session.meetUrl);
+  showAutoMeetUrl(session);
+  // The manual fallback keeps its own editable link; Google-created links
+  // are displayed separately in the non-editable field above.
+  if (!session.googleCreated) {
+    $('meetUrl').value = session.meetUrl;
+    rememberMeetUrl(session.meetUrl);
+  }
   $('pinStatus').textContent = 'Active — share your six-digit PIN with Zapper participants.';
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');
@@ -382,19 +401,20 @@ function showCreatedSession(session) {
 $('googleMeetCreateBtn').onclick = async () => {
   $('sessionError').textContent = '';
   const button = $('googleMeetCreateBtn');
-  // Open synchronously on the click to avoid popup blockers, before awaiting fetch.
-  const popup = window.open('about:blank', '_blank');
-  if (!popup) {
-    $('sessionError').textContent = 'Please allow popups from Zapper so you can sign in with Google.';
+  // Open before fetch only for a first-time Google connection: mobile and
+  // desktop browsers may block popups started after an async request.
+  const popup = googleMeetConnected ? null : window.open('about:blank', '_blank');
+  if (!googleMeetConnected && !popup) {
+    $('sessionError').textContent = 'Please allow the Google sign-in popup from Zapper.';
     return;
   }
-  popup.document.body.textContent = 'Connecting to Google Meet…';
+  if (popup) popup.document.body.textContent = 'Connecting to Google…';
   const requestId = crypto.randomUUID();
   const expectedOrigin = new URL(API_BASE).origin;
   button.disabled = true;
   let finished = false;
   const onResult = async event => {
-    if (finished || event.origin !== expectedOrigin || event.source !== popup ||
+    if (finished || !popup || event.origin !== expectedOrigin || event.source !== popup ||
         event.data?.type !== 'zapper-google-meet-result' || event.data?.requestId !== requestId) return;
     finished = true;
     window.removeEventListener('message', onResult);
@@ -404,20 +424,42 @@ $('googleMeetCreateBtn').onclick = async () => {
       if (event.data.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
       return;
     }
-    showCreatedSession(event.data.session);
+    showCreatedSession({ ...event.data.session, googleCreated: true });
+    googleMeetConnected = false; // status will reflect whether Google returned a reusable refresh token
+    await refreshGoogleMeetAvailability();
     await loadSessions().catch(error => { $('sessionError').textContent = error.message; });
   };
-  window.addEventListener('message', onResult);
+  if (popup) window.addEventListener('message', onResult);
   try {
     const result = await api('/api/google/meet/start', { method: 'POST', body: JSON.stringify({ requestId }) });
-    popup.location.replace(result.url);
+    if (result.session) {
+      // Saved Google connection: backend already created the room and PIN.
+      finished = true;
+      window.removeEventListener('message', onResult);
+      showCreatedSession({ ...result.session, googleCreated: true });
+      await loadSessions();
+      return;
+    }
+    if (result.requiresGoogleSignIn && result.url) {
+      googleMeetConnected = false;
+      if (popup) {
+        popup.location.replace(result.url);
+      } else {
+        // The refresh token expired; a synchronous popup on the next click
+        // avoids popup blockers and keeps the current page/session intact.
+        $('sessionError').textContent = 'Google needs to reconnect. Click Create Session again to sign in.';
+      }
+      return;
+    }
+    throw new Error('Google Meet did not return a session or sign-in request.');
   } catch (error) {
     finished = true;
     window.removeEventListener('message', onResult);
-    popup.close();
-    button.disabled = false;
     $('sessionError').textContent = error.message;
     if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
+  } finally {
+    if (popup && finished) popup.close();
+    button.disabled = false;
   }
 };
 

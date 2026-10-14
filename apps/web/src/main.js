@@ -104,6 +104,9 @@ function refreshHeaderState() {
   ['navLogin', 'mobileLoginBtn'].forEach(id => $(id)?.classList.toggle('hidden', loggedIn));
   ['navSignup', 'mobileSignupBtn'].forEach(id => $(id)?.classList.toggle('hidden', loggedIn));
   ['dashboardBtn', 'mobileDashboardBtn'].forEach(id => $(id)?.classList.toggle('hidden', !loggedIn));
+  const hostLoggedIn = loggedIn && account.role !== 'admin';
+  $('hostHomeDashboardBtn')?.classList.toggle('hidden', !hostLoggedIn);
+  $('homePrimaryActions')?.classList.toggle('hostDashboardVisible', hostLoggedIn);
   ['navLogout', 'mobileLogoutBtn'].forEach(id => $(id)?.classList.toggle('hidden', !loggedIn));
 }
 function closeMobileNav() {
@@ -193,6 +196,7 @@ $('forgotPasswordBtn').onclick = () => setMode('forgot');
 $('backToLoginBtn').onclick = () => setMode('login');
 $('trialBackToLogin').onclick = () => setMode('login');
 $('dashboardBtn').onclick = () => loadPortal();
+$('hostHomeDashboardBtn').onclick = () => loadPortal();
 $('navLogout').onclick = logout;
 $('mobileMenuBtn').onclick = toggleMobileNav;
 $('mobileLoginBtn').onclick = () => openAuth('login');

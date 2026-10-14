@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const WebSocket = require('ws');
 const createSessionControl = require('./session-control');
+const createHostCaptionRelay = require('./live-caption-relay');
 const API_VERSION = require('./package.json').version;
 
 const PORT = Number(process.env.PORT || 8080);
@@ -112,6 +113,7 @@ app.get('/', (_req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/stt' });
+const hostCaptionRelay = createHostCaptionRelay({ openState: WebSocket.OPEN });
 
 // One authoritative live transcript is accumulated per host session. Multiple
 // desktops can listen to the same PIN, but only one capture source at a time is
@@ -226,6 +228,9 @@ wss.on('connection', (clientWs, req) => {
 
   const connectionId = crypto.randomUUID();
   registerCapture(capture.session.id, connectionId);
+  // PIN-authorized desktops subscribe immediately, even before Meet supplies
+  // any audio. Only this session's host microphone captions are forwarded.
+  if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -329,7 +334,9 @@ wss.on('connection', (clientWs, req) => {
         const text = String(alt?.transcript || '');
         if (!text) return;
         const isFinal = Boolean(msg.is_final);
-        sendClient({ type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) });
+        const caption = { type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) };
+        sendClient(caption);
+        if (hostAudio) hostCaptionRelay.publish(capture.session.id, caption);
         const now = Date.now();
         if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
         if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
@@ -385,6 +392,7 @@ wss.on('connection', (clientWs, req) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
+    if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
     unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);

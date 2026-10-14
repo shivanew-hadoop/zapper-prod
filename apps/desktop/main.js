@@ -683,56 +683,53 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
 
     let firstAudioSeen = false;
 
-    onAudioChunk(pcmBuffer => {
-      if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
+    // Open the PIN-authorized caption socket BEFORE any Meet audio arrives.
+    // Without this, a silent desktop cannot receive the host's browser
+    // microphone captions until someone on Meet first speaks.
+    remoteSttStarted = true;
+    startRemoteTranscriptStream({ backendUrl: BACKEND_URL, sessionToken, googleEmail }, payload => {
+      if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
-      if (!remoteSttStarted) {
-        remoteSttStarted = true;
-        sendStatus('Meet audio detected. Connecting to low-latency captions...');
-
-        startRemoteTranscriptStream({ backendUrl: BACKEND_URL, sessionToken, googleEmail }, payload => {
-          if (!overlayWindow || overlayWindow.isDestroyed()) return;
-
-          if (payload.error) {
-            overlayWindow.webContents.send('status', 'Transcription error: ' + payload.error);
-            return;
-          }
-
-          if (payload.type === 'status') {
-            overlayWindow.webContents.send('status', payload.text);
-            return;
-          }
-
-          if (payload.type === 'session_ended') {
-            overlayWindow.webContents.send('session-ended', payload.text || 'This Zapper session is no longer active.');
-            stopActiveCaptureRuntime('Host ended session.').catch(() => {});
-            return;
-          }
-
-          if (payload.type === 'limit_reached') {
-            transcriptLimitReached = true;
-            overlayWindow.webContents.send('status', payload.text || 'Transcript limit reached. Captions disconnected.');
-            stopRemoteTranscriptStream();
-            return;
-          }
-
-          if (payload.type === 'speech_started') {
-            overlayWindow.webContents.send('speech-started');
-            return;
-          }
-
-          overlayWindow.webContents.send('transcript', {
-            text: payload.text,
-            isFinal: payload.isFinal
-          });
-        });
+      if (payload.error) {
+        overlayWindow.webContents.send('status', 'Transcription error: ' + payload.error);
+        return;
       }
 
+      if (payload.type === 'status') {
+        overlayWindow.webContents.send('status', payload.text);
+        return;
+      }
+
+      if (payload.type === 'session_ended') {
+        overlayWindow.webContents.send('session-ended', payload.text || 'This Zapper session is no longer active.');
+        stopActiveCaptureRuntime('Host ended session.').catch(() => {});
+        return;
+      }
+
+      if (payload.type === 'limit_reached') {
+        transcriptLimitReached = true;
+        overlayWindow.webContents.send('status', payload.text || 'Transcript limit reached. Captions disconnected.');
+        stopRemoteTranscriptStream();
+        return;
+      }
+
+      if (payload.type === 'speech_started') {
+        overlayWindow.webContents.send('speech-started');
+        return;
+      }
+
+      overlayWindow.webContents.send('transcript', {
+        text: payload.text,
+        isFinal: payload.isFinal
+      });
+    });
+
+    onAudioChunk(pcmBuffer => {
+      if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
       if (!firstAudioSeen) {
         firstAudioSeen = true;
         sendStatus('Streaming low-latency captions...');
       }
-
       sendAudioChunk(pcmBuffer);
     });
 

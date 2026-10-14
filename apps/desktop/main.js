@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const DEFAULT_BACKEND_URL = 'https://api.zapperapp.in';
 let APP_CONFIG = {};
@@ -13,6 +14,25 @@ const DOWNLOAD_URL = String(APP_CONFIG.downloadUrl || DEFAULT_DOWNLOAD_URL).trim
 // Permanent app data folder. Keep this value unchanged so Google cookies/session persist
 // across app restarts, packaging, and future builds on the same machine.
 app.setPath('userData', path.join(app.getPath('appData'), 'ZapperPlatformProfile'));
+
+// Per-installation ID is used only to avoid counting a rejoined desktop twice
+// against the four Zapper PIN slots in Google-created meetings. It is not an
+// account credential and does not alter Google cookies or sign-in behavior.
+function installationDeviceId() {
+  const folder = app.getPath('userData');
+  const file = path.join(folder, 'zapper-install-device-id');
+  try {
+    const stored = fs.readFileSync(file, 'utf8').trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stored)) return stored;
+  } catch (_) {}
+  const created = crypto.randomUUID();
+  try { fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(file, created, { flag: 'wx', mode: 0o600 }); }
+  catch (_) {
+    try { return fs.readFileSync(file, 'utf8').trim() || created; } catch (_) {}
+  }
+  return created;
+}
+const ZAPPER_DEVICE_ID = installationDeviceId();
 
 // Makes Task Manager/app metadata show the product name after packaged install.
 app.setName('Zapper');
@@ -365,7 +385,7 @@ async function redeemSessionPin(pin) {
   const res = await fetch(`${base}/api/desktop/redeem-pin`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pin: String(pin || '').replace(/\D/g, '').slice(0, 6) })
+    body: JSON.stringify({ pin: String(pin || '').replace(/\D/g, '').slice(0, 6), deviceId: ZAPPER_DEVICE_ID })
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) return { success: false, error: data.error || `Session PIN failed (${res.status})` };

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
+const googleMeetRoutes = require('./google-meet');
 
 module.exports = function createSessionControl({ app, dataDir }) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -156,6 +157,16 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('host_sessions', 'last_speech_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'end_reason', 'TEXT');
   ensureColumn('host_sessions', 'participant_google_email', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('host_sessions', 'google_meet_created', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`CREATE TABLE IF NOT EXISTS session_participant_seats(
+    seat_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at_ms INTEGER NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES host_sessions(id) ON DELETE CASCADE
+  ); CREATE INDEX IF NOT EXISTS idx_participant_seats_session ON session_participant_seats(session_id,active);`);
+  ensureColumn('session_participant_seats', 'device_id', "TEXT NOT NULL DEFAULT ''");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_session_device_seat ON session_participant_seats(session_id,device_id) WHERE device_id<>''");
   // Normalize the explicit active flag for databases created by earlier builds.
   db.exec("UPDATE host_sessions SET active=CASE WHEN status='active' AND ended_at_ms IS NULL THEN 1 ELSE 0 END;");
 
@@ -327,7 +338,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   bootstrapAdmin();
 
   const portalSign = user => signToken({ sub: Number(user.id), type: 'portal' }, portalTokenDays * 86400000, 'zapper-portal');
-  const participantSign = (user, session) => signToken({ sub: Number(user.id), sessionId: session.id, pin: session.pin, type: 'participant' }, participantTokenMinutes * 60000, 'zapper-desktop', 'zapper-electron');
+  const participantSign = (user, session, seatId = '') => signToken({ sub: Number(user.id), sessionId: session.id, pin: session.pin, type: 'participant', ...(seatId ? { jti: seatId } : {}) }, participantTokenMinutes * 60000, 'zapper-desktop', 'zapper-electron');
 
   function auth(req, res, next) {
     try {
@@ -386,6 +397,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
       let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
       const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!session || !user) return null;
+      if (Number(session.google_meet_created || 0) === 1) {
+        const seat = payload.jti && db.prepare('SELECT active FROM session_participant_seats WHERE seat_id=? AND session_id=?').get(payload.jti, session.id);
+        if (!seat || Number(seat.active || 0) !== 1) return null;
+      }
       if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
       const active = Number(session.active || 0) === 1 && session.status === 'active';
       return { payload, session, user, active, subscriptionValid: subscriptionState(user).valid };
@@ -740,21 +755,38 @@ module.exports = function createSessionControl({ app, dataDir }) {
     res.json({ ok: true, user: publicUser(req.authUser), plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention } });
   });
 
-  app.post('/api/sessions', auth, (req, res) => {
-    if (req.authUser.role === 'admin') return res.status(403).json({ ok: false, error: 'Admin accounts manage Zapper; use a host account to create meeting sessions.' });
-    const sub = subscriptionState(req.authUser);
-    if (!sub.valid) return res.status(402).json({ ok: false, code: 'SUBSCRIPTION_INACTIVE', error: 'Your trial or subscription has ended. Please contact the Zapper administrator to activate or renew your plan.' });
-    const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
-    if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
+  function hostEligibility(user) {
+    if (!user || user.status !== 'active') return { status: 403, error: 'Account access is disabled.' };
+    if (user.role === 'admin') return { status: 403, error: 'Admin accounts manage Zapper; use a host account to create meeting sessions.' };
+    if (!subscriptionState(user).valid) return { status: 402, code: 'SUBSCRIPTION_INACTIVE', error: 'Your trial or subscription has ended. Please contact the Zapper administrator to activate or renew your plan.' };
+    return null;
+  }
+
+  // Shared by the existing manual route and Google OAuth callback. The PIN,
+  // retention, trial and session lifetime logic remain identical.
+  function createHostSession(user, meetUrlInput, options = {}) {
+    const meetUrl = normalizeMeetUrl(meetUrlInput);
+    if (!meetUrl) throw new Error('Invalid Google Meet link.');
     const now = Date.now();
-    // Do not supersede an existing active session, even for the same Meet URL.
-    // Every created PIN stays active until the host explicitly ends that specific session.
     const pin = uniquePin(); const id = crypto.randomUUID();
     const expiresAt = now + hostSessionMaxMs;
-    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?,?)')
-      .run(id, req.authUser.id, pin, meetUrl, 'active', 1, now, expiresAt);
-    trimUserSessions(req.authUser.id);
-    res.json({ ok: true, session: { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes } });
+    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms,google_meet_created) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(id, user.id, pin, meetUrl, 'active', 1, now, expiresAt, options.googleCreated ? 1 : 0);
+    trimUserSessions(user.id);
+    return { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes };
+  }
+
+  googleMeetRoutes({ app, db, auth, isHostEligible: hostEligibility, createSession: createHostSession,
+    allowedOrigins: String(process.env.WEB_ORIGINS || 'http://localhost:5173').split(',').map(item => item.trim()).filter(Boolean),
+  });
+
+  app.post('/api/sessions', auth, (req, res) => {
+    const denied = hostEligibility(req.authUser);
+    if (denied) return res.status(denied.status).json({ ok: false, code: denied.code, error: denied.error });
+    const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
+    if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
+    // Existing manual Meet creation and PIN behavior remains available.
+    res.json({ ok: true, session: createHostSession(req.authUser, meetUrl) });
   });
 
   app.get('/api/sessions', auth, (req, res) => {
@@ -784,13 +816,42 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const session = db.prepare("SELECT * FROM host_sessions WHERE pin=? AND active=1 AND status='active'").get(pin);
     const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
     if (!session || !user) return res.status(404).json({ ok: false, error: 'This is not a valid active PIN. It may have been ended or expired. Ask the host for a current 6-digit PIN.' });
+    // Limit GOOGLE-CREATED sessions to four Zapper desktop participants.
+    // This cannot limit people who independently open a shared Google Meet URL.
+    let seatId = '';
+    if (Number(session.google_meet_created || 0) === 1) {
+      // Current desktop versions send a persistent installation ID so a user
+      // can re-enter the same PIN without consuming additional participant slots.
+      // Older desktop versions remain compatible, but cannot reuse a seat.
+      const rawDeviceId = String(req.body?.deviceId || '').trim();
+      const deviceId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawDeviceId) ? rawDeviceId.toLowerCase() : '';
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const existingSeat = deviceId && db.prepare('SELECT seat_id FROM session_participant_seats WHERE session_id=? AND device_id=? AND active=1').get(session.id, deviceId);
+        if (existingSeat) seatId = existingSeat.seat_id;
+        else {
+          const seats = Number(db.prepare('SELECT COUNT(*) AS count FROM session_participant_seats WHERE session_id=? AND active=1').get(session.id).count);
+          if (seats >= 4) {
+            db.exec('ROLLBACK');
+            return res.status(409).json({ ok: false, code: 'SESSION_FULL', error: 'This Zapper session already has four participant slots in use. Ask the host to create a new session if more slots are needed.' });
+          }
+          seatId = crypto.randomUUID();
+          const inactiveSeat = deviceId && db.prepare('SELECT seat_id FROM session_participant_seats WHERE session_id=? AND device_id=? AND active=0').get(session.id, deviceId);
+          if (inactiveSeat) {
+            seatId = inactiveSeat.seat_id;
+            db.prepare('UPDATE session_participant_seats SET active=1 WHERE seat_id=?').run(seatId);
+          } else db.prepare('INSERT INTO session_participant_seats(seat_id,session_id,active,created_at_ms,device_id) VALUES(?,?,1,?,?)').run(seatId, session.id, now, deviceId);
+        }
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
     db.prepare(`UPDATE host_sessions SET participant_started_at_ms=COALESCE(participant_started_at_ms, ?), last_speech_at_ms=COALESCE(last_speech_at_ms, ?) WHERE id=? AND active=1`).run(now, now, session.id);
     const refreshedSession = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
     res.set('Cache-Control', 'no-store').json({
       ok: true,
       meetUrl: refreshedSession.meet_url,
       sessionId: refreshedSession.id,
-      sessionToken: participantSign(user, refreshedSession),
+      sessionToken: participantSign(user, refreshedSession, seatId),
       idleTimeoutMinutes: sessionIdleTimeoutMinutes,
       expiresAt: refreshedSession.expires_at_ms,
       maxMinutes: hostSessionMaxMinutes,
@@ -817,6 +878,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
     // Zapper without invalidating the host's PIN. Only /api/sessions/:id/end may end it.
     const verified = verifyParticipantToken(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), { allowEnded: true });
     if (!verified) return res.status(401).json({ ok: false, error: 'Session authorization expired.' });
+    if (Number(verified.session.google_meet_created || 0) === 1 && verified.payload.jti) {
+      db.prepare('UPDATE session_participant_seats SET active=0 WHERE seat_id=? AND session_id=?').run(verified.payload.jti, verified.session.id);
+    }
     res.json({ ok: true, active: Number(verified.session.active || 0) === 1, detached: true });
   });
 

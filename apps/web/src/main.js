@@ -264,9 +264,12 @@ async function loadHostPortal() {
   $('planBadge').textContent = onTrial ? 'Trial active' : active ? 'Active' : account.subscriptionStatus;
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
   $('createSessionBtn').disabled = !active;
+  $('googleMeetCreateBtn').disabled = true;
+  $('googleMeetStatus').textContent = active ? 'Checking Google Meet connection…' : 'Your subscription must be active to create a Google Meet.';
   $('sessionError').textContent = !active ? 'Your trial or subscription has ended. Contact the Zapper administrator to renew access.' : '';
   restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
+  if (active) void refreshGoogleMeetAvailability();
   window.scrollTo({ top: 0 });
 }
 
@@ -350,6 +353,74 @@ async function loadTranscripts() {
   });
 }
 
+async function refreshGoogleMeetAvailability() {
+  try {
+    const data = await api('/api/google/meet/status');
+    const eligible = account?.role !== 'admin' && account?.subscriptionStatus === 'active';
+    $('googleMeetCreateBtn').disabled = !(data.enabled && eligible);
+    $('googleMeetStatus').textContent = data.enabled
+      ? 'Ready. Google will ask you to sign in and authorize meeting creation.'
+      : 'Google Meet automatic creation needs OAuth setup by the administrator. You can still use the manual link below.';
+  } catch (_) {
+    $('googleMeetCreateBtn').disabled = true;
+    $('googleMeetStatus').textContent = 'Automatic Google Meet is unavailable on this backend. The manual Meet link still works.';
+  }
+}
+
+function showCreatedSession(session) {
+  currentSessionId = session.id;
+  currentSessionPin = session.pin;
+  $('pinValue').textContent = session.pin;
+  $('pinMeet').textContent = session.meetUrl;
+  $('meetUrl').value = session.meetUrl;
+  rememberMeetUrl(session.meetUrl);
+  $('pinStatus').textContent = 'Active — share your six-digit PIN with Zapper participants.';
+  $('endCurrentSession').disabled = false;
+  $('pinBox').classList.remove('hidden');
+}
+
+$('googleMeetCreateBtn').onclick = async () => {
+  $('sessionError').textContent = '';
+  const button = $('googleMeetCreateBtn');
+  // Open synchronously on the click to avoid popup blockers, before awaiting fetch.
+  const popup = window.open('about:blank', '_blank');
+  if (!popup) {
+    $('sessionError').textContent = 'Please allow popups from Zapper so you can sign in with Google.';
+    return;
+  }
+  popup.document.body.textContent = 'Connecting to Google Meet…';
+  const requestId = crypto.randomUUID();
+  const expectedOrigin = new URL(API_BASE).origin;
+  button.disabled = true;
+  let finished = false;
+  const onResult = async event => {
+    if (finished || event.origin !== expectedOrigin || event.source !== popup ||
+        event.data?.type !== 'zapper-google-meet-result' || event.data?.requestId !== requestId) return;
+    finished = true;
+    window.removeEventListener('message', onResult);
+    button.disabled = false;
+    if (!event.data.ok) {
+      $('sessionError').textContent = event.data.error || 'Google Meet could not be created.';
+      if (event.data.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
+      return;
+    }
+    showCreatedSession(event.data.session);
+    await loadSessions().catch(error => { $('sessionError').textContent = error.message; });
+  };
+  window.addEventListener('message', onResult);
+  try {
+    const result = await api('/api/google/meet/start', { method: 'POST', body: JSON.stringify({ requestId }) });
+    popup.location.replace(result.url);
+  } catch (error) {
+    finished = true;
+    window.removeEventListener('message', onResult);
+    popup.close();
+    button.disabled = false;
+    $('sessionError').textContent = error.message;
+    if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
+  }
+};
+
 $('meetUrl').addEventListener('input', () => rememberMeetUrl($('meetUrl').value));
 $('sessionForm').onsubmit = async event => {
   event.preventDefault();
@@ -358,15 +429,7 @@ $('sessionForm').onsubmit = async event => {
     const requestedMeetUrl = $('meetUrl').value.trim();
     rememberMeetUrl(requestedMeetUrl);
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: requestedMeetUrl }) });
-    currentSessionId = data.session.id;
-    currentSessionPin = data.session.pin;
-    $('pinValue').textContent = data.session.pin;
-    $('pinMeet').textContent = data.session.meetUrl;
-    $('meetUrl').value = data.session.meetUrl;
-    rememberMeetUrl(data.session.meetUrl);
-    $('pinStatus').textContent = 'Active — share only this PIN with the participant.';
-    $('endCurrentSession').disabled = false;
-    $('pinBox').classList.remove('hidden');
+    showCreatedSession(data.session);
     await loadSessions();
   } catch (error) {
     $('sessionError').textContent = error.message;

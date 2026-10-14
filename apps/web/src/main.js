@@ -224,6 +224,11 @@ $('authForm').onsubmit = async event => {
     }
     const data = await api(`/api/auth/${mode}`, { method: 'POST', body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value, name: $('name').value.trim() }) });
     if (mode === 'register') {
+      // Never display 'trial activated' unless the backend returned both dates.
+      if (data.user?.subscriptionStatus !== 'active' || !data.user?.subscriptionStartedAt ||
+          !data.user?.subscriptionValidUntil || !data.user?.trialEndsAt) {
+        throw new Error('Your account was created, but its trial is not active. Please contact Zapper support; do not register again.');
+      }
       // Registration succeeds immediately, but sign-in remains a separate step.
       $('email').value = data.user?.email || $('email').value.trim();
       showTrialWelcome(data.user);

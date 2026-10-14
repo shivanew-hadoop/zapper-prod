@@ -98,6 +98,53 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('users', 'subscription_started_at_ms', 'INTEGER');
   ensureColumn('users', 'last_login_at_ms', 'INTEGER');
 
+  // SQLite-level safety net: even a legacy registration handler that inserts a
+  // host without subscription fields must persist the one-time trial. Existing
+  // subscriptions, trial history, disabled accounts and historical imports are
+  // not changed by this INSERT-only trigger.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS host_registration_trial_v318
+    AFTER INSERT ON users
+    WHEN NEW.role='host'
+      AND NEW.status <> 'disabled'
+      AND NEW.subscription_status IN ('inactive','active')
+      AND NEW.trial_started_at_ms IS NULL AND NEW.trial_ends_at_ms IS NULL
+      AND NEW.subscription_started_at_ms IS NULL AND NEW.subscription_valid_until_ms IS NULL
+      AND NEW.created_at_ms BETWEEN (CAST(strftime('%s','now') AS INTEGER)*1000 - 86400000)
+                               AND (CAST(strftime('%s','now') AS INTEGER)*1000 + 1000)
+    BEGIN
+      UPDATE users SET status='active', approval_status='approved',
+        registration_approved_at_ms=COALESCE(registration_approved_at_ms, NEW.created_at_ms),
+        trial_started_at_ms=NEW.created_at_ms,
+        trial_ends_at_ms=NEW.created_at_ms + 86400000,
+        subscription_status='active',
+        subscription_started_at_ms=NEW.created_at_ms,
+        subscription_valid_until_ms=NEW.created_at_ms + 86400000
+      WHERE id=NEW.id;
+    END;
+  `);
+
+  // Repair only *recent, unused* registrations left incomplete by a previously
+  // deployed API. Use the ORIGINAL registration time; never restart the clock.
+  // Older accounts, users with any sessions, historical subscriptions/trials,
+  // disabled accounts and administrator accounts must not receive new access.
+  const repairedTrialAccounts = db.prepare(`
+    UPDATE users SET status='active', approval_status='approved',
+      registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms),
+      trial_started_at_ms=created_at_ms,
+      trial_ends_at_ms=created_at_ms+86400000,
+      subscription_status='active',
+      subscription_started_at_ms=created_at_ms,
+      subscription_valid_until_ms=created_at_ms+86400000
+    WHERE role='host' AND status IN ('active','pending')
+      AND subscription_status IN ('inactive','active')
+      AND trial_started_at_ms IS NULL AND trial_ends_at_ms IS NULL
+      AND subscription_started_at_ms IS NULL AND subscription_valid_until_ms IS NULL
+      AND created_at_ms BETWEEN ? AND ?
+      AND NOT EXISTS (SELECT 1 FROM host_sessions WHERE user_id=users.id)
+  `).run(Date.now()-86400000, Date.now()).changes;
+  if (repairedTrialAccounts) console.info(`[TRIAL] Repaired ${repairedTrialAccounts} recent, incomplete first-time registration(s).`);
+
   // Registration is self-service. Unlock legacy pending hosts without resetting
   // subscriptions or giving existing accounts a new trial. Disabled users stay disabled.
   db.prepare("UPDATE users SET approval_status='approved', registration_approved_at_ms=COALESCE(registration_approved_at_ms, created_at_ms), status=CASE WHEN status='pending' THEN 'active' ELSE status END WHERE approval_status <> 'approved' OR status='pending'").run();
@@ -619,6 +666,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       const name = String(req.body?.name || '').trim().slice(0, 80);
       if (!name) return res.status(400).json({ ok: false, error: 'Enter your name.' });
       if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return res.status(400).json({ ok: false, error: 'Use a valid email and a password with at least 8 characters.' });
+      if (db.prepare('SELECT id FROM users WHERE lower(email)=?').get(email)) return res.status(409).json({ ok: false, error: 'This email is already registered.' });
       const now = Date.now();
       const trialEndsAt = now + trialDurationMs;
       // Unique email is enforced by SQLite. The trial is granted once, when
@@ -626,14 +674,25 @@ module.exports = function createSessionControl({ app, dataDir }) {
       const info = db.prepare(`INSERT INTO users(email,password_hash,name,role,status,approval_status,registration_approved_at_ms,trial_started_at_ms,trial_ends_at_ms,subscription_status,subscription_started_at_ms,subscription_valid_until_ms,created_at_ms)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(email, hashPassword(password), name, 'host', 'active', 'approved', now, now, trialEndsAt, 'active', now, trialEndsAt, now);
       const user = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid);
+      // Never report success if the database failed to store the full trial.
+      if (user.status !== 'active' || user.subscription_status !== 'active' ||
+          user.subscription_started_at_ms !== now || user.subscription_valid_until_ms !== trialEndsAt ||
+          user.trial_started_at_ms !== now || user.trial_ends_at_ms !== trialEndsAt) {
+        console.error('[TRIAL] Registration persisted without the required trial dates for user ID:', user.id);
+        return res.status(500).json({ ok: false, error: 'Account created but trial activation needs administrator assistance.' });
+      }
       res.json({
         ok: true,
         approvalPending: false,
         user: publicUser(user),
         message: 'Account created. Your free 24-hour trial starts now. Sign in to begin; contact support after the trial to continue.'
       });
-    } catch (_) {
-      res.status(409).json({ ok: false, error: 'This email is already registered.' });
+    } catch (error) {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || /UNIQUE constraint failed: users\.email/i.test(error.message)) {
+        return res.status(409).json({ ok: false, error: 'This email is already registered.' });
+      }
+      console.error('[AUTH] Registration failed:', error.message);
+      return res.status(500).json({ ok: false, error: 'Registration failed. Please try again or contact support.' });
     }
   });
 

@@ -232,7 +232,7 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   if (restored.trial_started_at_ms !== row.trial_started_at_ms || restored.trial_ends_at_ms !== row.trial_ends_at_ms || restored.subscription_valid_until_ms !== end) throw new Error('server restart reset the trial or manually renewed subscription');
   if (reopened.db.prepare('SELECT trial_started_at_ms FROM users WHERE email=?').get('legacy-existing@example.com').trial_started_at_ms !== null) throw new Error('restart gave a trial to an old account');
   reopened.db.close();
-  console.log(JSON.stringify({ ok: true, version: '3.1.17', newUserAutoApproved: true, oneDayTrial: true, duplicateEmailBlocked: true, automaticExpiry: true, adminRenewal: true, restartPersistence: true, hostControlledSession: true, storedPdf: true }, null, 2));
+  console.log(JSON.stringify({ ok: true, version: require('../package.json').version, newUserAutoApproved: true, oneDayTrial: true, duplicateEmailBlocked: true, automaticExpiry: true, adminRenewal: true, restartPersistence: true, hostControlledSession: true, storedPdf: true }, null, 2));
   fs.rmSync(temp, { recursive: true, force: true });
 })().catch(error => {
   console.error(error.stack || error.message);

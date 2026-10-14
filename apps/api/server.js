@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const WebSocket = require('ws');
 const createSessionControl = require('./session-control');
+const API_VERSION = require('./package.json').version;
 
 const PORT = Number(process.env.PORT || 8080);
 function normalizeSecretEnv(name, rawValue) {
@@ -81,7 +82,7 @@ const sessionIdleSweepTimer = setInterval(() => {
 sessionIdleSweepTimer.unref();
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'zapper-api', databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
+  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
 });
 app.get('/health/stt', async (_req, res) => {
   if (!DEEPGRAM_API_KEY) return res.status(503).json({ ok: false, deepgramAuthValid: false, error: 'DEEPGRAM_API_KEY is not configured.' });

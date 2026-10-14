@@ -17,6 +17,7 @@ jobs:
           node --check apps/api/server.js
           node --check apps/api/session-control.js
           node apps/api/tests/smoke.js
+          node apps/api/tests/trial-persistence.js
       - name: Desktop syntax
         run: |
           node --check apps/desktop/main.js

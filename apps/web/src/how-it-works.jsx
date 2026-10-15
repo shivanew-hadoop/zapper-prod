@@ -3,17 +3,17 @@ import { createRoot } from 'react-dom/client';
 
 const hostSteps = [
   ['Sign in as host', 'Use your host account with a free 24-hour trial or an active subscription.'],
-  ['Create the Google Meet link', 'Create the Google Meet from your Google account first.'],
-  ['Enter the Google Meet in Zapper', 'Paste the created Google Meet link or meeting ID into Zapper and create the session.'],
-  ['Share the PIN', 'Give the generated six-digit PIN to the participant and keep the session active until you end it.'],
-  ['Admit the participants', 'Open the Google Meet and approve participant join requests when they arrive.'],
+  ['Create a session', 'Click Create Session. Connect your own Google account on first use or when Google requires reconnection.'],
+  ['Receive your PIN', 'Zapper requests a Google Meet room and generates the six-digit session PIN automatically.'],
+  ['Share the PIN', 'Give the PIN to participants using the Zapper desktop app. Keep this dashboard tab open for host microphone transcription.'],
+  ['End and download', 'Mute or unmute your microphone as needed. End the session to finalize its saved transcript PDF.'],
 ];
 
 const participantSteps = [
   ['Launch Zapper', 'Open the desktop app from the homepage or your installed shortcut. No portal login is required.'],
   ['Enter the PIN', 'Use the six-digit PIN provided by the host.'],
   ['Start transcription', 'Follow the conversation with live voice-to-text and meeting chat.'],
-  ['Ask the host to admit you', 'If Google Meet is waiting for approval, follow up with the host so they can admit your entry.'],
+  ['Join the meeting', 'Use the host-provided Google Meet invitation if you also need the meeting audio or video. Google account policies may still restrict entry.'],
 ];
 
 function StepList({ steps }) {
@@ -27,7 +27,7 @@ export function HowItWorks() {
     <div className="sectionIntro">
       <div className="eyebrow">HOW IT WORKS</div>
       <h2>Clear steps for hosts and participants.</h2>
-      <p>Hosts prepare the Google Meet and Zapper session. Participants launch Zapper, enter the PIN and follow the meeting.</p>
+      <p>Hosts connect their own Google account once, then create a session PIN. Participants launch Zapper and use that PIN for live captions.</p>
     </div>
     <div className="journeyGrid">
       <article className="journeyPanel">

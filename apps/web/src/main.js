@@ -1,5 +1,6 @@
 import { mountHowItWorks } from './how-it-works.jsx';
 import { startHostMicrophone } from './host-microphone.js';
+import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId } from './host-session-selection.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
 const configuredReleaseUrl = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
@@ -18,6 +19,8 @@ let editingUser = null;
 let searchTimer = null;
 let currentSessionId = '';
 let currentSessionPin = '';
+let currentSessionOwnerId = '';
+let sessionLoadGeneration = 0;
 let hostMicCapture = null;
 let hostMicSessionId = '';
 let hostMicRequestGeneration = 0;
@@ -188,6 +191,9 @@ function logout() {
   stopHostMicrophone('Microphone stopped on logout.', true);
   closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken');
+  // A session selection belongs to this browser tab and account, never a shared host login.
+  currentSessionId = ''; currentSessionPin = ''; currentSessionOwnerId = '';
+  ++sessionLoadGeneration;
   if ($('meetUrl')) $('meetUrl').value = '';
   refreshHeaderState(); showPublic('home');
 }
@@ -258,6 +264,13 @@ async function loadAccount() {
 }
 
 async function loadHostPortal() {
+  const accountId = String(account?.id || '');
+  if (currentSessionOwnerId !== accountId) {
+    // Do not inherit a previous account's selection when the SPA changes hosts.
+    stopHostMicrophone('', true);
+    currentSessionId = ''; currentSessionPin = '';
+    currentSessionOwnerId = accountId;
+  }
   $('publicSite').classList.add('hidden');
   $('adminPortal').classList.add('hidden');
   refreshHeaderState();
@@ -384,7 +397,8 @@ async function endHostSession(sessionId, pin = '', button = null) {
     if (currentSessionId === sessionId) {
       $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
       $('endCurrentSession').disabled = true;
-      currentSessionId = '';
+      currentSessionId = ''; currentSessionPin = '';
+      clearDeviceSessionId(sessionStorage, account?.id);
     }
     await loadSessions();
     return true;
@@ -394,34 +408,65 @@ async function endHostSession(sessionId, pin = '', button = null) {
   }
 }
 
+function focusDeviceSession(session, startMicrophone = false) {
+  if (currentSessionId && currentSessionId !== session.id) stopHostMicrophone('', true);
+  currentSessionId = session.id;
+  currentSessionPin = session.pin;
+  saveDeviceSessionId(sessionStorage, account?.id, session.id);
+  $('pinValue').textContent = session.pin;
+  $('pinMeet').textContent = session.meetUrl;
+  showAutoMeetUrl(session);
+  showHostMicPanel(session);
+  if (startMicrophone && session.googleCreated) void startHostMicForSession(session.id);
+  $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
+  $('endCurrentSession').disabled = false;
+  $('pinBox').classList.remove('hidden');
+}
+
 async function loadSessions() {
+  const generation = ++sessionLoadGeneration;
+  const ownerId = String(account?.id || '');
   const data = await api('/api/sessions');
-  const activeSession = (data.sessions || []).find(session => session.active !== false && session.status === 'active');
-  if (activeSession) {
-    currentSessionId = activeSession.id;
-    currentSessionPin = activeSession.pin;
-    $('pinValue').textContent = activeSession.pin;
-    $('pinMeet').textContent = activeSession.meetUrl;
-    showAutoMeetUrl(activeSession);
-    showHostMicPanel(activeSession);
-    $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
-    $('endCurrentSession').disabled = false;
-    $('pinBox').classList.remove('hidden');
-  } else if (!currentSessionId) {
+  if (generation !== sessionLoadGeneration || ownerId !== String(account?.id || '')) return;
+  const sessions = data.sessions || [];
+  // Select only this tab's own session. Another computer creating a newer room
+  // must never replace this PIN, close this microphone or redirect its captions.
+  const selectedId = currentSessionId || getDeviceSessionId(sessionStorage, account?.id);
+  const selected = selectDeviceSession(sessions, selectedId);
+  if (selected) {
+    focusDeviceSession(selected);
+  } else {
+    // No implicit selection of the account's newest room. Hosts can explicitly
+    // select an existing room from the list, including after changing devices.
+    if (currentSessionId || selectedId) {
+      clearDeviceSessionId(sessionStorage, account?.id);
+      currentSessionId = ''; currentSessionPin = '';
+    }
     stopHostMicrophone('', true);
     $('pinBox').classList.add('hidden');
     $('autoMeetDetails').classList.add('hidden');
   }
-  $('sessions').innerHTML = data.sessions.length ? data.sessions.map(session => {
+  $('sessions').innerHTML = sessions.length ? sessions.map(session => {
     const active = session.active !== false && session.status === 'active';
     return `
     <div class="dataRow">
       <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
       <div class="rowActions">
-        ${active ? `<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
+        ${active ? `${session.id === selected?.id ? '<span class="endedLabel">On this device</span>' : `<button class="ghostBtn compact" data-use="${escapeHTML(session.id)}" type="button">Use on this device</button>`}<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
       </div>
     </div>`;
   }).join('') : '<p class="empty">No sessions yet.</p>';
+  $('sessions').querySelectorAll('[data-use]').forEach(button => {
+    button.onclick = () => {
+      const session = sessions.find(s => s.id === button.dataset.use && s.active !== false && s.status === 'active');
+      if (!session) return;
+      focusDeviceSession(session);
+      // This explicit action may request microphone permission, just like
+      // starting a new session. Only this browser tab switches sessions.
+      if (session.googleCreated) void startHostMicForSession(session.id);
+      void loadSessions();
+    };
+  });
   $('sessions').querySelectorAll('[data-copy]').forEach(button => {
     button.onclick = async () => {
       await navigator.clipboard.writeText(button.dataset.copy);
@@ -503,13 +548,7 @@ function showAutoMeetUrl(session) {
 }
 
 function showCreatedSession(session) {
-  currentSessionId = session.id;
-  currentSessionPin = session.pin;
-  $('pinValue').textContent = session.pin;
-  $('pinMeet').textContent = session.meetUrl;
-  showAutoMeetUrl(session);
-  showHostMicPanel(session);
-  if (session.googleCreated) void startHostMicForSession(session.id);
+  focusDeviceSession(session, true);
   // The manual fallback keeps its own editable link; Google-created links
   // are displayed separately in the non-editable field above.
   if (!session.googleCreated) {

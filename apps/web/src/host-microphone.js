@@ -10,6 +10,8 @@ class ZapperHostMic extends AudioWorkletProcessor {
     this.step = sampleRate / 16000;
     this.pcm = new Int16Array(1600); // 100 ms of 16kHz mono PCM
     this.count = 0;
+    this.peak = 0;
+    this.levelPackets = 0;
   }
   process(inputs) {
     const samples = inputs[0] && inputs[0][0];
@@ -18,11 +20,13 @@ class ZapperHostMic extends AudioWorkletProcessor {
       const at = Math.floor(this.position);
       const fraction = this.position - at;
       const value = (samples[at] || 0) * (1 - fraction) + (samples[Math.min(at + 1, samples.length - 1)] || 0) * fraction;
+      this.peak = Math.max(this.peak, Math.abs(value));
       this.pcm[this.count++] = Math.max(-32768, Math.min(32767, Math.round(Math.max(-1, Math.min(1, value)) * 32767)));
       if (this.count >= this.pcm.length) {
         this.port.postMessage(this.pcm.buffer, [this.pcm.buffer]);
         this.pcm = new Int16Array(1600);
         this.count = 0;
+        if (++this.levelPackets % 2 === 0) { this.port.postMessage({ type: 'level', value: this.peak }); this.peak = 0; }
       }
       this.position += this.step;
     }
@@ -33,7 +37,7 @@ class ZapperHostMic extends AudioWorkletProcessor {
 registerProcessor('zapper-host-microphone', ZapperHostMic);
 `;
 
-export async function startHostMicrophone({ apiBase, sessionId, fetchCaptureToken, onStatus, onTranscript, onStopped }) {
+export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', fetchCaptureToken, onStatus, onTranscript, onStopped, onLevel }) {
   if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode || !window.AudioContext || !window.WebSocket) {
     throw new Error('This browser does not support live microphone transcription. Use current Chrome or Edge on HTTPS.');
   }
@@ -65,6 +69,7 @@ export async function startHostMicrophone({ apiBase, sessionId, fetchCaptureToke
   const stop = (reason = '') => {
     if (stopped) return;
     stopped = true;
+    onLevel?.(0);
     ++socketGeneration;
     cleanup();
     onStopped?.(reason);
@@ -118,7 +123,7 @@ export async function startHostMicrophone({ apiBase, sessionId, fetchCaptureToke
   };
   try {
     status('Allow microphone access to transcribe your own voice. Camera stays off.');
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
     // If permission is revoked mid-meeting, immediately release the socket.
     stream.getAudioTracks().forEach(track => { track.onended = () => stop('Microphone access ended. Click Start microphone to reconnect.'); });
     context = new AudioContext();
@@ -132,6 +137,7 @@ export async function startHostMicrophone({ apiBase, sessionId, fetchCaptureToke
     muteOutput.gain.value = 0;
     source.connect(processor).connect(muteOutput).connect(context.destination);
     processor.port.onmessage = event => {
+      if (!stopped && event.data?.type === 'level') { onLevel?.(event.data.value); return; }
       if (!stopped && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 1024 * 1024 && event.data instanceof ArrayBuffer) {
         socket.send(event.data);
       }
@@ -142,5 +148,44 @@ export async function startHostMicrophone({ apiBase, sessionId, fetchCaptureToke
   } catch (error) {
     stop();
     throw error;
+  }
+}
+
+
+// Device labels are available only after the browser has granted microphone
+// permission. Returning the default entry keeps the UI usable beforehand.
+export async function listMicrophones() {
+  if (!navigator.mediaDevices?.enumerateDevices) return [{ deviceId: '', label: 'Default microphone' }];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return [{ deviceId: '', label: 'Default microphone' }, ...devices.filter(item => item.kind === 'audioinput' && item.deviceId && item.deviceId !== 'default' && item.deviceId !== 'communications').map((item, index) => ({ deviceId: item.deviceId, label: item.label || `Microphone ${index + 1}` }))];
+}
+
+// Opt-in, local recording only. The recording never travels to the server.
+export async function recordMicrophoneTest({ deviceId = '', onLevel, durationMs = 2500 }) {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Microphone test requires a recent Chrome or Edge browser.');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), echoCancellation: true, noiseSuppression: true }, video: false });
+  let context; let source; let analyser; let timer; let interval;
+  try {
+    const options = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
+    const recorder = options ? new MediaRecorder(stream, { mimeType: options }) : new MediaRecorder(stream);
+    const chunks = [];
+    const result = new Promise((resolve, reject) => {
+      recorder.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+      recorder.onerror = e => reject(e.error || new Error('Microphone test failed.'));
+      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+    });
+    if (window.AudioContext) {
+      context = new AudioContext(); source = context.createMediaStreamSource(stream);
+      analyser = context.createAnalyser(); analyser.fftSize = 512; source.connect(analyser);
+      const buffer = new Uint8Array(analyser.fftSize);
+      interval = setInterval(() => { analyser.getByteTimeDomainData(buffer); let sum = 0; for (const v of buffer) sum += ((v - 128) / 128) ** 2; onLevel?.(Math.min(1, Math.sqrt(sum / buffer.length) * 5)); }, 100);
+    }
+    recorder.start();
+    timer = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, durationMs);
+    return await result;
+  } finally {
+    clearTimeout(timer); clearInterval(interval); onLevel?.(0);
+    source?.disconnect(); context?.close().catch(() => {});
+    stream.getTracks().forEach(track => track.stop());
   }
 }

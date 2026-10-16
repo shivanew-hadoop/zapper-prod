@@ -77,9 +77,18 @@
     return /^(you|me)$/i.test(normalizeText(value));
   }
 
+  // Meet's inactivity/leave prompt is application chrome, never chat.
+  // Match exact UI labels instead of broad keywords so normal user chat stays intact.
+  function isMeetInactivityPrompt(value) {
+    const text = keyText(value).replace(/\s+/g, ' ').trim();
+    return /^(?:are you still there\??|leave now|stay in the call|to stop seeing this, go to settings\s*>\s*general\.?|to stop seeing this go to settings general\.?)$/i.test(text) ||
+      (/are you still there\?/i.test(text) && /leave now/i.test(text) && /stay in the call/i.test(text));
+  }
+
   function isMeetNoise(value) {
     const t = keyText(value);
     if (!t) return true;
+    if (isMeetInactivityPrompt(t)) return true;
     if (isClockText(t)) return false;
     const exact = new Set([
       'ready to join?', 'ask to join', 'join now', 'meeting_room', 'present', 'present now', 'present_to_all',
@@ -482,6 +491,8 @@
         ].filter(Boolean).join(' '));
         if (!/\b\d{1,2}:\d{2}(?:\s?[AP]M)?\b/i.test(txt)) return false;
         if (/ready to join|ask to join|meeting details|people in this call|loading invitees|view everyone in this call/i.test(txt)) return false;
+        if (isMeetInactivityPrompt(txt)) return false;
+        if (el.closest('[role="alertdialog"]')) return false;
         return txt.length > 4 && txt.length < 12000;
       })
       .filter(el => !isMeetNoise(el.innerText || el.textContent || ''))

@@ -161,13 +161,26 @@
   </div>
 
   <main id="hostPortal" class="portalShell hidden">
-    <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
+    <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p><p id="hostCallSummary" class="hostCallSummary"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
     <section class="portalGrid">
       <div class="portalCard">
         <div class="eyebrow">CREATE SESSION</div>
         <h2>Create session</h2>
         <p>Click Create Session to start voice-to-text transcription. If this is your first time, sign in with your Google account. Zapper will create a six-digit PIN to share with participants. Each session lasts up to 3 hours 30 minutes.</p>
         <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
+        <!-- Compact per-device controls; only visible for this tab's selected session. -->
+        <section id="sessionToolbar" class="sessionToolbar hidden" aria-label="Active session controls">
+          <label class="micDeviceSelect" title="Choose microphone"><span aria-hidden="true">🎙</span><span class="srOnly">Microphone source</span><select id="hostMicDevice" aria-label="Select microphone"><option value="">Default microphone</option></select></label>
+          <button id="hostMicTest" class="ghostBtn toolButton" type="button" title="Record a short microphone test">Test mic</button>
+          <div class="micLevel" id="hostMicLevel" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="hostMicLevelBar"></span></div>
+          <span id="sessionClock" class="sessionClock" aria-label="Elapsed session time" title="Elapsed session time">00:00</span>
+          <button id="hostMicToggle" class="ghostBtn toolButton" type="button">Unmute</button>
+          <button id="copyPin" class="toolbarPin" type="button" title="Copy six-digit PIN"><span class="pinPrefix">PIN </span><strong id="pinValue">000000</strong></button>
+          <button id="endCurrentSession" class="dangerBtn toolButton" type="button">End Session</button>
+        </section>
+        <p id="hostMicStatus" class="sessionMicStatus hidden" role="status" aria-live="polite">Microphone ready.</p>
+        <div id="micTestReplay" class="micTestReplay hidden"><span id="micTestStatus" role="status">Record a microphone test while muted.</span><button id="hostMicReplay" class="ghostBtn compact" type="button" disabled>Replay test</button><audio id="hostMicTestAudio" preload="none"></audio></div>
+        <!-- Preserve the existing element IDs and PIN/session lifecycle used elsewhere. -->
         <p id="googleMeetStatus" class="meta visuallyHidden" aria-live="polite">Checking session availability…</p>
         <p class="meta">Up to four Zapper desktop participants can redeem a session PIN.</p>
         <p class="meta">Google connection is optional and separate from your Zapper login. When you create a Google Meet room, Zapper requests permission to create meetings, stores your Google authorization securely, and shares the meeting link with your session participants. <a href="/privacy.html" target="_blank" rel="noopener noreferrer">How Zapper uses Google data</a>.</p>
@@ -181,21 +194,11 @@
           <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="Meeting link" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session from link</button></form>
         </details>
         <div id="sessionError" class="error" aria-live="polite"></div>
-        <section id="hostMicrophonePanel" class="hostMicrophonePanel hidden" aria-label="Host microphone transcription">
-          <div class="micHeader"><strong>Host microphone transcription</strong><span id="hostMicLive" class="micLive" aria-live="polite">Muted</span></div>
-          <p class="meta">Your microphone sends voice-to-text captions to PIN-connected participants and saves them for the session PDF. Keep this tab open.</p>
-          <div class="micButtons"><button id="hostMicToggle" class="ghostBtn" type="button">Unmute</button></div>
-          <p id="hostMicStatus" class="meta" role="status" aria-live="polite">Your browser will request microphone permission.</p>
-        </section>
-        <div id="pinBox" class="pinBox hidden"><small>SESSION PIN</small><strong id="pinValue">000000</strong><span id="pinMeet" class="hidden"></span>
-          <div class="pinActions"><button id="copyPin" class="ghostBtn" type="button">Copy PIN</button><button id="endCurrentSession" class="dangerBtn" type="button">End Session</button></div>
-          <span id="pinStatus" class="pinStatus"></span>
-        </div>
+        <div id="pinBox" class="hidden" aria-hidden="true"><span id="pinMeet" class="hidden"></span><span id="pinStatus" class="pinStatus visuallyHidden"></span></div>
       </div>
       <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
     </section>
-    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Recent sessions</h2><p>Your current and recent meeting sessions.</p></div><button id="refreshSessions" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div></section>
-    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Completed meeting transcripts with PDF download.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="transcripts" class="dataList"></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Active calls and completed transcript PDFs with their call durations.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div><div id="transcripts" class="dataList"></div></section>
   </main>
 
   <main id="adminPortal" class="portalShell hidden">

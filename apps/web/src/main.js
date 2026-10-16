@@ -1,5 +1,5 @@
 import { mountHowItWorks } from './how-it-works.jsx';
-import { startHostMicrophone } from './host-microphone.js';
+import { startHostMicrophone, listMicrophones, recordMicrophoneTest } from './host-microphone.js';
 import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId } from './host-session-selection.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
@@ -24,6 +24,11 @@ let sessionLoadGeneration = 0;
 let hostMicCapture = null;
 let hostMicSessionId = '';
 let hostMicRequestGeneration = 0;
+let activeSessionStartedAt = 0;
+let sessionTimerInterval = null;
+let microphoneTestRunning = false;
+let micTestObjectUrl = '';
+
 let googleMeetConnected = false;
 let googleMeetAvailable = false;
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
@@ -35,6 +40,45 @@ function escapeHTML(value) {
 }
 function fmt(ms) {
   return ms ? new Date(Number(ms)).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+}
+function durationLabel(started, ended = Date.now()) {
+  const seconds = Math.max(0, Math.floor((Number(ended) - Number(started)) / 1000));
+  if (!Number.isFinite(seconds) || !started) return '—';
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+function updateSessionClock() {
+  const seconds = activeSessionStartedAt ? Math.max(0, Math.floor((Date.now() - activeSessionStartedAt) / 1000)) : 0;
+  const h = Math.floor(seconds / 3600);
+  $('sessionClock').textContent = `${h ? `${h}:` : ''}${String(Math.floor(seconds / 60) % (h ? 60 : Infinity)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+function stopSessionClock() {
+  if (sessionTimerInterval) clearInterval(sessionTimerInterval);
+  sessionTimerInterval = null;
+  activeSessionStartedAt = 0;
+  updateSessionClock();
+}
+function startSessionClock(startedAt) {
+  if (sessionTimerInterval && activeSessionStartedAt === Number(startedAt)) return;
+  stopSessionClock();
+  activeSessionStartedAt = Number(startedAt) || Date.now();
+  updateSessionClock();
+  sessionTimerInterval = setInterval(updateSessionClock, 1000); // display only; no API/network polling
+}
+function setMicLevel(level) {
+  const percent = Math.max(0, Math.min(100, Math.round((Number(level) || 0) * 140)));
+  $('hostMicLevelBar').style.width = `${percent}%`;
+  $('hostMicLevel').setAttribute('aria-valuenow', String(percent));
+}
+async function refreshMicrophoneChoices() {
+  const element = $('hostMicDevice');
+  const selected = element.value;
+  try {
+    const devices = await listMicrophones();
+    element.replaceChildren(...devices.map(device => {
+      const option = document.createElement('option'); option.value = device.deviceId; option.textContent = device.label; return option;
+    }));
+    if (devices.some(device => device.deviceId === selected)) element.value = selected;
+  } catch (_) { /* Device labels may remain private until permission is granted. */ }
 }
 function fmtDate(ms) {
   return ms ? new Date(Number(ms)).toLocaleDateString([], { dateStyle: 'medium' }) : '—';
@@ -189,6 +233,7 @@ function showTrialWelcome(user) {
 }
 function logout() {
   stopHostMicrophone('Microphone stopped on logout.', true);
+  stopSessionClock();
   closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken');
   // A session selection belongs to this browser tab and account, never a shared host login.
@@ -301,10 +346,10 @@ async function loadHostPortal() {
 // audio by itself. With explicit browser permission, capture the HOST's own
 // microphone and use the existing /stt -> Deepgram -> transcript/PDF pipeline.
 function updateHostMicButtons(recording = false) {
-  $('hostMicToggle').disabled = false;
+  $('hostMicToggle').disabled = microphoneTestRunning;
   $('hostMicToggle').textContent = recording ? 'Mute' : 'Unmute';
-  $('hostMicLive').textContent = recording ? 'Listening' : 'Muted';
-  $('hostMicLive').classList.toggle('active', recording);
+  $('hostMicToggle').setAttribute('aria-pressed', String(recording));
+  $('hostMicTest').disabled = microphoneTestRunning;
 }
 
 function stopHostMicrophone(message = '', hide = false) {
@@ -313,10 +358,13 @@ function stopHostMicrophone(message = '', hide = false) {
   hostMicCapture = null;
   if (hide) hostMicSessionId = '';
   updateHostMicButtons();
+  setMicLevel(0);
   if (message) $('hostMicStatus').textContent = message;
   if (hide) {
-    $('hostMicrophonePanel').classList.add('hidden');
-    $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
+    $('hostMicStatus').classList.add('hidden'); $('micTestReplay').classList.add('hidden');
+    $('hostMicTestAudio').pause(); $('hostMicTestAudio').removeAttribute('src');
+    if (micTestObjectUrl) URL.revokeObjectURL(micTestObjectUrl);
+    micTestObjectUrl = '';
   }
 }
 
@@ -327,7 +375,7 @@ function showHostMicPanel(session) {
   }
   if (hostMicSessionId && hostMicSessionId !== session.id) stopHostMicrophone('', true);
   hostMicSessionId = session.id;
-  $('hostMicrophonePanel').classList.remove('hidden');
+  $('sessionToolbar').classList.remove('hidden');
   updateHostMicButtons(Boolean(hostMicCapture));
   if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
     $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
@@ -340,14 +388,17 @@ async function startHostMicForSession(sessionId) {
   stopHostMicrophone();
   hostMicSessionId = sessionId;
   const generation = ++hostMicRequestGeneration;
-  $('hostMicrophonePanel').classList.remove('hidden');
+  $('sessionToolbar').classList.remove('hidden');
   $('hostMicToggle').disabled = true;
   $('hostMicToggle').textContent = 'Connecting…';
+  $('hostMicStatus').classList.remove('hidden');
   $('hostMicStatus').textContent = 'Waiting for microphone permission. Your camera will not be used.';
   try {
     const capture = await startHostMicrophone({
       apiBase: API_BASE,
       sessionId,
+      deviceId: $('hostMicDevice').value,
+      onLevel: level => { if (generation === hostMicRequestGeneration) setMicLevel(level); },
       fetchCaptureToken: async id => (await api(`/api/sessions/${encodeURIComponent(id)}/host-audio-token`, { method: 'POST' })).captureToken,
       // Live captions continue through the API relay and saved PDF pipeline.
       // They are intentionally not rendered in the host dashboard.
@@ -369,6 +420,7 @@ async function startHostMicForSession(sessionId) {
       return;
     }
     hostMicCapture = capture;
+    void refreshMicrophoneChoices();
     updateHostMicButtons(true);
   } catch (error) {
     if (generation !== hostMicRequestGeneration) return;
@@ -385,6 +437,43 @@ $('hostMicToggle').onclick = () => {
   else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
 };
 
+$('hostMicDevice').addEventListener('change', () => {
+  if (microphoneTestRunning || !hostMicSessionId || !hostMicCapture) return;
+  const selectedSession = hostMicSessionId;
+  stopHostMicrophone('Switching microphone…');
+  void startHostMicForSession(selectedSession);
+});
+if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener('devicechange', () => void refreshMicrophoneChoices());
+void refreshMicrophoneChoices();
+$('hostMicTest').onclick = async () => {
+  if (microphoneTestRunning || !hostMicSessionId) return;
+  if (hostMicCapture) stopHostMicrophone('Microphone muted for test; click Unmute after testing.');
+  const testedSessionId = hostMicSessionId;
+  microphoneTestRunning = true;
+  $('hostMicTest').disabled = true;
+  $('hostMicToggle').disabled = true;
+  $('micTestReplay').classList.remove('hidden');
+  $('micTestStatus').textContent = 'Speak normally for 2.5 seconds…';
+  $('hostMicReplay').disabled = true;
+  try {
+    const clip = await recordMicrophoneTest({ deviceId: $('hostMicDevice').value, onLevel: setMicLevel });
+    if (testedSessionId !== hostMicSessionId) return; // Session ended or this tab switched rooms.
+    if (micTestObjectUrl) URL.revokeObjectURL(micTestObjectUrl);
+    micTestObjectUrl = URL.createObjectURL(clip);
+    $('hostMicTestAudio').src = micTestObjectUrl;
+    $('hostMicReplay').disabled = false;
+    $('micTestStatus').textContent = 'Recorded locally. Click Replay test to check microphone clarity.';
+    await refreshMicrophoneChoices();
+  } catch (error) {
+    $('micTestStatus').textContent = `Microphone test failed: ${error.message}`;
+  } finally {
+    microphoneTestRunning = false;
+    updateHostMicButtons();
+    setMicLevel(0);
+  }
+};
+$('hostMicReplay').onclick = () => { if (micTestObjectUrl) $('hostMicTestAudio').play().catch(() => { $('micTestStatus').textContent = 'Audio playback was blocked by the browser.'; }); };
+
 async function endHostSession(sessionId, pin = '', button = null) {
   if (!sessionId) return false;
   const label = pin ? `PIN ${pin}` : 'this session';
@@ -397,6 +486,9 @@ async function endHostSession(sessionId, pin = '', button = null) {
     if (currentSessionId === sessionId) {
       $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
       $('endCurrentSession').disabled = true;
+      $('sessionToolbar').classList.add('hidden');
+      $('micTestReplay').classList.add('hidden');
+      stopSessionClock();
       currentSessionId = ''; currentSessionPin = '';
       clearDeviceSessionId(sessionStorage, account?.id);
     }
@@ -414,6 +506,8 @@ function focusDeviceSession(session, startMicrophone = false) {
   currentSessionPin = session.pin;
   saveDeviceSessionId(sessionStorage, account?.id, session.id);
   $('pinValue').textContent = session.pin;
+  startSessionClock(session.createdAt);
+  $('sessionToolbar').classList.remove('hidden');
   $('pinMeet').textContent = session.meetUrl;
   showAutoMeetUrl(session);
   showHostMicPanel(session);
@@ -429,6 +523,7 @@ async function loadSessions() {
   const data = await api('/api/sessions');
   if (generation !== sessionLoadGeneration || ownerId !== String(account?.id || '')) return;
   const sessions = data.sessions || [];
+  if (data.usage) $('hostCallSummary').textContent = `${data.usage.sessionCount} calls · ${data.usage.callDurationMinutes} total minutes used`;
   // Select only this tab's own session. Another computer creating a newer room
   // must never replace this PIN, close this microphone or redirect its captions.
   const selectedId = currentSessionId || getDeviceSessionId(sessionStorage, account?.id);
@@ -444,18 +539,21 @@ async function loadSessions() {
     }
     stopHostMicrophone('', true);
     $('pinBox').classList.add('hidden');
+    $('sessionToolbar').classList.add('hidden');
+    stopSessionClock();
     $('autoMeetDetails').classList.add('hidden');
   }
-  $('sessions').innerHTML = sessions.length ? sessions.map(session => {
+  const activeSessions = sessions.filter(session => session.active !== false && session.status === 'active');
+  $('sessions').innerHTML = activeSessions.length ? `<div class="savedSectionLabel">Active calls</div>` + activeSessions.map(session => {
     const active = session.active !== false && session.status === 'active';
     return `
     <div class="dataRow">
-      <div><strong>PIN ${escapeHTML(session.pin)}</strong><div class="meta"><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
+      <div><strong>PIN ${escapeHTML(session.pin)} · ${escapeHTML(durationLabel(session.createdAt, active ? Date.now() : (session.endedAt || Date.now())))}</strong><div class="meta"><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
       <div class="rowActions">
         ${active ? `${session.id === selected?.id ? '<span class="endedLabel">On this device</span>' : `<button class="ghostBtn compact" data-use="${escapeHTML(session.id)}" type="button">Use on this device</button>`}<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
       </div>
     </div>`;
-  }).join('') : '<p class="empty">No sessions yet.</p>';
+  }).join('') : '';
   $('sessions').querySelectorAll('[data-use]').forEach(button => {
     button.onclick = () => {
       const session = sessions.find(s => s.id === button.dataset.use && s.active !== false && s.status === 'active');
@@ -483,9 +581,9 @@ async function loadSessions() {
 
 async function loadTranscripts() {
   const data = await api('/api/transcripts');
-  $('transcripts').innerHTML = data.sessions.length ? data.sessions.map(session => `
+  $('transcripts').innerHTML = data.sessions.length ? `<div class="savedSectionLabel">Completed calls & PDFs</div>` + data.sessions.map(session => `
     <div class="dataRow">
-      <div><strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong><div class="meta"><span>PIN ${escapeHTML(session.pin)}</span></div></div>
+      <div><strong>${escapeHTML(fmt(session.startedAt))} → ${escapeHTML(fmt(session.endedAt))}</strong><div class="meta"><span>PIN ${escapeHTML(session.pin)}</span><span>Call ${escapeHTML(durationLabel(session.startedAt, session.endedAt))}</span></div></div>
       <button class="ghostBtn compact" data-pdf="${escapeHTML(session.id)}" type="button">Download PDF</button>
     </div>`).join('') : '<p class="empty">No saved transcripts yet.</p>';
   $('transcripts').querySelectorAll('[data-pdf]').forEach(button => {
@@ -652,15 +750,14 @@ $('sessionForm').onsubmit = async event => {
 $('copyPin').onclick = async () => {
   const pin = $('pinValue').textContent.trim();
   if (/^\d{6}$/.test(pin)) await navigator.clipboard.writeText(pin);
-  $('copyPin').textContent = 'Copied'; setTimeout(() => { $('copyPin').textContent = 'Copy PIN'; }, 1200);
+  $('copyPin').title = 'PIN copied'; setTimeout(() => { $('copyPin').title = 'Copy six-digit PIN'; }, 1200);
 };
 $('endCurrentSession').onclick = async () => {
   if (!currentSessionId) return;
   try { await endHostSession(currentSessionId, currentSessionPin, $('endCurrentSession')); }
   catch (error) { $('sessionError').textContent = error.message; }
 };
-$('refreshSessions').onclick = loadSessions;
-$('refreshTranscripts').onclick = loadTranscripts;
+$('refreshTranscripts').onclick = async () => { await Promise.all([loadSessions(), loadTranscripts()]); };
 
 function monthEquivalent(start, end) {
   if (!start || !end || end <= start) return '—';
@@ -680,7 +777,7 @@ async function loadAdminUsers(query = '') {
       ${adminUsers.map(user => `<tr>
         <td><strong>${escapeHTML(user.name || 'Unnamed')}</strong><small>${escapeHTML(user.email)}</small><small>${escapeHTML(user.role)}</small></td>
         <td><span class="statusBadge ${user.subscriptionStatus === 'active' ? 'active' : 'inactive'}">${escapeHTML(user.subscriptionStatus)}</span><small>${escapeHTML(fmt(user.subscriptionStartedAt))} → ${escapeHTML(fmt(user.subscriptionValidUntil))}</small><small>${escapeHTML(user.trialEndsAt && user.subscriptionValidUntil === user.trialEndsAt ? 'One-time 24-hour trial' : monthEquivalent(user.subscriptionStartedAt, user.subscriptionValidUntil))}</small></td>
-        <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
+        <td><span>${user.sessionCount} sessions · ${user.transcriptCount} PDFs · ${escapeHTML(user.callDurationMinutes)} min calls</span><small>Last: ${escapeHTML(fmt(user.lastActivityAt))}</small></td>
         <td><span class="pill">${escapeHTML(user.status)}</span><small>Joined ${escapeHTML(fmtDate(user.createdAt))}</small></td>
         <td><button class="ghostBtn compact" data-edit-user="${user.id}" type="button">Manage</button></td>
       </tr>`).join('')}
@@ -702,7 +799,7 @@ async function openAdminEdit(userId) {
   editingUser = adminUsers.find(user => Number(user.id) === Number(userId));
   if (!editingUser) return;
   $('editUserTitle').textContent = editingUser.name || editingUser.email;
-  $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.transcriptCount} transcripts`;
+  $('editUserMeta').textContent = `${editingUser.email} · ${editingUser.sessionCount} sessions · ${editingUser.callDurationMinutes} minutes · ${editingUser.transcriptCount} transcripts`;
   $('editSubStatus').value = editingUser.subscriptionStatus === 'active' ? 'active' : 'inactive';
   $('editAccountStatus').value = ['active', 'disabled'].includes(editingUser.status) ? editingUser.status : 'active';
   $('editStart').value = toLocalInput(editingUser.subscriptionStartedAt || null);
@@ -716,7 +813,7 @@ async function openAdminEdit(userId) {
     const activity = await api(`/api/admin/users/${editingUser.id}/activity`);
     $('editActivity').innerHTML = `
       <div class="activityStats"><span><strong>${activity.sessions.length}</strong> retained sessions</span><span><strong>${activity.transcripts.length}</strong> retained PDFs</span></div>
-      <div class="activityList">${activity.sessions.slice(0, 5).map(s => `<div><strong>PIN ${escapeHTML(s.pin)}</strong><span>${escapeHTML(fmt(s.createdAt))}</span><small>${escapeHTML(s.meetUrl)}</small></div>`).join('') || '<p class="empty">No session activity.</p>'}</div>`;
+      <div class="activityList">${activity.sessions.map(s => `<div><strong>PIN ${escapeHTML(s.pin)} · ${escapeHTML(durationLabel(s.createdAt, s.active ? Date.now() : (s.endedAt || Date.now())))} call</strong><span>${escapeHTML(fmt(s.createdAt))}</span><small>${escapeHTML(s.meetUrl)}</small></div>`).join('') || '<p class="empty">No session activity.</p>'}</div>`;
   } catch (error) { $('editActivity').textContent = error.message; }
 }
 function closeAdminEdit() { $('adminEditModal').classList.add('hidden'); editingUser = null; }

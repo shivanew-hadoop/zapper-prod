@@ -219,8 +219,16 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   if (!pdfText.includes('Participant: participant@example.com') || !pdfText.includes('Duration:')) throw new Error('compact PDF metadata missing');
   if (!pdfText.includes('IST')) throw new Error('PDF pause timestamp marker missing');
 
+  // A completed two-minute call must appear consistently in the host usage
+  // summary and in the admin's per-user/per-call duration displays.
+  control.db.prepare("UPDATE host_sessions SET created_at_ms=?,ended_at_ms=?,active=0,status='ended',end_reason='host_ended' WHERE id=?")
+    .run(Date.now() - 180000, Date.now() - 60000, created[1].id);
+  result = await invoke('GET', '/api/sessions', { headers: { authorization: `Bearer ${portalToken}` } });
+  if (!result.payload?.ok || result.payload.usage?.callDurationMinutes < 1.9 || result.payload.usage?.sessionCount < 4) throw new Error('host call minutes missing or incomplete');
   result = await invoke('GET', '/api/admin/users', { headers: { authorization: `Bearer ${adminToken}` } });
-  if (!result.payload?.ok || !result.payload.users.some(user => user.email === email && user.sessionCount >= 3)) throw new Error('admin user activity failed');
+  if (!result.payload?.ok || !result.payload.users.some(user => user.email === email && user.sessionCount >= 4 && user.callDurationMinutes >= 1.9)) throw new Error('admin user call minutes failed');
+  result = await invoke('GET', '/api/admin/users/:id/activity', { headers: { authorization: `Bearer ${adminToken}` }, params: { id: String(hostId) } });
+  if (!result.payload?.ok || !result.payload.sessions.some(s => s.id === created[1].id && Number(s.endedAt) > Number(s.createdAt))) throw new Error('admin per-call timestamps missing');
 
   // A process restart must not restart/reissue the 24-hour trial.
   control.db.close();
@@ -232,7 +240,7 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   if (restored.trial_started_at_ms !== row.trial_started_at_ms || restored.trial_ends_at_ms !== row.trial_ends_at_ms || restored.subscription_valid_until_ms !== end) throw new Error('server restart reset the trial or manually renewed subscription');
   if (reopened.db.prepare('SELECT trial_started_at_ms FROM users WHERE email=?').get('legacy-existing@example.com').trial_started_at_ms !== null) throw new Error('restart gave a trial to an old account');
   reopened.db.close();
-  console.log(JSON.stringify({ ok: true, version: require('../package.json').version, newUserAutoApproved: true, oneDayTrial: true, duplicateEmailBlocked: true, automaticExpiry: true, adminRenewal: true, restartPersistence: true, hostControlledSession: true, storedPdf: true }, null, 2));
+  console.log(JSON.stringify({ ok: true, version: require('../package.json').version, newUserAutoApproved: true, oneDayTrial: true, duplicateEmailBlocked: true, automaticExpiry: true, adminRenewal: true, restartPersistence: true, hostControlledSession: true, storedPdf: true, callDurations: true }, null, 2));
   fs.rmSync(temp, { recursive: true, force: true });
 })().catch(error => {
   console.error(error.stack || error.message);

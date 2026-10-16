@@ -841,7 +841,11 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const endedLimit = Math.max(0, sessionRetention - activeRows.length);
     const endedRows = endedLimit ? db.prepare('SELECT id,pin,meet_url,status,active,created_at_ms,expires_at_ms,ended_at_ms,end_reason,google_meet_created FROM host_sessions WHERE user_id=? AND active=0 ORDER BY created_at_ms DESC LIMIT ?').all(req.authUser.id, endedLimit) : [];
     const rows = [...activeRows, ...endedRows].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0));
-    res.json({ ok: true, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '', googleCreated: Number(r.google_meet_created || 0) === 1 })) });
+    const now = Date.now();
+    const usage = db.prepare(`SELECT COUNT(*) count, COALESCE(SUM(CASE WHEN created_at_ms > 0 THEN MAX(0,
+      (CASE WHEN active=1 THEN MIN(COALESCE(expires_at_ms, ?), ?) ELSE COALESCE(ended_at_ms, created_at_ms) END) - created_at_ms
+    ) ELSE 0 END), 0) duration_ms FROM host_sessions WHERE user_id=?`).get(now, now, req.authUser.id);
+    res.json({ ok: true, usage: { sessionCount: Number(usage.count || 0), callDurationMinutes: Math.round(Number(usage.duration_ms || 0) / 6000) / 10 }, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '', googleCreated: Number(r.google_meet_created || 0) === 1 })) });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {
@@ -982,7 +986,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
 
   function adminUserSummary(user) {
     const sub = subscriptionState(user);
-    const sessionStats = db.prepare('SELECT COUNT(*) count, MAX(created_at_ms) last_at FROM host_sessions WHERE user_id=?').get(user.id);
+    const sessionStats = db.prepare(`SELECT COUNT(*) count, MAX(created_at_ms) last_at,
+      COALESCE(SUM(CASE WHEN created_at_ms > 0 THEN MAX(0,
+        (CASE WHEN active=1 THEN MIN(COALESCE(expires_at_ms, ?), ?) ELSE COALESCE(ended_at_ms, created_at_ms) END) - created_at_ms
+      ) ELSE 0 END), 0) duration_ms FROM host_sessions WHERE user_id=?`).get(Date.now(), Date.now(), user.id);
     const transcriptStats = db.prepare('SELECT COUNT(*) count, MAX(ended_at_ms) last_at FROM transcripts WHERE user_id=?').get(user.id);
     const lastActivityAt = Math.max(Number(user.last_login_at_ms || 0), Number(sessionStats.last_at || 0), Number(transcriptStats.last_at || 0), Number(user.created_at_ms || 0));
     return {
@@ -1001,6 +1008,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
       lastLoginAt: user.last_login_at_ms || null,
       lastActivityAt,
       sessionCount: Number(sessionStats.count || 0),
+      callDurationMinutes: Math.round(Number(sessionStats.duration_ms || 0) / 60000 * 10) / 10,
       transcriptCount: Number(transcriptStats.count || 0),
     };
   }

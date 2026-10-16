@@ -167,11 +167,19 @@
         <div class="eyebrow">CREATE SESSION</div>
         <h2>Create session</h2>
         <p>Click Create Session to start voice-to-text transcription. If this is your first time, sign in with your Google account. Zapper will create a six-digit PIN to share with participants. Each session lasts up to 3 hours 30 minutes.</p>
+        <details class="micPreflight">
+          <summary>Check microphone before starting a session</summary>
+          <div class="micPreflightControls">
+            <label for="hostMicTestDevice">Microphone</label>
+            <select id="hostMicTestDevice" aria-label="Microphone to test"><option value="">Default microphone</option></select>
+            <button id="hostMicTest" class="ghostBtn compact" type="button">Test microphone</button>
+          </div>
+          <div id="micTestReplay" class="micTestReplay hidden"><span id="micTestStatus" role="status">Record a microphone test and replay it locally.</span><button id="hostMicReplay" class="ghostBtn compact" type="button" disabled>Replay test</button><audio id="hostMicTestAudio" preload="none"></audio></div>
+        </details>
         <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
-        <!-- Compact per-device controls; only visible for this tab's selected session. -->
+        <!-- Compact controls belong only to this browser's active session. -->
         <section id="sessionToolbar" class="sessionToolbar hidden" aria-label="Active session controls">
           <label class="micDeviceSelect" title="Choose microphone"><span aria-hidden="true">🎙</span><span class="srOnly">Microphone source</span><select id="hostMicDevice" aria-label="Select microphone"><option value="">Default microphone</option></select></label>
-          <button id="hostMicTest" class="ghostBtn toolButton" type="button" title="Record a short microphone test">Test mic</button>
           <div class="micLevel" id="hostMicLevel" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="hostMicLevelBar"></span></div>
           <span id="sessionClock" class="sessionClock" aria-label="Elapsed session time" title="Elapsed session time">00:00</span>
           <button id="hostMicToggle" class="ghostBtn toolButton" type="button">Unmute</button>
@@ -179,7 +187,6 @@
           <button id="endCurrentSession" class="dangerBtn toolButton" type="button">End Session</button>
         </section>
         <p id="hostMicStatus" class="sessionMicStatus hidden" role="status" aria-live="polite">Microphone ready.</p>
-        <div id="micTestReplay" class="micTestReplay hidden"><span id="micTestStatus" role="status">Record a microphone test while muted.</span><button id="hostMicReplay" class="ghostBtn compact" type="button" disabled>Replay test</button><audio id="hostMicTestAudio" preload="none"></audio></div>
         <!-- Preserve the existing element IDs and PIN/session lifecycle used elsewhere. -->
         <p id="googleMeetStatus" class="meta visuallyHidden" aria-live="polite">Checking session availability…</p>
         <p class="meta">Up to four Zapper desktop participants can redeem a session PIN.</p>
@@ -196,9 +203,9 @@
         <div id="sessionError" class="error" aria-live="polite"></div>
         <div id="pinBox" class="hidden" aria-hidden="true"><span id="pinMeet" class="hidden"></span><span id="pinStatus" class="pinStatus visuallyHidden"></span></div>
       </div>
-      <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div></div>
+      <div class="portalCard participantCard"><div class="eyebrow">PARTICIPANT</div><h2>Launch and enter the PIN</h2><p>Participants do not need your host login. They launch Zapper, enter the six-digit PIN and start transcription.</p><div class="stackActions"><button class="primaryBtn" data-launch type="button">Launch Zapper</button><a class="secondaryBtn" data-download href="#">Download desktop app</a></div><section id="otherSessionsPanel" class="otherSessionsPanel hidden" aria-label="Other active host sessions"><h3>Other active sessions</h3><p>Read-only status for calls running on other computers.</p><div id="otherHostSessions" class="otherHostSessions"></div></section></div>
     </section>
-    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Active calls and completed transcript PDFs with their call durations.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div><div id="transcripts" class="dataList"></div></section>
+    <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Completed transcript PDFs with their call durations.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div><div id="transcripts" class="dataList"></div></section>
   </main>
 
   <main id="adminPortal" class="portalShell hidden">

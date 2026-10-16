@@ -28,6 +28,7 @@ let activeSessionStartedAt = 0;
 let sessionTimerInterval = null;
 let microphoneTestRunning = false;
 let micTestObjectUrl = '';
+let hostSessionCreating = false;
 
 let googleMeetConnected = false;
 let googleMeetAvailable = false;
@@ -47,6 +48,9 @@ function durationLabel(started, ended = Date.now()) {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 }
 function updateSessionClock() {
+  document.querySelectorAll('#otherHostSessions [data-started-at]').forEach(label => {
+    label.textContent = durationLabel(Number(label.dataset.startedAt));
+  });
   const seconds = activeSessionStartedAt ? Math.max(0, Math.floor((Date.now() - activeSessionStartedAt) / 1000)) : 0;
   const h = Math.floor(seconds / 3600);
   $('sessionClock').textContent = `${h ? `${h}:` : ''}${String(Math.floor(seconds / 60) % (h ? 60 : Infinity)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -61,8 +65,17 @@ function startSessionClock(startedAt) {
   if (sessionTimerInterval && activeSessionStartedAt === Number(startedAt)) return;
   stopSessionClock();
   activeSessionStartedAt = Number(startedAt) || Date.now();
+  startClockDisplay();
+}
+function startClockDisplay() {
   updateSessionClock();
-  sessionTimerInterval = setInterval(updateSessionClock, 1000); // display only; no API/network polling
+  if (!sessionTimerInterval) sessionTimerInterval = setInterval(updateSessionClock, 1000); // display only; no network polling
+}
+function applyCreateSessionAvailability() {
+  const enabled = account?.role !== 'admin' && account?.subscriptionStatus === 'active' &&
+    !currentSessionId && !hostSessionCreating;
+  $('googleMeetCreateBtn').disabled = !enabled;
+  $('createSessionBtn').disabled = !enabled;
 }
 function setMicLevel(level) {
   const percent = Math.max(0, Math.min(100, Math.round((Number(level) || 0) * 140)));
@@ -70,15 +83,18 @@ function setMicLevel(level) {
   $('hostMicLevel').setAttribute('aria-valuenow', String(percent));
 }
 async function refreshMicrophoneChoices() {
-  const element = $('hostMicDevice');
-  const selected = element.value;
+  const selected = $('hostMicDevice').value || $('hostMicTestDevice').value;
   try {
     const devices = await listMicrophones();
-    element.replaceChildren(...devices.map(device => {
-      const option = document.createElement('option'); option.value = device.deviceId; option.textContent = device.label; return option;
-    }));
-    if (devices.some(device => device.deviceId === selected)) element.value = selected;
-  } catch (_) { /* Device labels may remain private until permission is granted. */ }
+    for (const id of ['hostMicDevice', 'hostMicTestDevice']) {
+      const element = $(id);
+      element.replaceChildren(...devices.map(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId; option.textContent = device.label; return option;
+      }));
+      if (devices.some(device => device.deviceId === selected)) element.value = selected;
+    }
+  } catch (_) { /* Labels may remain private until permission is granted. */ }
 }
 function fmtDate(ms) {
   return ms ? new Date(Number(ms)).toLocaleDateString([], { dateStyle: 'medium' }) : '—';
@@ -239,6 +255,7 @@ function logout() {
   // A session selection belongs to this browser tab and account, never a shared host login.
   currentSessionId = ''; currentSessionPin = ''; currentSessionOwnerId = '';
   ++sessionLoadGeneration;
+  hostSessionCreating = false;
   if ($('meetUrl')) $('meetUrl').value = '';
   refreshHeaderState(); showPublic('home');
 }
@@ -328,7 +345,7 @@ async function loadHostPortal() {
   $('subText').textContent = `${account.email} · ${onTrial ? 'Free 24-hour trial' : 'Subscription ' + account.subscriptionStatus} · ${start} → ${until}`;
   $('planBadge').textContent = onTrial ? 'Trial active' : active ? 'Active' : account.subscriptionStatus;
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
-  $('createSessionBtn').disabled = !active;
+  applyCreateSessionAvailability();
   googleMeetConnected = false;
   googleMeetAvailable = false;
   $('autoMeetDetails').classList.add('hidden');
@@ -437,16 +454,20 @@ $('hostMicToggle').onclick = () => {
   else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
 };
 
-$('hostMicDevice').addEventListener('change', () => {
+function selectMicrophoneForThisBrowser(deviceId) {
+  $('hostMicDevice').value = deviceId;
+  $('hostMicTestDevice').value = deviceId;
   if (microphoneTestRunning || !hostMicSessionId || !hostMicCapture) return;
   const selectedSession = hostMicSessionId;
   stopHostMicrophone('Switching microphone…');
   void startHostMicForSession(selectedSession);
-});
+}
+$('hostMicDevice').addEventListener('change', () => selectMicrophoneForThisBrowser($('hostMicDevice').value));
+$('hostMicTestDevice').addEventListener('change', () => selectMicrophoneForThisBrowser($('hostMicTestDevice').value));
 if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener('devicechange', () => void refreshMicrophoneChoices());
 void refreshMicrophoneChoices();
 $('hostMicTest').onclick = async () => {
-  if (microphoneTestRunning || !hostMicSessionId) return;
+  if (microphoneTestRunning) return;
   if (hostMicCapture) stopHostMicrophone('Microphone muted for test; click Unmute after testing.');
   const testedSessionId = hostMicSessionId;
   microphoneTestRunning = true;
@@ -456,7 +477,7 @@ $('hostMicTest').onclick = async () => {
   $('micTestStatus').textContent = 'Speak normally for 2.5 seconds…';
   $('hostMicReplay').disabled = true;
   try {
-    const clip = await recordMicrophoneTest({ deviceId: $('hostMicDevice').value, onLevel: setMicLevel });
+    const clip = await recordMicrophoneTest({ deviceId: $('hostMicTestDevice').value, onLevel: setMicLevel });
     if (testedSessionId !== hostMicSessionId) return; // Session ended or this tab switched rooms.
     if (micTestObjectUrl) URL.revokeObjectURL(micTestObjectUrl);
     micTestObjectUrl = URL.createObjectURL(clip);
@@ -490,6 +511,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
       $('micTestReplay').classList.add('hidden');
       stopSessionClock();
       currentSessionId = ''; currentSessionPin = '';
+      clearDeviceSessionId(localStorage, account?.id);
       clearDeviceSessionId(sessionStorage, account?.id);
     }
     await loadSessions();
@@ -504,7 +526,8 @@ function focusDeviceSession(session, startMicrophone = false) {
   if (currentSessionId && currentSessionId !== session.id) stopHostMicrophone('', true);
   currentSessionId = session.id;
   currentSessionPin = session.pin;
-  saveDeviceSessionId(sessionStorage, account?.id, session.id);
+  saveDeviceSessionId(localStorage, account?.id, session.id);
+  saveDeviceSessionId(sessionStorage, account?.id, session.id); // one-time v4.1.6 compatibility
   $('pinValue').textContent = session.pin;
   startSessionClock(session.createdAt);
   $('sessionToolbar').classList.remove('hidden');
@@ -515,6 +538,17 @@ function focusDeviceSession(session, startMicrophone = false) {
   $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');
+  applyCreateSessionAvailability();
+}
+
+function showOtherActiveSessions(sessions, selectedId) {
+  const ordered = [...sessions].sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  const others = ordered.filter(session => session.active !== false && session.status === 'active' && session.id !== selectedId);
+  $('otherSessionsPanel').classList.toggle('hidden', others.length === 0);
+  $('otherHostSessions').innerHTML = others.map(session => `
+    <div class="otherSessionRow"><strong>Session ${ordered.indexOf(session) + 1}</strong><span>In progress</span><time data-started-at="${Number(session.createdAt) || 0}">${escapeHTML(durationLabel(session.createdAt))}</time></div>
+  `).join('');
+  if (others.length) startClockDisplay();
 }
 
 async function loadSessions() {
@@ -524,16 +558,17 @@ async function loadSessions() {
   if (generation !== sessionLoadGeneration || ownerId !== String(account?.id || '')) return;
   const sessions = data.sessions || [];
   if (data.usage) $('hostCallSummary').textContent = `${data.usage.sessionCount} calls · ${data.usage.callDurationMinutes} total minutes used`;
-  // Select only this tab's own session. Another computer creating a newer room
-  // must never replace this PIN, close this microphone or redirect its captions.
-  const selectedId = currentSessionId || getDeviceSessionId(sessionStorage, account?.id);
+  // Persist one active room per browser profile/device. Other computers have
+  // independent browser storage even when they use the same Zapper login.
+  // The old sessionStorage key is honored once when upgrading from v4.1.6.
+  const savedId = getDeviceSessionId(localStorage, account?.id);
+  const selectedId = savedId || currentSessionId || getDeviceSessionId(sessionStorage, account?.id);
   const selected = selectDeviceSession(sessions, selectedId);
   if (selected) {
     focusDeviceSession(selected);
   } else {
-    // No implicit selection of the account's newest room. Hosts can explicitly
-    // select an existing room from the list, including after changing devices.
-    if (currentSessionId || selectedId) {
+    if (savedId || currentSessionId || selectedId) {
+      clearDeviceSessionId(localStorage, account?.id);
       clearDeviceSessionId(sessionStorage, account?.id);
       currentSessionId = ''; currentSessionPin = '';
     }
@@ -543,40 +578,11 @@ async function loadSessions() {
     stopSessionClock();
     $('autoMeetDetails').classList.add('hidden');
   }
-  const activeSessions = sessions.filter(session => session.active !== false && session.status === 'active');
-  $('sessions').innerHTML = activeSessions.length ? `<div class="savedSectionLabel">Active calls</div>` + activeSessions.map(session => {
-    const active = session.active !== false && session.status === 'active';
-    return `
-    <div class="dataRow">
-      <div><strong>PIN ${escapeHTML(session.pin)} · ${escapeHTML(durationLabel(session.createdAt, active ? Date.now() : (session.endedAt || Date.now())))}</strong><div class="meta"><span class="pill">${escapeHTML(session.status)}</span>${session.endReason ? `<span>${escapeHTML(session.endReason)}</span>` : ''}<span>${escapeHTML(fmt(session.createdAt))}</span></div></div>
-      <div class="rowActions">
-        ${active ? `${session.id === selected?.id ? '<span class="endedLabel">On this device</span>' : `<button class="ghostBtn compact" data-use="${escapeHTML(session.id)}" type="button">Use on this device</button>`}<button class="ghostBtn compact" data-copy="${escapeHTML(session.pin)}" type="button">Copy PIN</button><button class="dangerBtn compact" data-end="${escapeHTML(session.id)}" data-pin="${escapeHTML(session.pin)}" type="button">End Session</button>` : '<span class="endedLabel">Ended</span>'}
-      </div>
-    </div>`;
-  }).join('') : '';
-  $('sessions').querySelectorAll('[data-use]').forEach(button => {
-    button.onclick = () => {
-      const session = sessions.find(s => s.id === button.dataset.use && s.active !== false && s.status === 'active');
-      if (!session) return;
-      focusDeviceSession(session);
-      // This explicit action may request microphone permission, just like
-      // starting a new session. Only this browser tab switches sessions.
-      if (session.googleCreated) void startHostMicForSession(session.id);
-      void loadSessions();
-    };
-  });
-  $('sessions').querySelectorAll('[data-copy]').forEach(button => {
-    button.onclick = async () => {
-      await navigator.clipboard.writeText(button.dataset.copy);
-      const old = button.textContent; button.textContent = 'Copied'; setTimeout(() => { button.textContent = old; }, 1200);
-    };
-  });
-  $('sessions').querySelectorAll('[data-end]').forEach(button => {
-    button.onclick = async () => {
-      try { await endHostSession(button.dataset.end, button.dataset.pin, button); }
-      catch (error) { alert(error.message); }
-    };
-  });
+  showOtherActiveSessions(sessions, selected?.id || '');
+  // Other running calls are status-only: no PIN copy, switching, or End Session
+  // buttons outside the current device's Create Session controls.
+  $('sessions').replaceChildren();
+  applyCreateSessionAvailability();
 }
 
 async function loadTranscripts() {
@@ -613,7 +619,7 @@ async function refreshGoogleMeetAvailability() {
     const data = await api('/api/google/meet/status');
     googleMeetAvailable = Boolean(data.enabled);
     googleMeetConnected = Boolean(data.enabled && data.connected);
-    $('googleMeetCreateBtn').disabled = !eligible;
+    applyCreateSessionAvailability();
     $('manualMeetCreateLink').classList.toggle('hidden', googleMeetAvailable || !eligible);
     document.querySelector('.meetManualOption')?.classList.toggle('hidden', googleMeetAvailable || !eligible);
     $('googleMeetStatus').classList.toggle('visuallyHidden', googleMeetAvailable && eligible);
@@ -627,7 +633,7 @@ async function refreshGoogleMeetAvailability() {
   } catch (_) {
     googleMeetAvailable = false;
     googleMeetConnected = false;
-    $('googleMeetCreateBtn').disabled = !eligible;
+    applyCreateSessionAvailability();
     $('manualMeetCreateLink').classList.toggle('hidden', !eligible);
     document.querySelector('.meetManualOption')?.classList.toggle('hidden', !eligible);
     $('googleMeetStatus').classList.remove('visuallyHidden');
@@ -656,9 +662,11 @@ function showCreatedSession(session) {
   $('pinStatus').textContent = 'Active — share your six-digit PIN with Zapper participants.';
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');
+  applyCreateSessionAvailability();
 }
 
 $('googleMeetCreateBtn').onclick = async () => {
+  if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating) return;
   $('sessionError').textContent = '';
   if (!googleMeetAvailable) {
     // A signed-in Google browser session cannot authorize cross-origin Meet API
@@ -678,6 +686,8 @@ $('googleMeetCreateBtn').onclick = async () => {
     return;
   }
   if (popup) popup.document.body.textContent = 'Connecting to Google…';
+  hostSessionCreating = true;
+  applyCreateSessionAvailability();
   const requestId = crypto.randomUUID();
   const expectedOrigin = new URL(API_BASE).origin;
   button.disabled = true;
@@ -686,8 +696,10 @@ $('googleMeetCreateBtn').onclick = async () => {
     if (finished || !popup || event.origin !== expectedOrigin || event.source !== popup ||
         event.data?.type !== 'zapper-google-meet-result' || event.data?.requestId !== requestId) return;
     finished = true;
+    if (popupWatcher) clearInterval(popupWatcher);
+    hostSessionCreating = false;
     window.removeEventListener('message', onResult);
-    button.disabled = false;
+    applyCreateSessionAvailability();
     if (!event.data.ok) {
       $('sessionError').textContent = event.data.error || 'Google Meet could not be created.';
       if (event.data.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
@@ -699,17 +711,29 @@ $('googleMeetCreateBtn').onclick = async () => {
     await loadSessions().catch(error => { $('sessionError').textContent = error.message; });
   };
   if (popup) window.addEventListener('message', onResult);
+  const popupWatcher = popup ? setInterval(() => {
+    if (finished || !popup.closed) return;
+    finished = true;
+    hostSessionCreating = false;
+    clearInterval(popupWatcher);
+    window.removeEventListener('message', onResult);
+    applyCreateSessionAvailability();
+  }, 800) : null;
   try {
     const result = await api('/api/google/meet/start', { method: 'POST', body: JSON.stringify({ requestId }) });
     if (result.session) {
       // Saved Google connection: backend already created the room and PIN.
       finished = true;
+      if (popupWatcher) clearInterval(popupWatcher);
+      hostSessionCreating = false;
       window.removeEventListener('message', onResult);
       showCreatedSession({ ...result.session, googleCreated: true });
       await loadSessions();
       return;
     }
     if (result.requiresGoogleSignIn && result.url) {
+      // Google is in charge of the popup; release the temporary UI lock if
+      // the user closes the popup without finishing authorization.
       googleMeetConnected = false;
       if (popup) {
         popup.location.replace(result.url);
@@ -723,18 +747,23 @@ $('googleMeetCreateBtn').onclick = async () => {
     throw new Error('Google Meet did not return a session or sign-in request.');
   } catch (error) {
     finished = true;
+    if (popupWatcher) clearInterval(popupWatcher);
+    hostSessionCreating = false;
     window.removeEventListener('message', onResult);
     $('sessionError').textContent = error.message;
     if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
   } finally {
     if (popup && finished) popup.close();
-    button.disabled = false;
+    applyCreateSessionAvailability();
   }
 };
 
 $('meetUrl').addEventListener('input', () => rememberMeetUrl($('meetUrl').value));
 $('sessionForm').onsubmit = async event => {
   event.preventDefault();
+  if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating) return;
+  hostSessionCreating = true;
+  applyCreateSessionAvailability();
   $('sessionError').textContent = '';
   try {
     const requestedMeetUrl = $('meetUrl').value.trim();
@@ -745,6 +774,9 @@ $('sessionForm').onsubmit = async event => {
   } catch (error) {
     $('sessionError').textContent = error.message;
     if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
+  } finally {
+    hostSessionCreating = false;
+    applyCreateSessionAvailability();
   }
 };
 $('copyPin').onclick = async () => {
@@ -758,6 +790,10 @@ $('endCurrentSession').onclick = async () => {
   catch (error) { $('sessionError').textContent = error.message; }
 };
 $('refreshTranscripts').onclick = async () => { await Promise.all([loadSessions(), loadTranscripts()]); };
+window.addEventListener('storage', event => {
+  if (!account || event.key !== `zapperHostSession:${account.id}`) return;
+  if (!$('hostPortal').classList.contains('hidden')) void loadSessions().catch(() => {});
+});
 
 function monthEquivalent(start, end) {
   if (!start || !end || end <= start) return '—';

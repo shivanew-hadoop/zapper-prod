@@ -94,3 +94,16 @@ body{padding-top:78px}
 @media(max-width:460px){.sessionToolbar{gap:5px;padding:7px}.micLevel{flex-basis:30px}.toolbarPin strong{font-size:15px}.sessionToolbar .toolButton,.sessionToolbar .dangerBtn{font-size:11px;padding:8px 7px}}
 
 .hostCallSummary{font-size:12px;color:#90bbec;margin-top:-8px}
+
+/* v4.1.7: separate device microphone check, read-only other session status. */
+.micPreflight{margin:14px 0 12px;padding:11px 13px;border:1px solid #294466;border-radius:12px;background:#081828}
+.micPreflight>summary{font-weight:700;font-size:12px;color:#bbd5f5;cursor:pointer}
+.micPreflightControls{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:12px 0 5px;font-size:12px;color:#9eb9d8}
+.micPreflightControls select{background:#0b1b30;color:#eaf2ff;border:1px solid #375171;border-radius:9px;padding:8px;min-width:170px;flex:1 1 180px}
+.otherSessionsPanel{border-top:1px solid #294466;margin-top:24px;padding-top:14px}
+.otherSessionsPanel h3{font-size:14px;margin:0 0 5px;color:#e4f0ff}
+.otherSessionsPanel p{font-size:11px;line-height:1.4;margin:0 0 10px}
+.otherHostSessions{display:grid;gap:7px}
+.otherSessionRow{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:10px;border-radius:9px;background:#081827;border:1px solid #233c5c;font-size:12px}
+.otherSessionRow span{color:#70e0a7}
+.otherSessionRow time{color:#b6cce5;font-variant-numeric:tabular-nums}

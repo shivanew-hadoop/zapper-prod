@@ -1,6 +1,7 @@
-// Browser-tab session selection is scoped to the signed-in Zapper host.
-// Never share the selected room via localStorage: multiple computers (or tabs)
-// using the same host account must not follow each other's latest session.
+// A browser profile owns at most one selected room for each signed-in host.
+// The UI stores this key in localStorage so tabs in that profile share it;
+// different computers keep their own localStorage and can host different rooms.
+// The server still validates session ownership and PINs independently.
 export function deviceSessionKey(accountId) {
   return accountId === null || accountId === undefined || String(accountId) === ''
     ? '' : `zapperHostSession:${accountId}`;

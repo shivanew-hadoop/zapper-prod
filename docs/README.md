@@ -1,6 +1,6 @@
-# Zapper v4.1.7 — Current release guide
+# Zapper v4.1.8 — Current release guide
 
-This is the **only** project documentation file. The application is based on v4.1.6; existing API, Google OAuth, PIN redemption, desktop capture, subscriptions and PDF behavior are retained.
+This is the **only** project documentation file. Zapper v4.1.8 is based directly on v4.1.7. Only the public Privacy Policy wording (Google verification security disclosures), version metadata, and this release guide changed. API, Google OAuth, PIN redemption, desktop capture, subscriptions, and PDF behavior are unchanged.
 
 ## Host workflow
 
@@ -18,8 +18,8 @@ This is the **only** project documentation file. The application is based on v4.
 ## Deployment
 
 - Push the contents of `zapper-prod/` to the existing GitHub `main` branch.
-- Deploy `apps/web` to Vercel. This update's behavioral changes are **frontend only**.
-- `apps/api` and `apps/desktop` have package version `4.1.7` for release consistency, but their runtime implementations are unchanged from v4.1.6. No database migration or new environment variables are required.
+- Deploy `apps/web` to Vercel. Only the web Privacy Policy has changed for v4.1.8.
+- `apps/api` and `apps/desktop` have package version `4.1.8` for release consistency, but their runtime implementations are unchanged from v4.1.7. No database migration or new environment variables are required.
 - If deploying API metadata too, verify the Railway service still points to `/apps/api`, retains its volume and production variables, and reports the intended version at `/health`.
 - Keep the same production Google OAuth client settings; do not change working credentials.
 
@@ -34,3 +34,19 @@ This is the **only** project documentation file. The application is based on v4.
 - Verify participants can redeem the correct PIN and the original transcript-to-PDF path still works.
 
 **Testing note:** The automated browser tests used a simulated API and microphone capture. Real device audio, multi-computer latency, live Google Meet creation and PDF output still require production checks.
+
+## Google OAuth verification — data protection disclosure update (v4.1.8)
+
+Google's verification review requested that Zapper's public Privacy Policy specify mechanisms protecting sensitive data. The updated `apps/web/public/privacy.html` now includes the dedicated [How we protect sensitive information](https://www.zapperapp.in/privacy.html#data-protection) section, which accurately describes:
+
+- TLS/HTTPS and secure WebSockets for production external communications.
+- AES-256-GCM encryption of stored per-host Google OAuth refresh tokens, with the encryption key derived from a backend-only application secret.
+- Salted scrypt password hashes; server-side authenticated/role-checked access to session records and PDFs; session-scoped PIN participant access.
+- Limited Google Meet API scope, separation of Google host connections, and how consent, revocation, retention, and data deletion requests work.
+- Which protections apply specifically to Google OAuth refresh tokens, without claiming that all session transcripts and PDFs are individually encrypted.
+
+**Security configuration to confirm (without changing a working key):** In Railway → API → Variables, verify that the existing `JWT_SECRET` is set to a strong, stable, private value. The OAuth refresh-token encryption key derives from this value. Never expose it, include it in GitHub, or rotate it casually—changing it would require Google hosts to reconnect. Do not send secrets in a support email.
+
+**Deploy and verify:** Push v4.1.8 to GitHub and deploy `apps/web` on Vercel. Open `https://www.zapperapp.in/privacy.html#data-protection` in an incognito browser window and check that the heading and six data-protection bullets appear without login. Confirm the existing `/terms.html`, host login, Create Session, and Saved Transcripts pages are still accessible. No OAuth credential change, Railway data migration, or desktop installer rebuild is needed.
+
+**Respond to Google's reviewer:** In Google Cloud → Google Auth Platform → Verification Center, update/resubmit the verification request with `https://www.zapperapp.in/privacy.html`. Then reply directly to Google's `[Action Needed] OAuth Verification Request Acknowledgement` email with the same link and a short confirmation that the data protection disclosures are published. Google must review the changes; approval cannot be guaranteed by code changes alone.

@@ -53,3 +53,85 @@ Official Cashfree website audit criteria include business/product description, p
 - Chromium DOM integration checks (with mocked account and session API) passed for active/expired trial views, navigation order, microphone dropdown placement, PIN copying and End Session Cancel behavior.
 - Existing browser-profile session ownership tests and desktop chat filtering tests can run locally without API dependencies.
 - The existing full API smoke suite **passed locally**, including registration/trial expiry, Google OAuth, PIN access, host audio authentication, captions, transcript PDF and duplicate filtering. Actual device audio behavior, Cashfree website audit and real production PDF cases require deployment and live testing.
+
+
+## v4.2.0 — host plans, Cashfree payments, free-trial entry
+
+This release is based on v4.1.9. Existing Google Meet, Deepgram, one-time
+24-hour trial, simultaneous device sessions, desktop, saved PDFs, and admin
+subscription tools are unchanged. The public header is wider; links for About,
+Policies and Contact remain in the footer. The **Start for Free** form uses the
+existing registration endpoint and retains the once-per-email 24-hour trial.
+
+### Plans (INR, fixed-term, not a recurring mandate)
+
+- 1 month: ₹999.
+- 3 months: ₹2,697 (10% discount from ₹2,997, rounded).
+- 6 months: ₹4,496 (25% discount from ₹5,994, rounded).
+
+These amounts are fixed in `apps/api/cashfree-payments.js` and cannot be
+changed by the browser. Payment orders and confirmed activations are stored in
+SQLite (`cashfree_orders` plus existing `users` subscription fields).
+New purchases extend an existing unexpired subscription from its current end.
+Access activates only after **server-side PAID confirmation** from Cashfree,
+through the authenticated Verify Payment endpoint or a **signed webhook**.
+Concurrent browser returns/replayed webhooks activate each order only once.
+A Cashfree checkout closing or redirecting is **not** proof of payment.
+
+### One-time Cashfree setup (Railway API environment only)
+
+1. Complete Cashfree merchant onboarding/KYC and configure/whitelist your
+   production website domain `https://www.zapperapp.in` in the merchant dashboard.
+2. Configure `CASHFREE_CLIENT_ID` and `CASHFREE_CLIENT_SECRET` from that merchant
+   account. Use sandbox credentials with `CASHFREE_ENV=sandbox` to test first;
+   only use `CASHFREE_ENV=production` with **live** credentials after activation.
+3. Set `WEB_APP_URL=https://www.zapperapp.in` and
+   `PUBLIC_API_URL=https://api.zapperapp.in` to match your deployed websites.
+4. In Cashfree, subscribe the webhook URL
+   `https://api.zapperapp.in/api/payments/cashfree/webhook` to successful
+   payment events. Zapper validates signature and verifies the order with
+   Cashfree's order-status API before activating access.
+5. Deploy the new Railway API and Vercel website; keep your existing `DATA_DIR`
+   volume, JWT secret, Deepgram and Google OAuth settings untouched. Ensure
+   `WEB_ORIGINS` includes `https://www.zapperapp.in`.
+6. In sandbox, create/login as a host, choose a plan, enter a 10-digit Indian
+   mobile number, and complete a Cashfree **sandbox** payment. Return to the host
+   dashboard and verify the paid status and extended end date. Check the admin
+   dashboard and database `cashfree_orders` rows. Repeating Verify Payment must
+   **not** extend a subscription again. Test a failed/pending payment: it must
+   **not** activate a subscription.
+7. After merchant activation, switch to live credentials/production mode and
+   carry out a small real payment and an authorized refund reconciliation test.
+
+`GET /api/payments/config` exposes public plan metadata and gateway readiness,
+not private keys. Checkout uses the provider's hosted page (no payment-card
+collection in the Zapper backend). User-supplied mobile number is used only for
+payment-order processing. Verify returned payment at
+`GET /api/payments/orders/:orderId/verify` with the registered host JWT. The
+webhook must be reachable directly by Cashfree and cannot be protected by a
+Zapper user session. The browser presents an explicit message when payment
+credentials have not yet been configured.
+
+### Five-day renewal reminder
+
+Paid hosts (not one-day trials) see a compact reminder in the dashboard during
+the final five days before expiry. No emails, additional polling or recurring
+charges are introduced. The reminder includes a shortcut to plan pricing.
+
+### Regression checklist
+
+- Anonymous **Start for Free** opens the branded registration popup; Host Login
+  remains separate; duplicate-email trial registration is still blocked.
+- Buy Now for any plan requires a signed-in host; admin accounts cannot pay as
+  hosts; server computes the price and verifies Cashfree order status.
+- After an accepted payment, account subscription expiry updates in SQLite and
+  session creation remains authorized until the new expiry.
+- Parallel sessions on separate computers retain unique PINs and PDFs.
+- PIN copy remains stable in the compact toolbar, with a non-layout-shifting
+  success highlight.
+- Website on mobile and desktop displays pricing with no horizontal overflow.
+- Registration, Deepgram, OAuth, PDF, refund/contact/privacy/terms routes work.
+
+**Production caveat:** This distribution contains no live merchant keys. Real
+Cashfree checkout/activation requires merchant configuration and successful
+live-provider verification; security tests use mocked Cashfree responses.

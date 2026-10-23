@@ -49,6 +49,7 @@ class ClientSocket extends EventEmitter {
   const app = { disable() {}, set() {}, use() {}, get() {} };
   const fakeExpress = () => app;
   fakeExpress.json = () => () => {};
+  fakeExpress.raw = () => () => {}; // Cashfree webhook parser is server middleware, not used by /stt tests.
   const user = { id: 100, email: 'host@example.com' };
   const session = id => ({ id });
   const sessionControl = {

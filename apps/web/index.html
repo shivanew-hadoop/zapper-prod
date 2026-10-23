@@ -20,14 +20,13 @@
         <button data-section="how" type="button">How it works</button>
         <button data-section="features" type="button">Features</button>
         <button data-section="pricing" type="button">Pricing</button>
-        <button data-section="about" type="button">About</button>
-        <button data-section="legal" type="button">Policies</button>
-        <button data-section="contact" type="button">Contact</button>
+
       </nav>
       <div class="navActions">
         <button id="dashboardBtn" class="ghostBtn hidden" type="button">Dashboard</button>
         <button id="navLogin" class="ghostBtn" type="button">Host login</button>
-        <button id="navSignup" class="primaryBtn" type="button">Host sign up</button>
+        <button id="navSignup" class="primaryBtn" type="button">Start for Free</button>
+        <button id="navBuyNow" class="ghostBtn" type="button">Buy Now</button>
         <button id="navLogout" class="ghostBtn hidden" type="button">Log out</button>
       </div>
       <button id="mobileMenuBtn" class="menuBtn" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="mobileNav">
@@ -48,7 +47,8 @@
         <div class="mobileAccountActions">
           <button id="mobileDashboardBtn" class="ghostBtn hidden" type="button">Dashboard</button>
           <button id="mobileLoginBtn" class="ghostBtn" type="button">Host login</button>
-          <button id="mobileSignupBtn" class="primaryBtn" type="button">Host sign up</button>
+          <button id="mobileSignupBtn" class="primaryBtn" type="button">Start for Free</button>
+          <button id="mobileBuyNowBtn" class="ghostBtn" type="button">Buy Now</button>
           <button id="mobileLogoutBtn" class="ghostBtn hidden" type="button">Log out</button>
         </div>
       </div>
@@ -98,14 +98,19 @@
           <article class="featureCard"><div class="iconChip">CUR</div><h3>Private pointer experience</h3><p>Pointer handling over the overlay is separated from the normal desktop experience so the user can interact naturally with Zapper controls.</p></article>
           <article class="featureCard"><div class="iconChip">CHAT</div><h3>Two-way meeting chat</h3><p>Read host chat and reply directly from the Zapper overlay without leaving the live transcript view.</p></article>
           <article class="featureCard"><div class="iconChip">PDF</div><h3>Transcripts one click away</h3><p>Completed meeting transcripts are available from the host dashboard as clean downloadable PDF records.</p></article>
-          <article class="featureCard"><div class="iconChip">₹</div><h3>Cost-conscious host plan</h3><p>A simple ₹1,000 monthly host plan keeps pricing predictable while participants can launch without buying a separate account.</p></article>
+          <article class="featureCard"><div class="iconChip">₹</div><h3>Cost-conscious host plan</h3><p>One, three, and six-month host plans support parallel sessions on different computers with the same host login.</p></article>
           <article class="featureCard"><div class="iconChip">1X</div><h3>One-click access</h3><p>Launch and download controls are available directly from the public homepage, so participants do not have to navigate an account portal first.</p></article>
         </div>
       </section>
 
-      <section id="pricing" class="section shellWide"><div class="pricingWrap">
-        <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>Simple host pricing.</h2><p>Participants can launch Zapper without purchasing a separate participant subscription.</p></div>
-        <div class="pricingCard cardGlow"><span class="pillBlue">HOST PLAN</span><div class="price"><strong>₹1,000</strong><span>/ month</span></div><ul><li>Host dashboard and session creation</li><li>Live participant transcription flow</li><li>Transcript PDF downloads</li><li>Subscription and account support</li></ul><button id="pricingSignup" class="primaryBtn large" type="button">Create host account</button><p class="finePrint">By purchasing or continuing a paid plan, you agree to the Terms, Privacy Policy, Billing & Cancellation Policy and Refund Policy below.</p></div>
+      <section id="pricing" class="section shellWide"><div class="pricingWrap pricingWide">
+        <div class="sectionIntro pricingIntro"><div class="eyebrow">PLANS & PRICING</div><h2>Choose the access you need.</h2><p>One host account can run independent sessions on different computers. Up to four participants can use each session PIN. No automatic recurring charge.</p></div>
+        <div class="pricingPlans">
+          <article class="termCard"><div class="termCardTop">FLEXIBLE</div><h3>Monthly</h3><p class="termDesc">A simple one-month subscription.</p><div class="termPrice">₹999</div><p class="termPeriod">1 month · ₹999/month</p><button class="primaryBtn termBuy" data-plan="month1" type="button">Buy Now</button><ul class="termFeatures"><li>Parallel independent host sessions</li><li>Up to 4 PIN participants per session</li><li>Google Meet creation</li><li>Live voice-to-text captions</li><li>Transcript PDF downloads</li><li>Host dashboard and support</li></ul></article>
+          <article class="termCard"><div class="termCardTop">SAVE 10%</div><h3>Quarterly</h3><p class="termDesc">Three months of uninterrupted access.</p><div class="termPrice">₹2,697</div><p class="termPeriod">3 months · 10% discount (rounded)</p><button class="primaryBtn termBuy" data-plan="month3" type="button">Buy Now</button><ul class="termFeatures"><li>All Monthly features</li><li>3 months of parallel host sessions</li><li>Up to 4 PIN participants per session</li><li>Live captions and PDF history</li><li>Manual renewal, no auto-debit</li><li>Host dashboard and support</li></ul></article>
+          <article class="termCard recommended"><div class="termCardTop">BEST VALUE · SAVE 25%</div><h3>Half-yearly</h3><p class="termDesc">Six months of access, best savings.</p><div class="termPrice">₹4,496</div><p class="termPeriod">6 months · 25% discount (rounded)</p><button class="primaryBtn termBuy" data-plan="month6" type="button">Buy Now</button><ul class="termFeatures"><li>All Monthly features</li><li>6 months of parallel host sessions</li><li>Up to 4 PIN participants per session</li><li>Live captions and PDF history</li><li>Manual renewal, no auto-debit</li><li>Host dashboard and support</li></ul></article>
+        </div>
+        <p class="finePrint">Prices in INR, rounded to whole rupees. One-time fixed-term payments, not automatic recurring charges. Select a plan to see the exact amount before paying. By purchasing you agree to our <a href="/terms.html">Terms</a>, <a href="/billing.html">Billing & Cancellation</a>, <a href="/refund.html">Refund Policy</a> and <a href="/privacy.html">Privacy Policy</a>. No credit card required for the separate 1-day trial.</p>
       </div></section>
 
       <section id="about" class="section sectionAlt"><div class="shellWide aboutGrid"><div><div class="eyebrow">ABOUT ZAPPER</div><h2>Meeting transcription without unnecessary participant friction.</h2></div><p>Zapper combines a host-managed web portal with a focused desktop experience for live transcription. It is built for practical meeting access, low-latency captions, host-controlled sessions, searchable account administration and downloadable transcript records.</p></div></section>
@@ -115,7 +120,7 @@
         <div class="policyGrid">
           <article id="terms" class="policyCard"><h3>Terms of Service</h3><p>Zapper provides software for meeting transcription and related host session management. Users are responsible for obtaining any consent required before recording or transcribing a meeting, safeguarding account credentials and using the service lawfully. Service availability may depend on third-party platforms, network connectivity and supported operating-system capabilities.</p><p>Paid access is licensed to the registered host account for the active subscription period. Misuse, attempts to bypass access controls, unlawful transcription, abusive traffic or interference with the service may result in suspension.</p></article>
           <article id="privacy" class="policyCard"><h3>Privacy Policy</h3><p>Zapper processes host account details, session PINs, meeting links and transcripts to provide its meeting transcription service. With your permission, Google OAuth is used only to create Meet rooms for your own account; encrypted authorization credentials are stored for reuse. Zapper does not request access to Gmail messages or Google Drive files.</p><p>Host microphone or participant meeting audio is transmitted to our speech-to-text service provider, Deepgram. Transcripts and PDFs are retained according to service settings. Read our <a href="/privacy.html">full Privacy Policy</a> for Google data use, sharing, retention, revocation and deletion requests.</p></article>
-          <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>The displayed host plan is ₹1,000 per month unless a different price is presented at checkout. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
+          <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>Fixed-term subscription plans cost ₹999 for 1 month, ₹2,697 for 3 months (10% off, rounded), or ₹4,496 for 6 months (25% off, rounded). Cashfree confirms payment before activation. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
           <article id="refund" class="policyCard"><h3>Refund Policy</h3><p>If a payment is duplicated, charged in error, or the paid service cannot be provided due to a verified Zapper-side issue, contact support with the account email and transaction reference. Eligible refunds are reviewed case by case and, when approved, are returned to the original payment method according to payment-provider timelines.</p><p>Request assistance within 7 calendar days of a duplicate/incorrect charge or failed activation, where possible. Approved refunds are returned to the original payment method. Read the <a href="/refund.html">full Refund Policy</a>.</p></article>
           <article id="security" class="policyCard"><h3>Security & Responsible Use</h3><p>Zapper uses authenticated host accounts, time-limited application tokens and server-side session validation. Users should keep login credentials and session PINs confidential and install desktop builds only from the official Zapper release link.</p></article>
           <article id="support" class="policyCard"><h3>Support & Grievance Contact</h3><p>For account, billing, privacy, refund or technical questions, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a> or call <a href="tel:+919346073219">+91 93460 73219</a>. Include your registered email and a concise description of the issue. Do not send passwords or private meeting content unless specifically required for troubleshooting.</p></article>
@@ -135,7 +140,8 @@
     <div class="modalBackdrop" data-close-auth></div>
     <section class="authCard">
       <button class="modalClose" data-close-auth type="button">×</button>
-      <div class="eyebrow">HOST / ADMIN ACCOUNT</div>
+      <div id="trialSignupBrand" class="trialSignupBrand hidden"><span class="brandMark">Z</span><strong>ZapperApp</strong></div>
+      <div class="eyebrow" id="authEyebrow">HOST / ADMIN ACCOUNT</div>
       <h2 id="authTitle">Sign in to Zapper</h2>
       <p id="authLead">Hosts sign in to create meeting sessions. Administrators use the same login and are routed automatically.</p>
       <div id="authTabs" class="tabs" role="tablist"><button id="loginTab" class="active" type="button">Login</button><button id="registerTab" type="button">Register</button></div>
@@ -151,12 +157,26 @@
         <input id="email" type="email" placeholder="Email" autocomplete="email" required />
         <input id="password" type="password" placeholder="Password (8+ characters)" autocomplete="current-password" required />
         <input id="resetConfirm" class="hidden" type="password" placeholder="Confirm new password" autocomplete="new-password" />
+        <p id="registerConsent" class="registerConsent hidden">One free 24-hour trial per email. By creating an account you agree to the <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a> and <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</p>
         <button id="authSubmit" class="primaryBtn" type="submit">Login</button>
         <button id="forgotPasswordBtn" class="linkBtn authLink" type="button">Forgot password?</button>
         <button id="backToLoginBtn" class="linkBtn authLink hidden" type="button">Back to login</button>
         <div id="authError" class="error" aria-live="polite"></div>
         <div id="authSuccess" class="successText" aria-live="polite"></div>
       </form>
+    </section>
+  </div>
+
+  <div id="checkoutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle">
+    <div class="modalBackdrop" data-close-checkout></div>
+    <section class="authCard checkoutCard"><button class="modalClose" type="button" data-close-checkout aria-label="Close checkout">×</button>
+      <div class="eyebrow">SECURE CHECKOUT</div><h2 id="checkoutTitle">Confirm your subscription</h2>
+      <p id="checkoutPlanSummary">Choose a plan to continue.</p>
+      <label class="checkoutPhoneLabel" for="checkoutPhone">Indian mobile number for payment confirmation</label>
+      <input id="checkoutPhone" type="tel" inputmode="numeric" maxlength="14" placeholder="10-digit mobile number" autocomplete="tel" />
+      <p class="finePrint">Payment is processed by Cashfree. No automatic recurring debit. Subscription updates only after payment is verified.</p>
+      <div id="checkoutError" class="error" role="alert"></div>
+      <div class="modalActions"><button id="checkoutPayBtn" class="primaryBtn" type="button">Continue to Cashfree</button><button class="ghostBtn" type="button" data-close-checkout>Cancel</button></div>
     </section>
   </div>
 
@@ -174,7 +194,9 @@
   </div>
 
   <main id="hostPortal" class="portalShell hidden">
-    <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p><p id="hostCallSummary" class="hostCallSummary"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
+    <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p><p id="hostCallSummary" class="hostCallSummary"></p></div><div class="planSummary"><span>Host subscription</span><strong>From ₹999</strong><span id="planBadge" class="statusBadge">Checking</span><button id="portalRenewBtn" class="ghostBtn compact" type="button">View plans / Renew</button></div></section>
+    <div id="renewalNotice" class="renewalNotice hidden" role="status" aria-live="polite"><span id="renewalNoticeText"></span><button id="renewalNoticeBuy" class="ghostBtn compact" type="button">Renew plan</button></div>
+    <div id="paymentReturnNotice" class="paymentReturnNotice hidden" role="status" aria-live="polite"></div>
     <section class="portalGrid">
       <div class="portalCard">
         <div class="eyebrow">CREATE SESSION</div>

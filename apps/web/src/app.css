@@ -114,3 +114,41 @@ body{padding-top:78px}
 .mobileRecordingNotice{font-size:11px;line-height:1.5;color:#a8c9ef;margin:5px 0}
 .trialExpiredCard a{color:#8dbdff;text-decoration:underline}
 .trialExpiredCard .primaryBtn{margin-top:10px;min-width:110px}
+
+/* v4.2.0: wider professional layout, fixed-term pricing, simple checkout. */
+.shellWide{width:min(1320px,calc(100% - 40px))}
+.portalShell{width:min(1280px,calc(100% - 40px))}
+.siteNav{width:min(1320px,calc(100% - 40px))!important}
+.pricingWide{display:block!important;max-width:1320px}
+.pricingIntro{max-width:900px;margin:0 auto 30px;text-align:center}
+.pricingPlans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;align-items:stretch}
+.termCard{position:relative;display:flex;flex-direction:column;min-width:0;padding:0 24px 24px;background:linear-gradient(160deg,#13263f,#0a192a);border:1px solid #355277;border-radius:20px;overflow:hidden;box-shadow:0 16px 45px rgba(0,0,0,.17)}
+.termCard.recommended{border-color:#65cb8f;box-shadow:0 0 0 1px rgba(103,205,143,.24),0 20px 50px rgba(0,0,0,.20)}
+.termCardTop{margin:0 -24px 20px;padding:13px 24px;background:#18365c;color:#a2c8ff;font-size:11px;letter-spacing:.13em;font-weight:900}
+.termCard.recommended .termCardTop{background:#215b3b;color:#b2ffd2}
+.termCard h3{font-size:24px;margin:0 0 8px}.termDesc{margin:0 0 14px;color:#9fb5cf;font-size:13px;min-height:36px}
+.termPrice{font-size:clamp(34px,3.2vw,46px);font-weight:900;line-height:1.1;letter-spacing:-.03em}
+.termPeriod{color:#a8bed5;font-size:12px;margin:10px 0 18px}
+.termBuy{width:100%;min-height:46px}.termCard.recommended .termBuy{background:linear-gradient(135deg,#19875b,#33a86c)}
+.termFeatures{list-style:none;padding:12px 0 0;margin:18px 0 0;border-top:1px solid #29415c;display:grid;gap:13px;line-height:1.5;color:#bbcee2;font-size:13px}
+.termFeatures li{position:relative;padding-left:20px}.termFeatures li::before{content:'✓';position:absolute;left:0;color:#73e6a9;font-weight:900}
+.pricingWide>.finePrint{max-width:1000px;margin:22px auto 0;text-align:center}.pricingWide a{color:#a4d0ff}
+.trialSignupBrand{display:flex;align-items:center;justify-content:center;gap:12px;margin:7px 0 24px;font-size:24px;font-weight:850;letter-spacing:.02em}
+.trialSignupBrand .brandMark{width:48px;height:48px;font-size:22px}
+.authCard:has(.trialSignupBrand:not(.hidden)){max-width:520px;text-align:center}
+.authCard:has(.trialSignupBrand:not(.hidden)) #authForm input{text-align:left}
+.authCard:has(.trialSignupBrand:not(.hidden)) #authSubmit{min-height:46px}
+.registerConsent{font-size:11px!important;line-height:1.6!important;text-align:center;margin:2px 0!important}
+.registerConsent a{color:#9fcbff}
+.checkoutCard{max-width:520px}.checkoutPhoneLabel{display:block;margin:12px 0 7px;color:#adc3dc;font-size:12px;font-weight:700}
+.checkoutCard .modalActions{flex-wrap:wrap;gap:9px}
+.renewalNotice,.paymentReturnNotice{border:1px solid #42668d;border-radius:13px;padding:11px 14px;background:#10223a;color:#d8e8fa;font-size:13px;line-height:1.6;margin:0 0 18px}
+.renewalNotice{display:flex;align-items:center;justify-content:space-between;gap:13px;border-color:#aa8335;background:#332610;color:#ffe6a8}
+.paymentReturnNotice button{margin-left:10px}
+/* The clipboard toast floats rather than changing the session toolbar's row height. */
+.sessionToolbar{position:relative}
+.pinCopyFeedback{position:absolute;right:0;top:calc(100% + 5px);width:max-content;max-width:260px;z-index:3;white-space:normal;background:#123529;border:1px solid #45a373;padding:6px 9px;border-radius:8px;box-shadow:0 8px 22px rgba(0,0,0,.25);font-size:11px;line-height:1.4}
+.toolbarPin{flex-shrink:0;min-width:106px;white-space:nowrap;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}
+.toolbarPin.pinCopied{background:#173f36!important;border-color:#62e2a2!important;box-shadow:0 0 0 3px rgba(71,221,145,.24)!important}
+@media(max-width:1050px){.pricingPlans{grid-template-columns:repeat(2,minmax(0,1fr))}.termCard.recommended{grid-column:1/-1}}
+@media(max-width:700px){.pricingPlans{grid-template-columns:1fr}.termCard.recommended{grid-column:auto}.renewalNotice{align-items:flex-start;flex-direction:column}.shellWide,.portalShell{width:calc(100% - 24px)}.siteNav{width:calc(100% - 24px)!important}}

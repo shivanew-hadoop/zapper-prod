@@ -4,6 +4,7 @@ const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 const googleMeetRoutes = require('./google-meet');
 const { dedupeTranscriptForPdf } = require('./transcript-output-dedupe');
+const { installCashfreePayments } = require('./cashfree-payments');
 
 module.exports = function createSessionControl({ app, dataDir }) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -176,7 +177,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   if (!jwtSecretRaw) console.warn('[AUTH] JWT_SECRET is not set. Set a stable 32+ character JWT_SECRET on Railway.');
 
   const trialDurationMs = 24 * 60 * 60 * 1000; // One-time trial starts at registration, not first session.
-  const planPriceInr = Math.max(1, Number(process.env.PLAN_PRICE_INR || 1000));
+  const planPriceInr = 999; // Published 1-month checkout price; server-calculated plan amounts live in cashfree-payments.js.
   const portalTokenDays = Math.max(1, Number(process.env.PORTAL_TOKEN_DAYS || 7));
   // Hard product limit: a host session can remain active for at most 3h 30m.
   // Railway may lower this value for testing, but it can never exceed 210 minutes.
@@ -781,6 +782,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     db.prepare('DELETE FROM password_reset_tokens WHERE user_id=? AND id<>?').run(row.user_id, row.id);
     res.json({ ok: true, message: 'Password updated. You can now sign in with the new password.' });
   });
+
+  installCashfreePayments({ app, db, auth, publicUser });
 
   app.get('/api/account', auth, (req, res) => {
     res.json({ ok: true, user: publicUser(req.authUser), plan: { priceInr: planPriceInr, billing: 'monthly' }, retention: { sessions: sessionRetention, transcripts: transcriptRetention } });

@@ -52,7 +52,10 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
   maxAge: 86400,
 }));
-app.use(express.json({ limit: '2mb' }));
+// Preserve exact signed webhook bytes before the global JSON parser.
+// Cashfree route is registered by session-control and uses express.raw.
+app.use((req, res, next) => req.path === '/api/payments/cashfree/webhook' ? next() : express.json({ limit: '2mb' })(req, res, next));
+app.use('/api/payments/cashfree/webhook', express.raw({ type: 'application/json', limit: '256kb' }));
 
 const requestBuckets = new Map();
 function simpleRateLimit({ windowMs, limit }) {

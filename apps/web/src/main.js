@@ -32,6 +32,9 @@ let micTestObjectUrl = '';
 let hostSessionCreating = false;
 let trialExpiredShownForLogin = false;
 let pinCopyFeedbackTimer = null;
+let checkoutPlanId = '';
+let pendingPurchasePlanId = '';
+let paymentVerificationPending = false;
 const recordingWakeLock = createRecordingWakeLock({ onState: message => {
   const el = document.getElementById('mobileRecordingNotice');
   if (el) { el.textContent = message; el.classList.toggle('hidden', !message); }
@@ -234,6 +237,9 @@ function setMode(next) {
   const forgotMode = mode === 'forgot';
   const resetMode = mode === 'reset';
   $('authTabs').classList.toggle('hidden', forgotMode || resetMode);
+  $('trialSignupBrand')?.classList.toggle('hidden', !registerMode);
+  $('registerConsent')?.classList.toggle('hidden', !registerMode);
+  $('authEyebrow').textContent = registerMode ? 'START FOR FREE · NO CREDIT CARD REQUIRED' : 'HOST / ADMIN ACCOUNT';
   $('loginTab').classList.toggle('active', loginMode);
   $('registerTab').classList.toggle('active', registerMode);
   $('name').classList.toggle('hidden', !registerMode);
@@ -247,9 +253,9 @@ function setMode(next) {
   $('password').required = !forgotMode;
   $('resetConfirm').required = resetMode;
   $('password').autocomplete = loginMode ? 'current-password' : 'new-password';
-  $('authSubmit').textContent = loginMode ? 'Login' : registerMode ? 'Create account' : forgotMode ? 'Generate reset link' : 'Set new password';
-  $('authTitle').textContent = loginMode ? 'Sign in to Zapper' : registerMode ? 'Create a host account' : forgotMode ? 'Reset your password' : 'Choose a new password';
-  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Create your host account and get one free 24-hour trial, starting immediately.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
+  $('authSubmit').textContent = loginMode ? 'Login' : registerMode ? 'Start My Free 1-Day Trial' : forgotMode ? 'Generate reset link' : 'Set new password';
+  $('authTitle').textContent = loginMode ? 'Sign in to Zapper' : registerMode ? 'Free 1-Day Trial' : forgotMode ? 'Reset your password' : 'Choose a new password';
+  $('authLead').textContent = loginMode ? 'Hosts and administrators use the same secure sign-in.' : registerMode ? 'Register your host account. One free 24-hour trial starts immediately. No credit card required.' : forgotMode ? 'Enter your registered email. If the account exists, Zapper will generate a secure reset link.' : 'Enter and confirm your new password.';
   $('authError').textContent = '';
   $('authSuccess').textContent = '';
 }
@@ -286,7 +292,8 @@ function openPublicSection(section) { closeMobileNav(); showPublic(section); }
 $('navLogin').onclick = () => openAuth('login');
 $('footerLogin').onclick = () => openAuth('login');
 $('navSignup').onclick = () => openAuth('register');
-$('pricingSignup').onclick = () => openAuth('register');
+$('navBuyNow').onclick = () => openPublicSection('pricing');
+// Plan checkout is handled separately from the one-time free trial.
 $('loginTab').onclick = () => setMode('login');
 $('registerTab').onclick = () => setMode('register');
 $('forgotPasswordBtn').onclick = () => setMode('forgot');
@@ -298,6 +305,7 @@ $('navLogout').onclick = logout;
 $('mobileMenuBtn').onclick = toggleMobileNav;
 $('mobileLoginBtn').onclick = () => openAuth('login');
 $('mobileSignupBtn').onclick = () => openAuth('register');
+$('mobileBuyNowBtn').onclick = () => openPublicSection('pricing');
 $('mobileDashboardBtn').onclick = () => { closeMobileNav(); loadPortal(); };
 $('mobileLogoutBtn').onclick = logout;
 document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => openPublicSection(el.dataset.section)));
@@ -338,6 +346,7 @@ $('authForm').onsubmit = async event => {
     token = data.token; localStorage.setItem('zapperToken', token); hideAuth();
     trialExpiredShownForLogin = false;
     await loadPortal();
+    if (pendingPurchasePlanId) { const planId = pendingPurchasePlanId; pendingPurchasePlanId = ''; openCheckout(planId); }
   } catch (error) {
     $('authError').textContent = error.message;
   }
@@ -347,6 +356,114 @@ async function loadAccount() {
   const data = await api('/api/account');
   account = data.user;
   return data;
+}
+
+// Payment durations and prices are authoritative on the backend; these labels are display only.
+const planLabels = Object.freeze({
+  month1: { title: '1 month', price: '₹999' },
+  month3: { title: '3 months · 10% off', price: '₹2,697' },
+  month6: { title: '6 months · 25% off', price: '₹4,496' },
+});
+function updateRenewalNotice() {
+  const notice = $('renewalNotice');
+  const paidUntil = Number(account?.subscriptionValidUntil || 0);
+  const isTrial = paidUntil && Number(account?.trialEndsAt || 0) === paidUntil;
+  const remaining = paidUntil - Date.now();
+  const show = account?.role === 'host' && !isTrial && account?.subscriptionStatus === 'active' &&
+    remaining > 0 && remaining <= 5 * 86400000;
+  notice.classList.toggle('hidden', !show);
+  if (show) {
+    const days = Math.ceil(remaining / 86400000);
+    $('renewalNoticeText').textContent = `Your paid subscription expires in ${days} day${days === 1 ? '' : 's'} (${fmt(paidUntil)}). Renew now to avoid interruption.`;
+  }
+}
+function openCheckout(planId) {
+  if (!planLabels[planId]) return;
+  if (!token || !account || account.role !== 'host') {
+    pendingPurchasePlanId = planId;
+    openAuth('login');
+    $('authLead').textContent = 'Sign in as a host to purchase this subscription. New host? Choose Register for your free trial first.';
+    return;
+  }
+  checkoutPlanId = planId;
+  $('checkoutError').textContent = '';
+  $('checkoutPlanSummary').textContent = `${planLabels[planId].title} subscription — ${planLabels[planId].price}, billed once. Existing paid access is extended; no automatic renewals.`;
+  $('checkoutModal').classList.remove('hidden');
+  $('checkoutPhone').focus();
+}
+function closeCheckout() { $('checkoutModal').classList.add('hidden'); $('checkoutError').textContent = ''; }
+document.querySelectorAll('[data-plan]').forEach(button => button.addEventListener('click', () => openCheckout(button.dataset.plan)));
+document.querySelectorAll('[data-close-checkout]').forEach(button => button.addEventListener('click', closeCheckout));
+$('portalRenewBtn').onclick = () => openPublicSection('pricing');
+$('renewalNoticeBuy').onclick = () => openPublicSection('pricing');
+let cashfreeSdkPromise = null;
+function loadCashfreeSdk() {
+  if (window.Cashfree) return Promise.resolve(window.Cashfree);
+  if (!cashfreeSdkPromise) cashfreeSdkPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+    script.onload = () => window.Cashfree ? resolve(window.Cashfree) : reject(new Error('Cashfree checkout was not available.'));
+    script.onerror = () => reject(new Error('Could not load the secure Cashfree checkout. Check your connection.'));
+    document.head.appendChild(script);
+  }).catch(error => { cashfreeSdkPromise = null; throw error; });
+  return cashfreeSdkPromise;
+}
+$('checkoutPayBtn').onclick = async () => {
+  const button = $('checkoutPayBtn');
+  if (button.disabled) return;
+  button.disabled = true;
+  $('checkoutError').textContent = '';
+  try {
+    const phone = $('checkoutPhone').value.trim();
+    const order = await api('/api/payments/create-order', { method: 'POST', body: JSON.stringify({ planId: checkoutPlanId, phone }) });
+    // Store order reference only (never store card data or gateway credentials).
+    sessionStorage.setItem('zapperPendingPaymentOrder', order.orderId);
+    const Cashfree = await loadCashfreeSdk();
+    const checkout = Cashfree({ mode: order.mode });
+    closeCheckout();
+    const result = await checkout.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: '_self' });
+    if (result?.error) throw new Error('Checkout could not complete. If you paid, use Verify payment after returning.');
+  } catch (error) {
+    $('checkoutModal').classList.remove('hidden');
+    $('checkoutError').textContent = error.message;
+  } finally { button.disabled = false; }
+};
+async function verifyPayment(orderId) {
+  const notice = $('paymentReturnNotice');
+  notice.classList.remove('hidden');
+  notice.textContent = 'Checking payment status with Cashfree…';
+  try {
+    const response = await api(`/api/payments/orders/${encodeURIComponent(orderId)}/verify`);
+    if (response.status === 'paid') {
+      account = response.user;
+      sessionStorage.removeItem('zapperPendingPaymentOrder');
+      notice.textContent = `Payment verified. Subscription active until ${fmt(account.subscriptionValidUntil)}.`;
+      $('subText').textContent = `${account.email} · Subscription active · ${fmt(account.subscriptionStartedAt)} → ${fmt(account.subscriptionValidUntil)}`;
+      $('planBadge').textContent = 'Active';
+      $('planBadge').className = 'statusBadge active';
+      applyCreateSessionAvailability();
+      updateRenewalNotice();
+      closeExpiredTrialNotice();
+    } else {
+      notice.replaceChildren(document.createTextNode('Payment not yet confirmed. Access will activate only after Cashfree confirms payment. '));
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'ghostBtn compact'; retry.textContent = 'Verify payment again';
+      retry.onclick = () => void verifyPayment(orderId);
+      notice.appendChild(retry);
+    }
+  } catch (error) { notice.textContent = error.message; }
+}
+async function checkReturnedPaymentIfPresent() {
+  if (paymentVerificationPending || !token || account?.role !== 'host') return;
+  const params = new URLSearchParams(location.search);
+  const orderId = params.get('order_id') || sessionStorage.getItem('zapperPendingPaymentOrder');
+  if (!orderId || !/^zap_[a-z0-9_]+$/i.test(orderId)) return;
+  paymentVerificationPending = true;
+  if (params.has('order_id')) {
+    params.delete('order_id'); params.delete('payment_return');
+    history.replaceState({}, '', location.pathname + (params.toString() ? `?${params}` : '') + location.hash);
+  }
+  try { await verifyPayment(orderId); } finally { paymentVerificationPending = false; }
 }
 
 async function loadHostPortal() {
@@ -369,6 +486,7 @@ async function loadHostPortal() {
   $('subText').textContent = `${account.email} · ${onTrial ? 'Free 24-hour trial' : 'Subscription ' + account.subscriptionStatus} · ${start} → ${until}`;
   $('planBadge').textContent = onTrial ? 'Trial active' : active ? 'Active' : account.subscriptionStatus;
   $('planBadge').className = `statusBadge ${active ? 'active' : 'inactive'}`;
+  updateRenewalNotice();
   applyCreateSessionAvailability();
   googleMeetConnected = false;
   googleMeetAvailable = false;
@@ -381,6 +499,7 @@ async function loadHostPortal() {
   await Promise.all([loadSessions(), loadTranscripts()]);
   if (active) void refreshGoogleMeetAvailability();
   showExpiredTrialIfNeeded();
+  await checkReturnedPaymentIfPresent();
   window.scrollTo({ top: 0 });
 }
 
@@ -814,6 +933,9 @@ $('copyPin').onclick = async () => {
   clearTimeout(pinCopyFeedbackTimer);
   try {
     await navigator.clipboard.writeText(pin);
+    $('copyPin').classList.remove('pinCopied');
+    void $('copyPin').offsetWidth; // restart the brief highlight without changing layout
+    $('copyPin').classList.add('pinCopied');
     feedback.textContent = 'PIN copied to clipboard';
     $('copyPin').title = 'Copied! Click to copy PIN again';
   } catch (_) {
@@ -823,6 +945,7 @@ $('copyPin').onclick = async () => {
   feedback.classList.remove('hidden');
   pinCopyFeedbackTimer = setTimeout(() => {
     feedback.classList.add('hidden');
+    $('copyPin').classList.remove('pinCopied');
     $('copyPin').title = 'Click to copy PIN to clipboard';
   }, 2600);
 };

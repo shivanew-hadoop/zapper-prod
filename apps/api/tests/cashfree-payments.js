@@ -38,7 +38,7 @@ function setup() {
   return {db,call,get request(){return lastRequest},set paid(value){paid=value}};
 }
 test('published prices rounded and calendar month edges',()=> {
-  assert.deepEqual([PLANS.month1.amount, PLANS.month3.amount, PLANS.month6.amount],[999,2697,4496]);
+  assert.deepEqual([PLANS.month1.amount, PLANS.month3.amount, PLANS.month6.amount],[999,2697,5095]);
   assert.equal(new Date(addCalendarMonths(Date.UTC(2026,0,31),1)).toISOString(),'2026-02-28T00:00:00.000Z');
   assert.equal(new Date(addCalendarMonths(Date.UTC(2026,11,31),1)).toISOString(),'2027-01-31T00:00:00.000Z');
 });
@@ -48,7 +48,7 @@ test('successful verification activates exactly once and isolates hosts',async()
   assert.equal(bad.statusCode,400);
   const start = await ctx.call('POST','/api/payments/create-order',1,{body:{planId:'month6',phone:'9346073219',amount:1}});
   assert.equal(start.statusCode,200);
-  assert.equal(ctx.request.order_amount,4496);
+  assert.equal(ctx.request.order_amount,5095);
   assert.equal(ctx.request.customer_details.customer_id,'host_1');
   const orderId=start.jsonValue.orderId;
   assert.equal(ctx.db.prepare('SELECT subscription_status FROM users WHERE id=1').get().subscription_status,'inactive');

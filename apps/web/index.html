@@ -23,10 +23,11 @@
 
       </nav>
       <div class="navActions">
-        <button id="dashboardBtn" class="ghostBtn hidden" type="button">Dashboard</button>
+        <button id="dashboardBtn" class="ghostBtn hidden" type="button">Create Session</button>
         <button id="navLogin" class="ghostBtn" type="button">Host login</button>
         <button id="navSignup" class="primaryBtn" type="button">Start for Free</button>
         <button id="navBuyNow" class="ghostBtn" type="button">Buy Now</button>
+        <button id="navDemo" class="ghostBtn" type="button">Schedule a Demo</button>
         <button id="navLogout" class="ghostBtn hidden" type="button">Log out</button>
       </div>
       <button id="mobileMenuBtn" class="menuBtn" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="mobileNav">
@@ -45,10 +46,11 @@
           <button data-section="contact" type="button">Contact</button>
         </nav>
         <div class="mobileAccountActions">
-          <button id="mobileDashboardBtn" class="ghostBtn hidden" type="button">Dashboard</button>
+          <button id="mobileDashboardBtn" class="ghostBtn hidden" type="button">Create Session</button>
           <button id="mobileLoginBtn" class="ghostBtn" type="button">Host login</button>
           <button id="mobileSignupBtn" class="primaryBtn" type="button">Start for Free</button>
           <button id="mobileBuyNowBtn" class="ghostBtn" type="button">Buy Now</button>
+          <button id="mobileDemoBtn" class="ghostBtn" type="button">Schedule a Demo</button>
           <button id="mobileLogoutBtn" class="ghostBtn hidden" type="button">Log out</button>
         </div>
       </div>
@@ -63,7 +65,7 @@
           <h1>Participant? Launch immediately.</h1>
           <p class="heroLead">Open Zapper, enter the PIN shared for your meeting and start transcription. No website account or portal login is required for participants.</p>
           <div class="heroActions participantPrimaryActions" id="homePrimaryActions">
-            <button id="hostHomeDashboardBtn" class="primaryBtn large hidden" type="button">Dashboard</button>
+            <button id="hostHomeDashboardBtn" class="primaryBtn large hidden" type="button">Create Session</button>
             <button class="primaryBtn large" data-launch type="button">Launch Zapper</button>
             <a class="secondaryBtn large" data-download href="#">Download Zapper</a>
           </div>
@@ -108,7 +110,7 @@
         <div class="pricingPlans">
           <article class="termCard"><div class="termCardTop">FLEXIBLE</div><h3>Monthly</h3><p class="termDesc">A simple one-month subscription.</p><div class="termPrice">₹999</div><p class="termPeriod">1 month · ₹999/month</p><button class="primaryBtn termBuy" data-plan="month1" type="button">Buy Now</button><ul class="termFeatures"><li>Parallel independent host sessions</li><li>Up to 4 PIN participants per session</li><li>Google Meet creation</li><li>Live voice-to-text captions</li><li>Transcript PDF downloads</li><li>Host dashboard and support</li></ul></article>
           <article class="termCard"><div class="termCardTop">SAVE 10%</div><h3>Quarterly</h3><p class="termDesc">Three months of uninterrupted access.</p><div class="termPrice">₹2,697</div><p class="termPeriod">3 months · 10% discount (rounded)</p><button class="primaryBtn termBuy" data-plan="month3" type="button">Buy Now</button><ul class="termFeatures"><li>All Monthly features</li><li>3 months of parallel host sessions</li><li>Up to 4 PIN participants per session</li><li>Live captions and PDF history</li><li>Manual renewal, no auto-debit</li><li>Host dashboard and support</li></ul></article>
-          <article class="termCard recommended"><div class="termCardTop">BEST VALUE · SAVE 25%</div><h3>Half-yearly</h3><p class="termDesc">Six months of access, best savings.</p><div class="termPrice">₹4,496</div><p class="termPeriod">6 months · 25% discount (rounded)</p><button class="primaryBtn termBuy" data-plan="month6" type="button">Buy Now</button><ul class="termFeatures"><li>All Monthly features</li><li>6 months of parallel host sessions</li><li>Up to 4 PIN participants per session</li><li>Live captions and PDF history</li><li>Manual renewal, no auto-debit</li><li>Host dashboard and support</li></ul></article>
+          <article class="termCard recommended"><div class="termCardTop">BEST VALUE · SAVE 15%</div><h3>Half-yearly</h3><p class="termDesc">Six months of access, best savings.</p><div class="termPrice">₹5,095</div><p class="termPeriod">6 months · 15% discount (rounded)</p><button class="primaryBtn termBuy" data-plan="month6" type="button">Buy Now</button><ul class="termFeatures"><li>All Monthly features</li><li>6 months of parallel host sessions</li><li>Up to 4 PIN participants per session</li><li>Live captions and PDF history</li><li>Manual renewal, no auto-debit</li><li>Host dashboard and support</li></ul></article>
         </div>
         <p class="finePrint">Prices in INR, rounded to whole rupees. One-time fixed-term payments, not automatic recurring charges. Select a plan to see the exact amount before paying. By purchasing you agree to our <a href="/terms.html">Terms</a>, <a href="/billing.html">Billing & Cancellation</a>, <a href="/refund.html">Refund Policy</a> and <a href="/privacy.html">Privacy Policy</a>. No credit card required for the separate 1-day trial.</p>
       </div></section>
@@ -120,7 +122,7 @@
         <div class="policyGrid">
           <article id="terms" class="policyCard"><h3>Terms of Service</h3><p>Zapper provides software for meeting transcription and related host session management. Users are responsible for obtaining any consent required before recording or transcribing a meeting, safeguarding account credentials and using the service lawfully. Service availability may depend on third-party platforms, network connectivity and supported operating-system capabilities.</p><p>Paid access is licensed to the registered host account for the active subscription period. Misuse, attempts to bypass access controls, unlawful transcription, abusive traffic or interference with the service may result in suspension.</p></article>
           <article id="privacy" class="policyCard"><h3>Privacy Policy</h3><p>Zapper processes host account details, session PINs, meeting links and transcripts to provide its meeting transcription service. With your permission, Google OAuth is used only to create Meet rooms for your own account; encrypted authorization credentials are stored for reuse. Zapper does not request access to Gmail messages or Google Drive files.</p><p>Host microphone or participant meeting audio is transmitted to our speech-to-text service provider, Deepgram. Transcripts and PDFs are retained according to service settings. Read our <a href="/privacy.html">full Privacy Policy</a> for Google data use, sharing, retention, revocation and deletion requests.</p></article>
-          <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>Fixed-term subscription plans cost ₹999 for 1 month, ₹2,697 for 3 months (10% off, rounded), or ₹4,496 for 6 months (25% off, rounded). Cashfree confirms payment before activation. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
+          <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>Fixed-term subscription plans cost ₹999 for 1 month, ₹2,697 for 3 months (10% off, rounded), or ₹5,095 for 6 months (15% off, rounded). Cashfree confirms payment before activation. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
           <article id="refund" class="policyCard"><h3>Refund Policy</h3><p>If a payment is duplicated, charged in error, or the paid service cannot be provided due to a verified Zapper-side issue, contact support with the account email and transaction reference. Eligible refunds are reviewed case by case and, when approved, are returned to the original payment method according to payment-provider timelines.</p><p>Request assistance within 7 calendar days of a duplicate/incorrect charge or failed activation, where possible. Approved refunds are returned to the original payment method. Read the <a href="/refund.html">full Refund Policy</a>.</p></article>
           <article id="security" class="policyCard"><h3>Security & Responsible Use</h3><p>Zapper uses authenticated host accounts, time-limited application tokens and server-side session validation. Users should keep login credentials and session PINs confidential and install desktop builds only from the official Zapper release link.</p></article>
           <article id="support" class="policyCard"><h3>Support & Grievance Contact</h3><p>For account, billing, privacy, refund or technical questions, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a> or call <a href="tel:+919346073219">+91 93460 73219</a>. Include your registered email and a concise description of the issue. Do not send passwords or private meeting content unless specifically required for troubleshooting.</p></article>
@@ -130,7 +132,7 @@
       <section id="contact" class="ctaSection shellWide">
         <div class="supportCard cardGlow">
           <div><div class="eyebrow">SUPPORT</div><h2>Need help with your account or subscription?</h2><p>For account, billing, privacy, refund or technical support, email zapperapp.support@gmail.com or call +91 93460 73219.</p></div>
-          <div class="supportActions"><a class="primaryBtn large" href="mailto:zapperapp.support@gmail.com">Email support</a><a class="secondaryBtn large" href="/contact.html">Contact & support</a></div>
+          <div class="supportActions"><a class="primaryBtn large" href="mailto:zapperapp.support@gmail.com">Email support</a><a class="secondaryBtn large" href="/contact.html">Contact & support</a><button id="supportDemoBtn" class="secondaryBtn large" type="button">Schedule a Demo</button></div>
         </div>
       </section>
     </main>
@@ -163,6 +165,28 @@
         <button id="backToLoginBtn" class="linkBtn authLink hidden" type="button">Back to login</button>
         <div id="authError" class="error" aria-live="polite"></div>
         <div id="authSuccess" class="successText" aria-live="polite"></div>
+      </form>
+    </section>
+  </div>
+
+  <div id="demoModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="demoTitle">
+    <div class="modalBackdrop" data-close-demo></div>
+    <section class="authCard demoCard">
+      <button class="modalClose" type="button" data-close-demo aria-label="Close demo request">×</button>
+      <div class="eyebrow">TALK TO ZAPPER</div>
+      <h2 id="demoTitle">Schedule a Demo</h2>
+      <p>Tell us how you would like to use Zapper. We'll contact you by email to arrange a suitable time.</p>
+      <form id="demoForm" class="demoForm">
+        <label for="demoEmail">Email address <span aria-hidden="true">*</span></label>
+        <input id="demoEmail" type="email" name="email" placeholder="you@company.com" autocomplete="email" required maxlength="254" />
+        <label for="demoPhone">Phone number (optional)</label>
+        <input id="demoPhone" type="tel" name="phone" placeholder="+91 ..." autocomplete="tel" maxlength="24" />
+        <label for="demoUseCase">What would you like to use Zapper for? <span aria-hidden="true">*</span></label>
+        <textarea id="demoUseCase" name="useCase" placeholder="A few words about your use case…" required minlength="10" maxlength="2000" rows="4"></textarea>
+        <div class="demoBotTrap" aria-hidden="true"><label for="demoWebsite">Leave blank</label><input id="demoWebsite" tabindex="-1" autocomplete="off" name="website" /></div>
+        <p class="demoPrivacyNote">We'll use these details only to respond to your demo request. See our <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</p>
+        <button id="demoSubmit" class="primaryBtn" type="submit">Submit request</button>
+        <p id="demoStatus" class="demoStatus" role="status" aria-live="polite"></p>
       </form>
     </section>
   </div>
@@ -264,7 +288,7 @@
     <div class="footer shellWide">
       <div class="footerBrand"><div class="brandLockup"><span class="brandMark">Z</span><span><strong>ZAPPER</strong></span></div><p>Fast, focused meeting transcription for hosts and participants.</p></div>
       <div class="footerColumn"><strong>Product</strong><button data-section="how" class="linkBtn" type="button">How it works</button><button data-section="features" class="linkBtn" type="button">Features</button><button data-section="pricing" class="linkBtn" type="button">Pricing</button></div>
-      <div class="footerColumn"><strong>Company</strong><button data-section="about" class="linkBtn" type="button">About</button><a href="/contact.html">Contact & support</a><button id="footerLogin" class="linkBtn" type="button">Host login</button></div>
+      <div class="footerColumn"><strong>Company</strong><button data-section="about" class="linkBtn" type="button">About</button><a href="/contact.html">Contact & support</a><button id="footerLogin" class="linkBtn" type="button">Host login</button><button id="footerDemoBtn" class="linkBtn" type="button">Schedule a Demo</button></div>
       <div class="footerColumn"><strong>Legal</strong><a href="/terms.html">Terms</a><a href="/privacy.html">Privacy</a><a href="/billing.html">Billing & Cancellation</a><a href="/refund.html">Refunds</a><a href="/delivery.html">Digital Delivery</a></div>
       <small>© 2026 Zapper. Use of meeting transcription is subject to applicable consent and privacy requirements.</small>
     </div>

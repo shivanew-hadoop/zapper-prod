@@ -152,3 +152,20 @@ body{padding-top:78px}
 .toolbarPin.pinCopied{background:#173f36!important;border-color:#62e2a2!important;box-shadow:0 0 0 3px rgba(71,221,145,.24)!important}
 @media(max-width:1050px){.pricingPlans{grid-template-columns:repeat(2,minmax(0,1fr))}.termCard.recommended{grid-column:1/-1}}
 @media(max-width:700px){.pricingPlans{grid-template-columns:1fr}.termCard.recommended{grid-column:auto}.renewalNotice{align-items:flex-start;flex-direction:column}.shellWide,.portalShell{width:calc(100% - 24px)}.siteNav{width:calc(100% - 24px)!important}}
+
+/* v4.2.1: public demo inquiry (does not affect host/audio/payment navigation). */
+.navActions{gap:8px}
+.navActions .ghostBtn,.navActions .primaryBtn{padding:10px 12px;font-size:12px;white-space:nowrap}
+.navLinks{gap:15px}
+.demoCard{max-height:min(90vh,760px);overflow:auto}
+.demoForm{display:grid;gap:10px;text-align:left}
+.demoForm label{color:#c6d9ef;font-size:13px;font-weight:700}
+.demoForm textarea{width:100%;min-height:96px;max-height:260px;resize:vertical;border:1px solid #314765;border-radius:12px;background:#071321;color:#fff;padding:12px 14px;font:inherit;line-height:1.5}
+.demoForm textarea:focus{outline:none;border-color:#68a7ff;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.demoForm .demoPrivacyNote{font-size:12px;margin:0}
+.demoPrivacyNote a{color:#9ac8ff}
+.demoStatus{min-height:20px;margin:0!important;font-size:13px}
+.demoStatus.sent{color:#99efbe!important}
+.demoStatus.failed{color:#ffb2bc!important}
+.demoBotTrap{position:absolute;left:-99999px;top:auto;width:1px;height:1px;overflow:hidden}
+@media(max-width:1200px){.siteNav{gap:12px}.navLinks{gap:8px}}

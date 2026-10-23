@@ -1,4 +1,4 @@
-// meet-preload.js — Google Meet remote-audio tap, MIXED to one PCM16/16k mono stream for Deepgram
+// meet-preload.js — Google Meet captions first; remote-audio tap remains available only for Deepgram fallback
 (() => {
   let ipcRenderer = null;
   try { ipcRenderer = require('electron').ipcRenderer; } catch (_) {}
@@ -279,6 +279,190 @@
     // open chat or auto-send the init message from those states.
     if (/ready to join|ask to join|join now|waiting for host admission|waiting to be admitted|someone will let you in|you.ll join when someone lets you in|asking to be joined/i.test(txt)) return false;
     return /leave call|you are in the meeting|you are in this call/i.test(txt);
+  }
+
+
+  // Primary transcription path: read Google Meet's own captions in the same
+  // Electron Meet page. This adds no network/STT latency before the local overlay.
+  // Selectors intentionally combine the stable ARIA caption region with current
+  // and legacy Meet jsname anchors so one Meet UI rewrite is less likely to break it.
+  const CAPTION_REGION_SELECTOR = '[role="region"][aria-label*="aption" i], div[jsname="YSxPC"], div[jsname="tgaKEf"]';
+  const CAPTION_ROW_SELECTOR = 'div[jsname="dsyhDe"], div.CNusmb, div.TBMuR';
+  const CAPTION_SPEAKER_SELECTOR = 'div.KcIKyf, div.zs7s8d, [data-self-name], [data-participant-id]';
+  const CAPTION_TEXT_SELECTOR = 'div.bh44bd, div.iTTPOb, span[jsname="tgaKEf"], div[jsname="tgaKEf"]';
+  let captionObserver = null;
+  let captionObservedRoot = null;
+  let captionReadySent = false;
+  let captionAdmittedSent = false;
+  let lastCaptionKey = '';
+  let lastCaptionText = '';
+  let lastCaptionChangedAt = 0;
+  let lastCaptionFinalKey = '';
+  let captionFinalTimer = null;
+  let lastCaptionEnableAttemptAt = 0;
+
+  function emitCaptionState(state, extra = {}) {
+    if (!ipcRenderer) return;
+    ipcRenderer.send('meet-caption-state', { state, at: Date.now(), ...extra });
+  }
+
+  function cleanCaptionSpeaker(value) {
+    const t = normalizeText(value);
+    if (!t || t.length > 100 || isMeetNoise(t) || isClockText(t)) return '';
+    return t;
+  }
+
+  function cleanCaptionText(value, speaker = '') {
+    let text = normalizeText(value);
+    if (!text) return '';
+    const cleanSpeaker = cleanCaptionSpeaker(speaker);
+    if (cleanSpeaker && text.toLowerCase().startsWith(cleanSpeaker.toLowerCase())) {
+      text = normalizeText(text.slice(cleanSpeaker.length).replace(/^[:\-–—]+\s*/, ''));
+    }
+    const lines = textLines(text).filter(line => !isMeetNoise(line) && !isClockText(line));
+    return normalizeText(lines.join(' ')).slice(0, 12000);
+  }
+
+  function captionEntries(root) {
+    if (!root) return [];
+    const rows = [...root.querySelectorAll(CAPTION_ROW_SELECTOR)].filter(visible);
+    const entries = [];
+    for (const row of rows) {
+      const speakerEl = row.querySelector(CAPTION_SPEAKER_SELECTOR);
+      const textEl = row.querySelector(CAPTION_TEXT_SELECTOR);
+      const speaker = cleanCaptionSpeaker(speakerEl?.innerText || speakerEl?.textContent || '');
+      const text = cleanCaptionText(textEl?.innerText || textEl?.textContent || row.innerText || row.textContent || '', speaker);
+      if (text) entries.push({ speaker, text });
+    }
+    if (entries.length) return entries;
+
+    // Current Meet builds often expose the caption text itself as tgaKEf.
+    const direct = [...root.querySelectorAll('div[jsname="tgaKEf"], span[jsname="tgaKEf"], div.bh44bd, div.iTTPOb')]
+      .filter(visible)
+      .map(el => cleanCaptionText(el.innerText || el.textContent || ''))
+      .filter(Boolean);
+    if (direct.length) return direct.map(text => ({ speaker: '', text }));
+
+    // Last-resort ARIA-region fallback. Use only the latest non-control line.
+    const fallbackLines = textLines(root.innerText || root.textContent || '')
+      .filter(line => !isMeetNoise(line) && !isClockText(line));
+    const text = fallbackLines.length ? fallbackLines[fallbackLines.length - 1] : '';
+    return text ? [{ speaker: '', text }] : [];
+  }
+
+  function emitMeetCaption(text, isFinal) {
+    const clean = cleanCaptionText(text);
+    if (!clean || !ipcRenderer) return;
+    const key = keyText(clean);
+    if (isFinal && key === lastCaptionFinalKey) return;
+    if (isFinal) lastCaptionFinalKey = key;
+    ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: Date.now() });
+  }
+
+  function scheduleCaptionFinal(text) {
+    if (captionFinalTimer) clearTimeout(captionFinalTimer);
+    const scheduledKey = keyText(text);
+    captionFinalTimer = setTimeout(() => {
+      captionFinalTimer = null;
+      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2300) {
+        emitMeetCaption(lastCaptionText, true);
+      }
+    }, 2500);
+  }
+
+  function scanMeetCaptions() {
+    const root = document.querySelector(CAPTION_REGION_SELECTOR);
+    if (!root) return false;
+    if (!captionReadySent) {
+      captionReadySent = true;
+      emitCaptionState('ready');
+    }
+    const entries = captionEntries(root);
+    if (!entries.length) return true;
+    const latest = entries[entries.length - 1];
+    const text = cleanCaptionText(latest.text, latest.speaker);
+    const key = keyText(text);
+    if (!key) return true;
+    if (key !== lastCaptionKey) {
+      lastCaptionKey = key;
+      lastCaptionText = text;
+      lastCaptionChangedAt = Date.now();
+      emitMeetCaption(text, false);
+      scheduleCaptionFinal(text);
+    }
+    return true;
+  }
+
+  function attachCaptionObserver() {
+    const root = document.querySelector(CAPTION_REGION_SELECTOR);
+    if (!root) return false;
+    if (captionObservedRoot === root && captionObserver) return true;
+    try { captionObserver?.disconnect(); } catch (_) {}
+    captionObservedRoot = root;
+    captionObserver = new MutationObserver(() => scanMeetCaptions());
+    captionObserver.observe(root, { childList: true, subtree: true, characterData: true });
+    scanMeetCaptions();
+    return true;
+  }
+
+  function captionsAppearEnabled() {
+    const buttons = [...document.querySelectorAll('button, div[role="button"], span[role="button"]')].filter(visible);
+    return buttons.some(el => /turn off captions|captions are on/i.test(normalizeText([
+      el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText
+    ].filter(Boolean).join(' '))));
+  }
+
+  function ensureMeetCaptionsEnabled() {
+    if (!isInMeeting()) return false;
+    if (!captionAdmittedSent) {
+      captionAdmittedSent = true;
+      emitCaptionState('admitted');
+    }
+    if (captionsAppearEnabled() || document.querySelector(CAPTION_REGION_SELECTOR)) {
+      if (!captionReadySent) {
+        captionReadySent = true;
+        emitCaptionState('ready');
+      }
+      attachCaptionObserver();
+      return true;
+    }
+    const now = Date.now();
+    if (now - lastCaptionEnableAttemptAt < 2500) return false;
+    lastCaptionEnableAttemptAt = now;
+    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions']);
+    if (!clicked) {
+      // Official Meet shortcut fallback. Dispatch only after admission and only
+      // when the UI does not already report captions enabled.
+      try {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
+        document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  function installMeetCaptionObserver() {
+    if (!ipcRenderer) return;
+    const bodyObserver = new MutationObserver(() => {
+      if (!isInMeeting()) return;
+      ensureMeetCaptionsEnabled();
+      attachCaptionObserver();
+      scanMeetCaptions();
+    });
+    if (document.body) bodyObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    setInterval(() => {
+      if (!isInMeeting()) return;
+      ensureMeetCaptionsEnabled();
+      attachCaptionObserver();
+      scanMeetCaptions();
+    }, 900);
+    log('Meet local caption observer installed (primary transcription path)');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installMeetCaptionObserver, { once: true });
+  } else {
+    installMeetCaptionObserver();
   }
 
   async function ensureChatPanelOpen() {

@@ -7,7 +7,7 @@ const API_VERSION = '2025-01-01';
 const PLANS = Object.freeze({
   month1: Object.freeze({ months: 1, amount: 999, discountPercent: 0 }),
   month3: Object.freeze({ months: 3, amount: 2697, discountPercent: 10 }),
-  month6: Object.freeze({ months: 6, amount: 4496, discountPercent: 25 }),
+  month6: Object.freeze({ months: 6, amount: 5095, discountPercent: 15 }),
 });
 function addCalendarMonths(ms, count) {
   const date = new Date(ms);

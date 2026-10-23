@@ -308,6 +308,45 @@ $('mobileSignupBtn').onclick = () => openAuth('register');
 $('mobileBuyNowBtn').onclick = () => openPublicSection('pricing');
 $('mobileDashboardBtn').onclick = () => { closeMobileNav(); loadPortal(); };
 $('mobileLogoutBtn').onclick = logout;
+// Demo inquiry is intentionally isolated from account/login and session code.
+const DEMO_FALLBACK_EMAIL = 'zapperapp.supported@gmail.com';
+function openDemo() {
+  closeMobileNav();
+  $('demoStatus').textContent = '';
+  $('demoStatus').className = 'demoStatus';
+  $('demoModal').classList.remove('hidden');
+  $('demoEmail').focus();
+}
+function closeDemo() { $('demoModal').classList.add('hidden'); }
+for (const id of ['navDemo', 'mobileDemoBtn', 'footerDemoBtn', 'supportDemoBtn']) {
+  $(id).onclick = openDemo;
+}
+document.querySelectorAll('[data-close-demo]').forEach(button => button.addEventListener('click', closeDemo));
+$('demoForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('demoSubmit');
+  if (button.disabled) return;
+  button.disabled = true;
+  $('demoStatus').textContent = 'Sending your request…';
+  $('demoStatus').className = 'demoStatus';
+  try {
+    const result = await api('/api/demo/request', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: $('demoEmail').value.trim(),
+        phone: $('demoPhone').value.trim(),
+        useCase: $('demoUseCase').value.trim(),
+        website: $('demoWebsite').value,
+      }),
+    });
+    $('demoStatus').textContent = result.message || 'Demo request sent.';
+    $('demoStatus').classList.add('sent');
+    $('demoForm').reset();
+  } catch (error) {
+    $('demoStatus').textContent = `${error.message} Or email ${DEMO_FALLBACK_EMAIL}.`;
+    $('demoStatus').classList.add('failed');
+  } finally { button.disabled = false; }
+});
 document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => openPublicSection(el.dataset.section)));
 document.querySelectorAll('[data-close-auth]').forEach(el => el.addEventListener('click', hideAuth));
 document.getElementById('hostLogout')?.addEventListener('click', logout);
@@ -362,7 +401,7 @@ async function loadAccount() {
 const planLabels = Object.freeze({
   month1: { title: '1 month', price: '₹999' },
   month3: { title: '3 months · 10% off', price: '₹2,697' },
-  month6: { title: '6 months · 25% off', price: '₹4,496' },
+  month6: { title: '6 months · 15% off', price: '₹5,095' },
 });
 function updateRenewalNotice() {
   const notice = $('renewalNotice');

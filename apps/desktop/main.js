@@ -74,6 +74,7 @@ const {
 const {
   startRemoteTranscriptStream,
   sendAudioChunk,
+  sendLocalCaption,
   stopRemoteTranscriptStream
 } = require('./transcriber/remoteDeepgram');
 
@@ -97,6 +98,14 @@ let activeCaptureSessionId = '';
 let activeCaptureSessionToken = '';
 let activeCaptureGoogleEmail = '';
 let captureStopInProgress = false;
+let localCaptionReady = false;
+let localCaptionAdmitted = false;
+let localCaptionLastAt = 0;
+let localCaptionLastText = '';
+let localCaptionLastWasFinal = false;
+let deepgramFallbackActive = false;
+let captionFallbackTimer = null;
+let audibleWithoutCaptionSince = 0;
 
 
 // Keep the overlay private from supported OS capture APIs and continuously
@@ -321,6 +330,15 @@ function resetRuntimeFlags() {
   activeCaptureSessionId = '';
   activeCaptureSessionToken = '';
   activeCaptureGoogleEmail = '';
+  localCaptionReady = false;
+  localCaptionAdmitted = false;
+  localCaptionLastAt = 0;
+  localCaptionLastText = '';
+  localCaptionLastWasFinal = false;
+  deepgramFallbackActive = false;
+  if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
+  captionFallbackTimer = null;
+  audibleWithoutCaptionSince = 0;
 }
 
 function normalizeBackendHttpUrl(rawUrl) {
@@ -363,6 +381,61 @@ ipcMain.on('meet-chat-message', (_, payload) => {
     chatKey: String(payload.chatKey || '').trim(),
     timestamp: payload.timestamp || Date.now()
   });
+});
+
+
+function activateDeepgramFallback(reason = '') {
+  if (!started || localCaptionReady || deepgramFallbackActive) return;
+  deepgramFallbackActive = true;
+  sendStatus(`Google Meet captions unavailable${reason ? ` (${reason})` : ''}. Using Deepgram fallback...`);
+}
+
+function scheduleDeepgramFallbackCheck() {
+  if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
+  captionFallbackTimer = setTimeout(() => {
+    captionFallbackTimer = null;
+    if (started && localCaptionAdmitted && !localCaptionReady) activateDeepgramFallback('caption DOM not detected');
+  }, 12000);
+  captionFallbackTimer.unref?.();
+}
+
+ipcMain.on('meet-caption-state', (_, payload) => {
+  if (!started || !payload) return;
+  const state = String(payload.state || '');
+  if (state === 'admitted') {
+    localCaptionAdmitted = true;
+    scheduleDeepgramFallbackCheck();
+    return;
+  }
+  if (state === 'ready') {
+    localCaptionReady = true;
+    deepgramFallbackActive = false;
+    if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
+    captionFallbackTimer = null;
+    sendStatus('Google Meet captions connected. Local low-latency transcription active.');
+  }
+});
+
+ipcMain.on('meet-caption-message', (_, payload) => {
+  if (!started || !payload) return;
+  const text = String(payload.text || '').trim();
+  if (!text) return;
+  localCaptionReady = true;
+  localCaptionLastAt = Number(payload.capturedAt) || Date.now();
+  localCaptionLastText = text;
+  localCaptionLastWasFinal = Boolean(payload.isFinal);
+  audibleWithoutCaptionSince = 0;
+  deepgramFallbackActive = false;
+  if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
+  captionFallbackTimer = null;
+
+  // Local-first render: no backend round-trip before the user sees the caption.
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions' });
+  }
+  // Backend receives text only for session-level PDF persistence and other PIN
+  // viewers. This does not invoke Deepgram.
+  sendLocalCaption({ text, isFinal: Boolean(payload.isFinal), capturedAt: payload.capturedAt || Date.now() });
 });
 
 ipcMain.handle('send-meet-chat-message', async (_, message) => {
@@ -436,6 +509,12 @@ async function stopActiveCaptureRuntime(statusText = 'Stopped') {
   try {
     stopSessionStatusPoller();
     onAudioChunk(() => {});
+    // Flush the latest Meet interim into the session ledger before closing the
+    // authenticated socket. The API accepts a short grace window after host End.
+    if (localCaptionLastText && !localCaptionLastWasFinal) {
+      sendLocalCaption({ text: localCaptionLastText, isFinal: true, capturedAt: localCaptionLastAt || Date.now() });
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
     stopRemoteTranscriptStream();
     await leaveMeet().catch(() => {});
     resetRuntimeFlags();
@@ -630,6 +709,19 @@ ipcMain.handle('check-google-login', async () => {
   return { loggedIn };
 });
 
+function pcmLooksAudible(pcmBuffer) {
+  if (!pcmBuffer || pcmBuffer.length < 2) return false;
+  // Sample sparsely; this stays off the UI thread's critical rendering path.
+  let peak = 0;
+  for (let i = 0; i + 1 < pcmBuffer.length; i += 64) {
+    const sample = pcmBuffer.readInt16LE(i - (i % 2));
+    const abs = Math.abs(sample);
+    if (abs > peak) peak = abs;
+    if (peak >= 900) return true;
+  }
+  return false;
+}
+
 ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessionId }) => {
   if (started) {
     if (String(sessionId || '') && String(sessionId || '') === activeCaptureSessionId) {
@@ -718,17 +810,44 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
+      // If this desktop has Meet captions, render those directly and ignore
+      // backend relay echoes/other viewers to prevent duplicate lines. Deepgram
+      // transcripts are accepted only while fallback is explicitly active.
+      if (localCaptionReady && payload.source !== 'deepgram') return;
+      if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       overlayWindow.webContents.send('transcript', {
         text: payload.text,
-        isFinal: payload.isFinal
+        isFinal: payload.isFinal,
+        source: payload.source || 'backend'
       });
     });
 
     onAudioChunk(pcmBuffer => {
       if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
+
+      // If Meet says captions are enabled but audible speech produces no caption
+      // updates for 10 seconds, treat the native caption path as unhealthy and
+      // temporarily fall back. Any later Meet caption immediately disables the
+      // fallback again and closes its Deepgram stream on the backend.
+      if (localCaptionReady && !deepgramFallbackActive) {
+        if (pcmLooksAudible(pcmBuffer)) {
+          if (!audibleWithoutCaptionSince) audibleWithoutCaptionSince = Date.now();
+          const lastCaptionReference = localCaptionLastAt || audibleWithoutCaptionSince;
+          if (Date.now() - Math.max(lastCaptionReference, audibleWithoutCaptionSince) >= 10000) {
+            localCaptionReady = false;
+            activateDeepgramFallback('no Meet caption text during audible speech');
+          }
+        } else {
+          audibleWithoutCaptionSince = 0;
+        }
+      }
+
+      // Normal path never sends Meet audio off the device. Audio is forwarded
+      // only if the local Meet-caption observer failed after admission.
+      if (!deepgramFallbackActive || localCaptionReady) return;
       if (!firstAudioSeen) {
         firstAudioSeen = true;
-        sendStatus('Streaming low-latency captions...');
+        sendStatus('Deepgram fallback active. Streaming Meet audio for transcription...');
       }
       sendAudioChunk(pcmBuffer);
     });

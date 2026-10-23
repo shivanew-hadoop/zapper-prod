@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { createRecordingWakeLock } from '../src/recording-wake-lock.js';
+let visible = 'visible';
+const listeners = {};
+const reports = [];
+const held = [];
+let requests = 0;
+const doc = { get visibilityState() { return visible; }, addEventListener(type, cb) { listeners[type] = cb; } };
+const nav = { wakeLock: { async request(type) {
+  assert.equal(type, 'screen'); requests++;
+  const callbacks = {};
+  const lock = { released: false, addEventListener(name, cb) { callbacks[name] = cb; }, async release() { this.released = true; callbacks.release?.(); } };
+  held.push(lock);
+  return lock;
+} } };
+const wake = createRecordingWakeLock({ documentObject: doc, navigatorObject: nav, onState: x => reports.push(x) });
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+wake.start(); await tick();
+assert.equal(requests, 1); assert.equal(wake.active, true);
+visible='hidden'; listeners.visibilitychange(); await tick(); assert.equal(requests, 1);
+held[0].release(); await tick();
+visible='visible'; listeners.visibilitychange(); await tick(); assert.equal(requests, 2);
+await wake.stop(); assert.equal(wake.active, false); assert.equal(held[1].released, true);
+assert.equal(reports.at(-1), '');
+const unsupported = createRecordingWakeLock({navigatorObject:{},documentObject:doc,onState:x => reports.push(x)});
+unsupported.start(); await tick(); assert.match(reports.at(-1),/does not support/);
+await unsupported.stop();
+console.log('Recording wake lock lifecycle tests passed');

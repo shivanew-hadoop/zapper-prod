@@ -17,8 +17,8 @@
         <span class="brandMark">Z</span><span><strong>ZAPPER</strong></span>
       </button>
       <nav class="navLinks" aria-label="Primary navigation">
-        <button data-section="features" type="button">Features</button>
         <button data-section="how" type="button">How it works</button>
+        <button data-section="features" type="button">Features</button>
         <button data-section="pricing" type="button">Pricing</button>
         <button data-section="about" type="button">About</button>
         <button data-section="legal" type="button">Policies</button>
@@ -38,8 +38,8 @@
       <div class="mobileNavInner shellWide">
         <nav aria-label="Mobile navigation">
           <button data-section="home" type="button">Home</button>
-          <button data-section="features" type="button">Features</button>
           <button data-section="how" type="button">How it works</button>
+          <button data-section="features" type="button">Features</button>
           <button data-section="pricing" type="button">Pricing</button>
           <button data-section="about" type="button">About</button>
           <button data-section="legal" type="button">Policies</button>
@@ -87,6 +87,8 @@
 
       <section class="trustStrip"><div class="shellWide trustGrid"><span>Fast voice-to-text</span><span>Private overlay experience</span><span>Two-way meeting chat</span><span>PDF transcript history</span></div></section>
 
+      <section id="how" class="section sectionAlt"><div id="howWorksRoot"></div></section>
+
       <section id="features" class="section shellWide">
         <div class="sectionIntro"><div class="eyebrow">FEATURES</div><h2>Designed for fast, focused meeting transcription.</h2><p>Zapper keeps participant interaction simple while giving hosts a practical transcript workflow.</p></div>
         <div class="featureGrid">
@@ -101,8 +103,6 @@
         </div>
       </section>
 
-      <section id="how" class="section sectionAlt"><div id="howWorksRoot"></div></section>
-
       <section id="pricing" class="section shellWide"><div class="pricingWrap">
         <div class="sectionIntro pricingIntro"><div class="eyebrow">PRICING</div><h2>Simple host pricing.</h2><p>Participants can launch Zapper without purchasing a separate participant subscription.</p></div>
         <div class="pricingCard cardGlow"><span class="pillBlue">HOST PLAN</span><div class="price"><strong>₹1,000</strong><span>/ month</span></div><ul><li>Host dashboard and session creation</li><li>Live participant transcription flow</li><li>Transcript PDF downloads</li><li>Subscription and account support</li></ul><button id="pricingSignup" class="primaryBtn large" type="button">Create host account</button><p class="finePrint">By purchasing or continuing a paid plan, you agree to the Terms, Privacy Policy, Billing & Cancellation Policy and Refund Policy below.</p></div>
@@ -116,15 +116,15 @@
           <article id="terms" class="policyCard"><h3>Terms of Service</h3><p>Zapper provides software for meeting transcription and related host session management. Users are responsible for obtaining any consent required before recording or transcribing a meeting, safeguarding account credentials and using the service lawfully. Service availability may depend on third-party platforms, network connectivity and supported operating-system capabilities.</p><p>Paid access is licensed to the registered host account for the active subscription period. Misuse, attempts to bypass access controls, unlawful transcription, abusive traffic or interference with the service may result in suspension.</p></article>
           <article id="privacy" class="policyCard"><h3>Privacy Policy</h3><p>Zapper processes host account details, session PINs, meeting links and transcripts to provide its meeting transcription service. With your permission, Google OAuth is used only to create Meet rooms for your own account; encrypted authorization credentials are stored for reuse. Zapper does not request access to Gmail messages or Google Drive files.</p><p>Host microphone or participant meeting audio is transmitted to our speech-to-text service provider, Deepgram. Transcripts and PDFs are retained according to service settings. Read our <a href="/privacy.html">full Privacy Policy</a> for Google data use, sharing, retention, revocation and deletion requests.</p></article>
           <article id="billing" class="policyCard"><h3>Billing & Cancellation</h3><p>The displayed host plan is ₹1,000 per month unless a different price is presented at checkout. Subscription access starts when activated and remains available until the recorded end date. Customers may request cancellation through the support contact below. Cancellation prevents future renewal but does not automatically erase records required for service operation or lawful accounting.</p></article>
-          <article id="refund" class="policyCard"><h3>Refund Policy</h3><p>If a payment is duplicated, charged in error, or the paid service cannot be provided due to a verified Zapper-side issue, contact support with the account email and transaction reference. Eligible refunds are reviewed case by case and, when approved, are returned to the original payment method according to payment-provider timelines.</p><p>Usage already consumed during an active billing period may affect refund eligibility except where applicable law requires otherwise.</p></article>
+          <article id="refund" class="policyCard"><h3>Refund Policy</h3><p>If a payment is duplicated, charged in error, or the paid service cannot be provided due to a verified Zapper-side issue, contact support with the account email and transaction reference. Eligible refunds are reviewed case by case and, when approved, are returned to the original payment method according to payment-provider timelines.</p><p>Request assistance within 7 calendar days of a duplicate/incorrect charge or failed activation, where possible. Approved refunds are returned to the original payment method. Read the <a href="/refund.html">full Refund Policy</a>.</p></article>
           <article id="security" class="policyCard"><h3>Security & Responsible Use</h3><p>Zapper uses authenticated host accounts, time-limited application tokens and server-side session validation. Users should keep login credentials and session PINs confidential and install desktop builds only from the official Zapper release link.</p></article>
-          <article id="support" class="policyCard"><h3>Support & Grievance Contact</h3><p>For account, billing, privacy, refund or technical questions, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a>. Include your registered email and a concise description of the issue. Do not send passwords or private meeting content unless specifically required for troubleshooting.</p></article>
+          <article id="support" class="policyCard"><h3>Support & Grievance Contact</h3><p>For account, billing, privacy, refund or technical questions, contact <a href="mailto:zapperapp.support@gmail.com">zapperapp.support@gmail.com</a> or call <a href="tel:+919346073219">+91 93460 73219</a>. Include your registered email and a concise description of the issue. Do not send passwords or private meeting content unless specifically required for troubleshooting.</p></article>
         </div>
       </section>
 
       <section id="contact" class="ctaSection shellWide">
         <div class="supportCard cardGlow">
-          <div><div class="eyebrow">SUPPORT</div><h2>Need help with your account or subscription?</h2><p>For account, billing, privacy, refund or technical support, contact the Zapper support team.</p></div>
+          <div><div class="eyebrow">SUPPORT</div><h2>Need help with your account or subscription?</h2><p>For account, billing, privacy, refund or technical support, email zapperapp.support@gmail.com or call +91 93460 73219.</p></div>
           <div class="supportActions"><a class="primaryBtn large" href="mailto:zapperapp.support@gmail.com">Email support</a><a class="secondaryBtn large" href="/contact.html">Contact & support</a></div>
         </div>
       </section>
@@ -160,6 +160,19 @@
     </section>
   </div>
 
+  <div id="trialExpiredModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trialExpiredTitle" aria-describedby="trialExpiredDescription">
+    <div class="modalBackdrop" data-close-trial-expired></div>
+    <section class="authCard trialExpiredCard">
+      <button id="trialExpiredCloseIcon" class="modalClose" data-close-trial-expired type="button" aria-label="Close trial notification">×</button>
+      <div class="eyebrow">SUBSCRIPTION SUPPORT</div>
+      <h2 id="trialExpiredTitle">Your free trial has ended</h2>
+      <p id="trialExpiredDescription">Your 24-hour trial has expired. To reactivate your host subscription, please contact Zapper support.</p>
+      <p><strong>Phone:</strong> <a href="tel:+919346073219">+91 93460 73219</a></p>
+      <p><strong>Email:</strong> <a href="mailto:zapperapp.support@gmail.com?subject=Zapper%20subscription%20renewal">zapperapp.support@gmail.com</a></p>
+      <button id="trialExpiredClose" class="primaryBtn" type="button" data-close-trial-expired>Close</button>
+    </section>
+  </div>
+
   <main id="hostPortal" class="portalShell hidden">
     <section class="portalHero"><div><div class="eyebrow">HOST ACCOUNT</div><h1 id="welcome">Welcome</h1><p id="subText"></p><p id="hostCallSummary" class="hostCallSummary"></p></div><div class="planSummary"><span>Monthly host plan</span><strong>₹1,000</strong><span id="planBadge" class="statusBadge">Checking</span></div></section>
     <section class="portalGrid">
@@ -167,8 +180,9 @@
         <div class="eyebrow">CREATE SESSION</div>
         <h2>Create session</h2>
         <p>Click Create Session to start voice-to-text transcription. If this is your first time, sign in with your Google account. Zapper will create a six-digit PIN to share with participants. Each session lasts up to 3 hours 30 minutes.</p>
+        <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
         <details class="micPreflight">
-          <summary>Check microphone before starting a session</summary>
+          <summary>Want to test your audio?</summary>
           <div class="micPreflightControls">
             <label for="hostMicTestDevice">Microphone</label>
             <select id="hostMicTestDevice" aria-label="Microphone to test"><option value="">Default microphone</option></select>
@@ -176,17 +190,18 @@
           </div>
           <div id="micTestReplay" class="micTestReplay hidden"><span id="micTestStatus" role="status">Record a microphone test and replay it locally.</span><button id="hostMicReplay" class="ghostBtn compact" type="button" disabled>Replay test</button><audio id="hostMicTestAudio" preload="none"></audio></div>
         </details>
-        <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
         <!-- Compact controls belong only to this browser's active session. -->
         <section id="sessionToolbar" class="sessionToolbar hidden" aria-label="Active session controls">
           <label class="micDeviceSelect" title="Choose microphone"><span aria-hidden="true">🎙</span><span class="srOnly">Microphone source</span><select id="hostMicDevice" aria-label="Select microphone"><option value="">Default microphone</option></select></label>
           <div class="micLevel" id="hostMicLevel" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="hostMicLevelBar"></span></div>
           <span id="sessionClock" class="sessionClock" aria-label="Elapsed session time" title="Elapsed session time">00:00</span>
           <button id="hostMicToggle" class="ghostBtn toolButton" type="button">Unmute</button>
-          <button id="copyPin" class="toolbarPin" type="button" title="Copy six-digit PIN"><span class="pinPrefix">PIN </span><strong id="pinValue">000000</strong></button>
+          <button id="copyPin" class="toolbarPin" type="button" title="Click to copy PIN to clipboard" aria-label="Copy session PIN to clipboard"><span class="pinPrefix">PIN </span><strong id="pinValue">000000</strong></button>
           <button id="endCurrentSession" class="dangerBtn toolButton" type="button">End Session</button>
+          <span id="pinCopyFeedback" role="status" aria-live="polite" class="pinCopyFeedback hidden">PIN copied to clipboard</span>
         </section>
         <p id="hostMicStatus" class="sessionMicStatus hidden" role="status" aria-live="polite">Microphone ready.</p>
+        <p id="mobileRecordingNotice" class="mobileRecordingNotice hidden" role="status" aria-live="polite"></p>
         <!-- Preserve the existing element IDs and PIN/session lifecycle used elsewhere. -->
         <p id="googleMeetStatus" class="meta visuallyHidden" aria-live="polite">Checking session availability…</p>
         <p class="meta">Up to four Zapper desktop participants can redeem a session PIN.</p>
@@ -226,9 +241,9 @@
   <footer id="siteFooter" class="footerShell">
     <div class="footer shellWide">
       <div class="footerBrand"><div class="brandLockup"><span class="brandMark">Z</span><span><strong>ZAPPER</strong></span></div><p>Fast, focused meeting transcription for hosts and participants.</p></div>
-      <div class="footerColumn"><strong>Product</strong><button data-section="features" class="linkBtn" type="button">Features</button><button data-section="how" class="linkBtn" type="button">How it works</button><button data-section="pricing" class="linkBtn" type="button">Pricing</button></div>
+      <div class="footerColumn"><strong>Product</strong><button data-section="how" class="linkBtn" type="button">How it works</button><button data-section="features" class="linkBtn" type="button">Features</button><button data-section="pricing" class="linkBtn" type="button">Pricing</button></div>
       <div class="footerColumn"><strong>Company</strong><button data-section="about" class="linkBtn" type="button">About</button><a href="/contact.html">Contact & support</a><button id="footerLogin" class="linkBtn" type="button">Host login</button></div>
-      <div class="footerColumn"><strong>Legal</strong><a href="/terms.html">Terms</a><a href="/privacy.html">Privacy</a><a href="/billing.html">Billing & Cancellation</a><a href="/refund.html">Refunds</a></div>
+      <div class="footerColumn"><strong>Legal</strong><a href="/terms.html">Terms</a><a href="/privacy.html">Privacy</a><a href="/billing.html">Billing & Cancellation</a><a href="/refund.html">Refunds</a><a href="/delivery.html">Digital Delivery</a></div>
       <small>© 2026 Zapper. Use of meeting transcription is subject to applicable consent and privacy requirements.</small>
     </div>
   </footer>

@@ -1,5 +1,6 @@
 import { mountHowItWorks } from './how-it-works.jsx';
 import { startHostMicrophone, listMicrophones, recordMicrophoneTest } from './host-microphone.js';
+import { createRecordingWakeLock } from './recording-wake-lock.js';
 import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId } from './host-session-selection.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
@@ -29,6 +30,12 @@ let sessionTimerInterval = null;
 let microphoneTestRunning = false;
 let micTestObjectUrl = '';
 let hostSessionCreating = false;
+let trialExpiredShownForLogin = false;
+let pinCopyFeedbackTimer = null;
+const recordingWakeLock = createRecordingWakeLock({ onState: message => {
+  const el = document.getElementById('mobileRecordingNotice');
+  if (el) { el.textContent = message; el.classList.toggle('hidden', !message); }
+} });
 
 let googleMeetConnected = false;
 let googleMeetAvailable = false;
@@ -198,6 +205,19 @@ function showPublic(section = '') {
   if (section) requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 function hideAuth() { $('authModal').classList.add('hidden'); }
+function closeExpiredTrialNotice() { $('trialExpiredModal').classList.add('hidden'); }
+document.querySelectorAll('[data-close-trial-expired]').forEach(el => el.addEventListener('click', closeExpiredTrialNotice));
+function showExpiredTrialIfNeeded() {
+  if (trialExpiredShownForLogin || !account || account.role === 'admin') return;
+  // Do not mistake an expired paid renewal for the initial one-time trial.
+  const trialEnd = Number(account.trialEndsAt || 0);
+  if (!trialEnd || Date.now() < trialEnd || account.subscriptionStatus === 'active' ||
+      Number(account.subscriptionValidUntil || 0) !== trialEnd) return;
+  trialExpiredShownForLogin = true;
+  $('trialExpiredModal').classList.remove('hidden');
+  $('trialExpiredClose').focus();
+}
+
 function openAuth(nextMode = 'login') {
   closeMobileNav();
   setMode(nextMode);
@@ -249,6 +269,8 @@ function showTrialWelcome(user) {
 }
 function logout() {
   stopHostMicrophone('Microphone stopped on logout.', true);
+  closeExpiredTrialNotice();
+  trialExpiredShownForLogin = false;
   stopSessionClock();
   closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken');
@@ -313,7 +335,9 @@ $('authForm').onsubmit = async event => {
       showTrialWelcome(data.user);
       return;
     }
-    token = data.token; localStorage.setItem('zapperToken', token); hideAuth(); await loadPortal();
+    token = data.token; localStorage.setItem('zapperToken', token); hideAuth();
+    trialExpiredShownForLogin = false;
+    await loadPortal();
   } catch (error) {
     $('authError').textContent = error.message;
   }
@@ -356,6 +380,7 @@ async function loadHostPortal() {
   restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
   if (active) void refreshGoogleMeetAvailability();
+  showExpiredTrialIfNeeded();
   window.scrollTo({ top: 0 });
 }
 
@@ -373,6 +398,7 @@ function stopHostMicrophone(message = '', hide = false) {
   ++hostMicRequestGeneration; // Discard a pending microphone permission request.
   if (hostMicCapture) hostMicCapture.stop();
   hostMicCapture = null;
+  void recordingWakeLock.stop();
   if (hide) hostMicSessionId = '';
   updateHostMicButtons();
   setMicLevel(0);
@@ -428,6 +454,7 @@ async function startHostMicForSession(sessionId) {
       onStopped: reason => {
         if (generation !== hostMicRequestGeneration) return;
         hostMicCapture = null;
+        void recordingWakeLock.stop();
         updateHostMicButtons();
         if (reason) $('hostMicStatus').textContent = reason;
       },
@@ -437,6 +464,7 @@ async function startHostMicForSession(sessionId) {
       return;
     }
     hostMicCapture = capture;
+    void recordingWakeLock.start();
     void refreshMicrophoneChoices();
     updateHostMicButtons(true);
   } catch (error) {
@@ -781,8 +809,22 @@ $('sessionForm').onsubmit = async event => {
 };
 $('copyPin').onclick = async () => {
   const pin = $('pinValue').textContent.trim();
-  if (/^\d{6}$/.test(pin)) await navigator.clipboard.writeText(pin);
-  $('copyPin').title = 'PIN copied'; setTimeout(() => { $('copyPin').title = 'Copy six-digit PIN'; }, 1200);
+  if (!/^\d{6}$/.test(pin)) return;
+  const feedback = $('pinCopyFeedback');
+  clearTimeout(pinCopyFeedbackTimer);
+  try {
+    await navigator.clipboard.writeText(pin);
+    feedback.textContent = 'PIN copied to clipboard';
+    $('copyPin').title = 'Copied! Click to copy PIN again';
+  } catch (_) {
+    feedback.textContent = 'Clipboard access blocked. Select the PIN and copy it manually.';
+    $('copyPin').title = 'Click to copy PIN to clipboard';
+  }
+  feedback.classList.remove('hidden');
+  pinCopyFeedbackTimer = setTimeout(() => {
+    feedback.classList.add('hidden');
+    $('copyPin').title = 'Click to copy PIN to clipboard';
+  }, 2600);
 };
 $('endCurrentSession').onclick = async () => {
   if (!currentSessionId) return;

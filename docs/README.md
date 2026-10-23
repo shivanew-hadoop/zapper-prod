@@ -1,52 +1,55 @@
-# Zapper v4.1.8 — Current release guide
+# Zapper v4.1.9 — Release guide
 
-This is the **only** project documentation file. Zapper v4.1.8 is based directly on v4.1.7. Only the public Privacy Policy wording (Google verification security disclosures), version metadata, and this release guide changed. API, Google OAuth, PIN redemption, desktop capture, subscriptions, and PDF behavior are unchanged.
+**Base:** v4.1.8. **Scope:** five requested UI/reliability fixes, one narrowly scoped PDF-output duplicate filter, and public policies for Cashfree merchant website review. Existing sign-in, Google Meet OAuth, Deepgram live transport, PIN routing, subscription expiry, and desktop runtime are unchanged. This is still a digital subscription product; **Cashfree payment collection has not been integrated** and no charge is made by these website edits.
 
-## Host workflow
+## Changes
 
-1. Sign in at `https://www.zapperapp.in` using an active Zapper host account.
-2. Optionally expand **Check microphone before starting a session**. Select a microphone, record a 2.5-second local test and play it back. Test audio is not uploaded to Zapper.
-3. Click **Create Session**. Sign in with your individual Google account only if Google asks. Share the generated six-digit PIN with participants.
-4. This browser profile retains its active room; the Create Session button stays disabled until this room ends. Other active calls from the same host account appear as **read-only** status and duration on the right. No one can switch to or end another computer's call from that summary.
-5. The controls for **this** browser's room are microphone choice, level meter, timer, Mute/Unmute, Copy PIN and **End Session**. Canceling End Session leaves the room active.
-6. Completed calls remain under **Saved transcripts** for PDF download.
-
-**Scope of device lock:** The UI tracks sessions per **browser profile** through account-scoped local storage. Tabs sharing that profile use the same local room; separate computers or browser profiles can make separate rooms. This is a UX lock, not a hardware fingerprint or a backend per-device concurrency limit. Other-session status refreshes when opening the dashboard or using **Refresh**, without extra API polling.
-
-**Audio:** The host's microphone requires browser permission and a browser tab left open; remote meeting participants are still captured through the existing desktop app. Transcription uses the existing Railway + Deepgram streaming path. Microphone tests are local-only.
+1. **Mobile recording / screen wake:** While a host's browser microphone is recording, the UI requests the standard `navigator.wakeLock.request('screen')` feature and requests again after the page becomes visible. It releases the lock on Mute, End Session, stop or logout. It doesn't add any audio buffering. Unsupported browsers and low-power conditions show a status note. **No web page can promise audio capture after a phone is manually locked, browser suspended, or app moved into the background.** The host must keep Zapper in the foreground and microphone permission enabled.
+2. **Homepage order:** How it works is before Features in primary/mobile navigation, public section order, and footer.
+3. **Expired 24-hour trial:** A signed-in host with a one-time trial that has ended (and has not been renewed) sees a dismissible subscription notice with +91 93460 73219 and zapperapp.support@gmail.com. The notice does not incorrectly classify an expired paid renewal as the original trial. It appears once per browser page/login lifetime, with normal subscription enforcement unchanged.
+4. **Microphone test:** The existing audio test/replay dropdown is now immediately **after Create Session**, titled **Want to test your audio?**, without changing the test code.
+5. **PIN clipboard:** The PIN button has a click-to-copy tooltip and visible, screen-reader-announced success/failure feedback. It retains the existing PIN and session behavior.
+6. **PDF duplication:** A conservative duplicate filter is applied while assembling the saved PDF transcript. It removes identical or materially overlapping captions within 2.5 seconds from the same capture source or 20 seconds across different/unknown sources. Long-interval and distinct speech are retained. **No filtering, extra latency, or buffering has been added to live captions.** The database's original segment records are left intact.
+7. **Cashfree website readiness:** Existing Billing/Cancellation, Refund, Terms, Privacy and Contact pages are retained. Refund/Billing disclosures have been clarified; Contact includes phone support; a Digital Service Delivery/No Shipping page was added. Existing pricing is ₹1,000/month. Nothing advertises Cashfree payment collection as active.
 
 ## Deployment
 
-- Push the contents of `zapper-prod/` to the existing GitHub `main` branch.
-- Deploy `apps/web` to Vercel. Only the web Privacy Policy has changed for v4.1.8.
-- `apps/api` and `apps/desktop` have package version `4.1.8` for release consistency, but their runtime implementations are unchanged from v4.1.7. No database migration or new environment variables are required.
-- If deploying API metadata too, verify the Railway service still points to `/apps/api`, retains its volume and production variables, and reports the intended version at `/health`.
-- Keep the same production Google OAuth client settings; do not change working credentials.
+- Push all version 4.1.9 source changes to your existing GitHub `main` branch; deploy `apps/web` via Vercel and **the updated `apps/api` via Railway** (only its PDF finalization output changes). Keep Railway `/data` volume and existing OAuth/Deepgram/JWT variables unchanged. **No database migration.**
+- Desktop source functionality is unchanged. Desktop `package.json` is versioned as 4.1.9 for package alignment; a desktop rebuild is not needed to apply the UI/PDF changes.
+- Verify `https://api.zapperapp.in/health` reports `4.1.9`, and public pages open without sign-in: `/terms.html`, `/privacy.html`, `/billing.html`, `/refund.html`, `/delivery.html`, `/contact.html`.
 
-## Regression checklist
+## End-to-end test checklist
 
-- On computers A and B with the same host login, create different PINs. Each computer should retain its own PIN on refresh and disable its own Create Session button.
-- A third computer should see A and B as read-only active-call summaries and still be able to create Session C.
-- In two tabs of the same browser profile, confirm one shared local session is selected.
-- Confirm the pre-session microphone test works without a session, captures the chosen device and plays audio locally.
-- Confirm the current room's Mute/Unmute, timer, PIN copying and End Session Cancel/OK actions.
-- End A and verify B and C continue. Reopen A and verify Create Session becomes available.
-- Verify participants can redeem the correct PIN and the original transcript-to-PDF path still works.
+1. In mobile Chrome/Edge (or supported iOS browser), sign in, start a session, allow microphone permission, confirm status indicates the display is being kept awake, leave browser in foreground with speech for a longer period than the normal screen timeout. Check Mute/Unmute and End Session release/reacquire the screen lock. Verify mobile platform may override on battery saver, background, or lock screen.
+2. Confirm homepage scroll order is **How it works → Features**, and header and mobile menu match.
+3. Login with a host whose original 24-hour trial expired without renewal: confirm modal with phone/email and Close. Confirm a renewed host and administrator do not get a false trial-expired popup. Repeat on mobile viewport.
+4. Confirm mic test dropdown is below Create Session, and sample replay remains local-only.
+5. Click PIN on a laptop and Pixel Android: confirm `PIN copied to clipboard`, then paste into an app. Cancel End Session and confirm the session is still active; confirm End Session actually terminates it.
+6. With two capture sources in one PIN session, speak some intentionally identical sentences. Confirm live captions still flow promptly, then End Session and download PDF: near-simultaneous repeated lines should appear once while other distinct speech remains. Note: speech-to-text itself can mis-recognize words; timing heuristics cannot perfectly identify every natural repetition.
+7. Test another computer under the same host login for isolated PIN/session; confirm trial, subscriptions, Google OAuth, participant PIN access, and transcript/PDF download remain intact.
 
-**Testing note:** The automated browser tests used a simulated API and microphone capture. Real device audio, multi-computer latency, live Google Meet creation and PDF output still require production checks.
+### Transcription usage and Deepgram costs
 
-## Google OAuth verification — data protection disclosure update (v4.1.8)
+- Host web microphone sends its audio to `/stt`, which opens a Deepgram connection when active.
+- Each PIN-connected desktop may **also** send captured meeting audio and open its own Deepgram stream if audio is captured. A PIN connection that only receives text captions does not itself need a Deepgram stream.
+- Therefore one meeting with host microphone plus one actively capturing desktop **may use two concurrent billable Deepgram audio streams**. With multiple capture clients, the number can be higher. This release's PDF deduplication affects saved text, **not provider billing**. Check usage in Deepgram to measure actual billable minutes. Automatically deduplicating paid audio streams requires a separate explicit audio-source architecture change; it is not included here.
 
-Google's verification review requested that Zapper's public Privacy Policy specify mechanisms protecting sensitive data. The updated `apps/web/public/privacy.html` now includes the dedicated [How we protect sensitive information](https://www.zapperapp.in/privacy.html#data-protection) section, which accurately describes:
+## Cashfree merchant onboarding — remaining items you must supply
 
-- TLS/HTTPS and secure WebSockets for production external communications.
-- AES-256-GCM encryption of stored per-host Google OAuth refresh tokens, with the encryption key derived from a backend-only application secret.
-- Salted scrypt password hashes; server-side authenticated/role-checked access to session records and PDFs; session-scoped PIN participant access.
-- Limited Google Meet API scope, separation of Google host connections, and how consent, revocation, retention, and data deletion requests work.
-- Which protections apply specifically to Google OAuth refresh tokens, without claiming that all session transcripts and PDFs are individually encrypted.
+Cashfree assesses the real business, not just policy wording. Before applying, ensure the following are accurate and available, and do not invent legal details to pass a website review:
 
-**Security configuration to confirm (without changing a working key):** In Railway → API → Variables, verify that the existing `JWT_SECRET` is set to a strong, stable, private value. The OAuth refresh-token encryption key derives from this value. Never expose it, include it in GitHub, or rotate it casually—changing it would require Google hosts to reconnect. Do not send secrets in a support email.
+- Legal seller/business name, registration type, billing/business address, authorised representative, PAN/GST information as applicable, and bank/KYC supporting documents. **These were not provided and have NOT been invented in the public site**; add verified business details if the payment provider requires displaying them.
+- Confirm the proposed refund support response targets and refund eligibility in the public policy match what your business will actually honor.
+- Confirm advertised ₹1,000/month, tax treatment, what customer gets, digital delivery activation time, whether automatic renewal exists, and account-support contact information match the eventual checkout and invoices.
+- Make sure `https://www.zapperapp.in` serves all policy pages publicly before Cashfree reviews the site. Digital services have **no physical shipping**.
+- Complete Cashfree merchant approval and choose an authorized checkout implementation, secret storage, order creation, webhook verification, and payment reconciliation **before activating payments**. A public policy update cannot guarantee approval and does not process payments.
 
-**Deploy and verify:** Push v4.1.8 to GitHub and deploy `apps/web` on Vercel. Open `https://www.zapperapp.in/privacy.html#data-protection` in an incognito browser window and check that the heading and six data-protection bullets appear without login. Confirm the existing `/terms.html`, host login, Create Session, and Saved Transcripts pages are still accessible. No OAuth credential change, Railway data migration, or desktop installer rebuild is needed.
+Official Cashfree website audit criteria include business/product description, pricing, terms, privacy, refund/cancellation policies and contact information. No attempt was made to add Cashfree API keys or payment flows without approved merchant credentials and explicit commercial requirements.
 
-**Respond to Google's reviewer:** In Google Cloud → Google Auth Platform → Verification Center, update/resubmit the verification request with `https://www.zapperapp.in/privacy.html`. Then reply directly to Google's `[Action Needed] OAuth Verification Request Acknowledgement` email with the same link and a short confirmation that the data protection disclosures are published. Google must review the changes; approval cannot be guaranteed by code changes alone.
+## Tests performed
+
+- Node syntax checks for API/web/desktop JavaScript.
+- Isolated PDF-output dedupe unit test and screen-wake lifecycle unit test passed.
+- Chromium DOM integration checks (with mocked account and session API) passed for active/expired trial views, navigation order, microphone dropdown placement, PIN copying and End Session Cancel behavior.
+- Existing browser-profile session ownership tests and desktop chat filtering tests can run locally without API dependencies.
+- The existing full API smoke suite **passed locally**, including registration/trial expiry, Google OAuth, PIN access, host audio authentication, captions, transcript PDF and duplicate filtering. Actual device audio behavior, Cashfree website audit and real production PDF cases require deployment and live testing.

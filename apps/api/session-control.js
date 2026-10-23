@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 const googleMeetRoutes = require('./google-meet');
+const { dedupeTranscriptForPdf } = require('./transcript-output-dedupe');
 
 module.exports = function createSessionControl({ app, dataDir }) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -554,8 +555,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (!session) return null;
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(session.user_id);
     if (!user) return null;
-    const segmentRows = db.prepare(`SELECT text,captured_at_ms FROM session_live_segments
-      WHERE host_session_id=? ORDER BY captured_at_ms ASC,id ASC`).all(session.id);
+    const segmentRows = dedupeTranscriptForPdf(db.prepare(`SELECT text,source_id,captured_at_ms FROM session_live_segments
+      WHERE host_session_id=? ORDER BY captured_at_ms ASC,id ASC`).all(session.id));
     const segments = segmentRows.map(row => ({ text: String(row.text || ''), at: Number(row.captured_at_ms || 0) })).filter(row => row.text);
     const endedAt = Math.max(1, Number(forcedEndedAt || session.ended_at_ms || Date.now()));
     const firstSegmentAt = segments.length ? Number(segments[0].at || 0) : 0;

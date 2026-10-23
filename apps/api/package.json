@@ -1,6 +1,6 @@
 {
   "name": "@zapper/api",
-  "version": "4.1.8",
+  "version": "4.1.9",
   "private": true,
   "description": "Zapper account, session PIN, transcript and STT API",
   "main": "server.js",
@@ -9,8 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check session-control.js && node --check google-meet.js && node --check live-caption-relay.js",
-    "smoke": "node tests/smoke.js && node tests/trial-persistence.js && node tests/google-meet.js && node tests/host-microphone.js && node tests/caption-relay.js"
+    "check": "node --check server.js && node --check session-control.js && node --check google-meet.js && node --check live-caption-relay.js && node --check transcript-output-dedupe.js",
+    "smoke": "node tests/smoke.js && node tests/trial-persistence.js && node tests/google-meet.js && node tests/host-microphone.js && node tests/caption-relay.js && node tests/pdf-duplicates.js"
   },
   "dependencies": {
     "cors": "2.8.5",

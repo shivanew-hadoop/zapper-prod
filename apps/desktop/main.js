@@ -366,6 +366,12 @@ function sendStatus(msg) {
   }
 }
 
+function sendTranscriptionSource(source) {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('transcription-source', source);
+  }
+}
+
 
 function sendMeetChat(payload) {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
@@ -387,6 +393,7 @@ ipcMain.on('meet-chat-message', (_, payload) => {
 function activateDeepgramFallback(reason = '') {
   if (!started || localCaptionReady || deepgramFallbackActive) return;
   deepgramFallbackActive = true;
+  sendTranscriptionSource('deepgram');
   sendStatus(`Google Meet captions unavailable${reason ? ` (${reason})` : ''}. Using Deepgram fallback...`);
 }
 
@@ -412,6 +419,7 @@ ipcMain.on('meet-caption-state', (_, payload) => {
     deepgramFallbackActive = false;
     if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
     captionFallbackTimer = null;
+    sendTranscriptionSource('meet-captions');
     sendStatus('Google Meet captions connected. Local low-latency transcription active.');
   }
 });
@@ -428,6 +436,7 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   deepgramFallbackActive = false;
   if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
   captionFallbackTimer = null;
+  sendTranscriptionSource('meet-captions');
 
   // Local-first render: no backend round-trip before the user sees the caption.
   if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -518,6 +527,7 @@ async function stopActiveCaptureRuntime(statusText = 'Stopped') {
     stopRemoteTranscriptStream();
     await leaveMeet().catch(() => {});
     resetRuntimeFlags();
+    sendTranscriptionSource('idle');
     sendStatus(statusText);
   } finally {
     captureStopInProgress = false;
@@ -767,6 +777,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     activeCaptureSessionToken = String(sessionToken || '');
     activeCaptureGoogleEmail = String(googleEmail || '');
 
+    sendTranscriptionSource('detecting');
     sendStatus('Session verified. Opening Meet...');
     startSessionStatusPoller(sessionToken);
 

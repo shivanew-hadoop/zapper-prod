@@ -25,6 +25,7 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const appVersionEl = document.getElementById('appVersion');
 const latestVersionBtn = document.getElementById('latestVersionBtn');
+const transcriptionSourceEl = document.getElementById('transcriptionSource');
 let privateCursor = null;
 
 async function initAppVersionAndDownload() {
@@ -80,6 +81,24 @@ let transcriptRenderRestoring = false;
 let transcriptUserScrollIntent = false;
 let transcriptRenderVersion = 0;
 let finalizingSession = false;
+
+function setTranscriptionSource(source) {
+  if (!transcriptionSourceEl) return;
+  const normalized = String(source || '').trim().toLowerCase();
+  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting');
+  if (normalized === 'meet-captions') {
+    transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
+    transcriptionSourceEl.classList.add('source-meet');
+    return;
+  }
+  if (normalized === 'deepgram') {
+    transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
+    transcriptionSourceEl.classList.add('source-deepgram');
+    return;
+  }
+  transcriptionSourceEl.textContent = normalized === 'idle' ? 'Source: —' : 'Source: Detecting…';
+  transcriptionSourceEl.classList.add('source-detecting');
+}
 
 
 function normalizeGoogleMeetInput(value) {
@@ -735,7 +754,12 @@ if (window.electronAPI.onSessionEnded) {
     finalizeActiveSession({ endBackend: false, reason: message || 'This session is no longer active. Ask the host for a new PIN.' }).catch(() => null);
   });
 }
-window.electronAPI.onTranscript(({ text, isFinal }) => {
+if (window.electronAPI.onTranscriptionSource) {
+  window.electronAPI.onTranscriptionSource((source) => setTranscriptionSource(source));
+}
+
+window.electronAPI.onTranscript(({ text, isFinal, source }) => {
+  if (source === 'meet-captions' || source === 'deepgram') setTranscriptionSource(source);
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();

@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   countdownAutoCloseReady: () => ipcRenderer.invoke('countdown-auto-close-ready'),
   onTranscript: (cb) => ipcRenderer.on('transcript', (_, data) => cb(data)),
   onStatus: (cb) => ipcRenderer.on('status', (_, msg) => cb(msg)),
+  onTranscriptionSource: (cb) => ipcRenderer.on('transcription-source', (_, source) => cb(source)),
   onLoginRequired: (cb) => ipcRenderer.on('login-required', (_, msg) => cb(msg)),
   onGoogleSignInComplete: (cb) => ipcRenderer.on('google-signin-complete', () => cb()),
   onSpeechStart: (cb) => ipcRenderer.on('speech-started', () => cb()),

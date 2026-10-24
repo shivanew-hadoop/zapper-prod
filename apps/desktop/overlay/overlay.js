@@ -91,11 +91,6 @@ function setTranscriptionSource(source) {
     transcriptionSourceEl.classList.add('source-meet');
     return;
   }
-  if (normalized === 'meet-captions-waiting') {
-    transcriptionSourceEl.textContent = 'Source: Google Meet Captions · waiting for speech';
-    transcriptionSourceEl.classList.add('source-meet');
-    return;
-  }
   if (normalized === 'deepgram') {
     transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
     transcriptionSourceEl.classList.add('source-deepgram');

@@ -308,11 +308,10 @@
   let lastCaptionText = '';
   let lastCaptionChangedAt = 0;
   let lastCaptionFinalKey = '';
+  let lastCaptionSpeaker = '';
+  let captionKeyToggleAttempts = 0;
   let captionFinalTimer = null;
   let lastCaptionEnableAttemptAt = 0;
-  let captionEnableAttempts = 0;
-  let captionSettingsBusy = false;
-  let lastNativeCaptionEnableRequestAt = 0;
 
   function emitCaptionState(state, extra = {}) {
     if (!ipcRenderer) return;
@@ -444,6 +443,46 @@
     return entries;
   }
 
+  // Independent leaf-level strategy. Meet has shipped builds where jsname="tgaKEf"
+  // (or bVV8Bd / ygicle) is the caption TEXT element rather than a container of
+  // YSxPC blocks, so the block-based extractors above find nothing. Here only
+  // leaf text elements are read (never a wrapper's whole textContent) and the
+  // speaker is taken from the nearest preceding sibling label.
+  const CAPTION_TEXT_NODE_SELECTOR = '[jsname="bVV8Bd"], div.ygicle.VbkSUe, div.ygicle, [jsname="tgaKEf"]';
+
+  function findCaptionSpeakerFor(textEl) {
+    let node = textEl;
+    for (let depth = 0; node && depth < 3; depth += 1, node = node.parentElement) {
+      let sib = node.previousElementSibling;
+      while (sib) {
+        const t = normalizeText(sib.textContent || '');
+        if (t) {
+          const speaker = cleanCaptionSpeaker(t);
+          if (speaker && speaker.length <= 60) return speaker;
+          break;
+        }
+        sib = sib.previousElementSibling;
+      }
+    }
+    return '';
+  }
+
+  function extractByTextNodes(container) {
+    const entries = [];
+    if (!container || isInDialog(container)) return entries;
+    const nodes = [...container.querySelectorAll(CAPTION_TEXT_NODE_SELECTOR)];
+    try { if (container.matches?.(CAPTION_TEXT_NODE_SELECTOR)) nodes.unshift(container); } catch (_) {}
+    for (const el of nodes) {
+      if (isExcludedCaptionElement(el)) continue;
+      // A wrapper that contains another text node is a container, not speech.
+      if (el.querySelector(CAPTION_TEXT_NODE_SELECTOR)) continue;
+      const speaker = findCaptionSpeakerFor(el);
+      const text = cleanCaptionText(el.textContent || '', speaker);
+      if (text) entries.push({ speaker, text });
+    }
+    return entries;
+  }
+
   function findAriaLiveContainer() {
     const candidates = [...document.querySelectorAll('[aria-live="polite"], [aria-live="assertive"]')]
       .filter(el => !isInDialog(el))
@@ -454,29 +493,18 @@
     return candidates.sort((a, b) => (b.children?.length || 0) - (a.children?.length || 0))[0];
   }
 
-  function findJsnameCaptionContainer(jsname) {
-    // Meet can reuse jsname values outside the live caption widget. Never bind to
-    // the first matching container merely because it exists. Prefer the candidate
-    // that actually owns a known caption text child. Before the first spoken word
-    // we intentionally return null; the document-level observer will retry as soon
-    // as Meet inserts the real caption block.
-    const candidates = [...document.querySelectorAll(`[jsname="${jsname}"]`)].filter(el => !isInDialog(el));
-    return candidates.find(el =>
-      el.querySelector('[jsname="YSxPC"] [jsname="bVV8Bd"]') ||
-      el.querySelector('div.nMcdL.bj4p3b div.ygicle.VbkSUe, div.nMcdL.bj4p3b div.ygicle')
-    ) || null;
-  }
-
   const CAPTION_STRATEGIES = [
     {
       name: 'jsname-tgaKEf',
-      findContainer: () => findJsnameCaptionContainer('tgaKEf'),
+      findContainer: () => document.querySelector('[jsname="tgaKEf"]'),
       extract: extractByJsname,
+      strongContainer: true,
     },
     {
       name: 'jsname-DS9Ooe',
-      findContainer: () => findJsnameCaptionContainer('DS9Ooe'),
+      findContainer: () => document.querySelector('[jsname="DS9Ooe"]'),
       extract: extractByJsname,
+      strongContainer: true,
     },
     {
       name: 'current-classes',
@@ -486,48 +514,47 @@
           textEl?.closest?.('div.nMcdL.bj4p3b')?.parentElement || null;
       },
       extract: extractByCurrentClasses,
+      strongContainer: false,
+    },
+    {
+      name: 'caption-text-nodes',
+      findContainer: () => {
+        const el = [...document.querySelectorAll(CAPTION_TEXT_NODE_SELECTOR)]
+          .find(n => !isInDialog(n) && !isExcludedCaptionElement(n) && normalizeText(n.textContent || ''));
+        if (!el) return null;
+        return el.closest('[role="region"]') || el.parentElement?.parentElement || el.parentElement || el;
+      },
+      extract: extractByTextNodes,
+      strongContainer: false,
     },
     {
       name: 'caption-region',
       findContainer: () => [...document.querySelectorAll(CAPTION_REGION_SELECTOR)].find(el => !isInDialog(el)) || null,
       extract: extractByPosition,
+      strongContainer: false,
     },
     {
       name: 'aria-live-structured',
       findContainer: findAriaLiveContainer,
       extract: extractByPosition,
+      strongContainer: false,
     },
   ];
 
   function detectCaptionStrategy() {
+    // A strategy that actually yields caption entries always wins. An empty
+    // "strong" container is only a fallback: it must NOT shadow later strategies,
+    // otherwise a container that exists but has a different inner layout would
+    // block every other extractor and no caption would ever reach the overlay.
+    let strongEmpty = null;
     for (const strategy of CAPTION_STRATEGIES) {
       const container = strategy.findContainer();
       if (!container || isInDialog(container)) continue;
       const entries = strategy.extract(container);
       if (entries.length) return { strategy, container, entries };
+      if (strategy.strongContainer && !strongEmpty) strongEmpty = { strategy, container, entries };
     }
-    return null;
-  }
-
-  function scanKnownCaptionTextNodes() {
-    // Independent safety net: inspect only known caption text nodes anywhere in
-    // the Meet document. This does not read body/region text, so Q&A, tooltips,
-    // chat and accessibility announcements cannot become transcript lines.
-    const entries = [];
-    const seen = new Set();
-    for (const textEl of document.querySelectorAll('[jsname="bVV8Bd"], div.ygicle.VbkSUe, div.ygicle')) {
-      if (!textEl || isInDialog(textEl) || isExcludedCaptionElement(textEl)) continue;
-      const row = textEl.closest('[jsname="YSxPC"], div.nMcdL.bj4p3b');
-      if (!row) continue;
-      const speakerEl = row.querySelector('[jsname="r4nke"], div.NWpY1d');
-      const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl.textContent || '', speaker);
-      const key = `${keyText(speaker)}|${keyText(text)}`;
-      if (!text || seen.has(key)) continue;
-      seen.add(key);
-      entries.push({ speaker, text });
-    }
-    return entries;
+    return strongEmpty;
   }
 
   function emitMeetCaption(text, isFinal) {
@@ -556,6 +583,23 @@
     emitCaptionState('ready', { strategy: strategyName || '' });
   }
 
+  function captionSquash(value) {
+    return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  }
+
+  // Meet edits the live row in place (growing it, fixing punctuation, trimming
+  // the oldest words). Anything else is a new utterance and the previous one
+  // must be committed as a final line before it is replaced.
+  function isCaptionContinuation(prevKey, nextKey, prevSpeaker, nextSpeaker) {
+    if (prevSpeaker && nextSpeaker && prevSpeaker.toLowerCase() !== nextSpeaker.toLowerCase()) return false;
+    const a = captionSquash(prevKey);
+    const b = captionSquash(nextKey);
+    const head = Math.min(16, a.length, b.length);
+    if (head < 4) return true;
+    return b.startsWith(a.slice(0, head)) || a.startsWith(b.slice(0, head)) ||
+      b.includes(a.slice(-head)) || a.includes(b.slice(0, head));
+  }
+
   function processCaptionEntries(entries, strategyName) {
     if (!entries?.length) return false;
     const latest = entries[entries.length - 1];
@@ -564,6 +608,12 @@
     if (!key) return false;
     markCaptionReady(strategyName);
     if (key !== lastCaptionKey) {
+      const speaker = cleanCaptionSpeaker(latest.speaker);
+      if (lastCaptionKey && lastCaptionKey !== lastCaptionFinalKey &&
+          !isCaptionContinuation(lastCaptionKey, key, lastCaptionSpeaker, speaker)) {
+        emitMeetCaption(lastCaptionText, true);
+      }
+      lastCaptionSpeaker = speaker;
       lastCaptionKey = key;
       lastCaptionText = text;
       lastCaptionChangedAt = Date.now();
@@ -615,97 +665,18 @@
     return true;
   }
 
-  function findCaptionToggleButton() {
-    const CAPTION_TERM = /caption|subtitle|untertitel|sous-titre|sottotitoli|subt[ií]tulo|legenda|ondertiteling|napisy|субтитры|字幕|자막/i;
-    const nodes = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
-    return nodes.find(el => {
-      const label = normalizeText([
-        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')
-      ].filter(Boolean).join(' '));
-      return CAPTION_TERM.test(label) && !/settings|language|translate|translated/i.test(label);
-    }) || null;
-  }
-
-  function isCaptionToggleOn(button) {
-    if (!button) return false;
-    const pressed = button.getAttribute('aria-pressed');
-    if (pressed === 'true') return true;
-    if (pressed === 'false') return false;
-    const label = normalizeText([
-      button.getAttribute('aria-label'), button.getAttribute('data-tooltip'), button.getAttribute('title')
-    ].filter(Boolean).join(' '));
-    return /turn off|disable|hide|deaktivier|ausschalten|ausblenden|désactiver|masquer|desactivar|ocultar|disattiva|nascondi/i.test(label);
-  }
-
-  function findCaptionSettingsDialog() {
-    const CAPTION_TERM = /caption|subtitle|untertitel|sous-titre|sottotitoli|subt[ií]tulo|legenda|ondertiteling/i;
-    const DANGEROUS = /leave|end (?:the )?(?:call|meeting)|remove|report/i;
-    for (const dialog of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
-      const text = normalizeText([
-        dialog.getAttribute('aria-label'), (dialog.textContent || '').slice(0, 900)
-      ].filter(Boolean).join(' '));
-      if (!CAPTION_TERM.test(text) || DANGEROUS.test(text)) continue;
-      if (dialog.querySelector('[role="radio"], input[type="radio"]')) return dialog;
-    }
-    return null;
-  }
-
-  function captionRadioLabel(radio) {
-    const own = normalizeText(radio.getAttribute('aria-label') || '');
-    if (own) return own;
-    const row = radio.closest('label, li, [role="radiogroup"] > *') || radio.parentElement;
-    return normalizeText(row?.textContent || '');
-  }
-
-  async function handleCaptionSettingsDialog() {
-    if (captionSettingsBusy) return false;
-    captionSettingsBusy = true;
-    try {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        await new Promise(resolve => setTimeout(resolve, 250));
-        const dialog = findCaptionSettingsDialog();
-        if (!dialog) continue;
-
-        const radios = [...dialog.querySelectorAll('[role="radio"], input[type="radio"]')];
-        const automatic = radios.find(r => /automatic captions?|automatische untertitel|sous-titres automatiques|subt[ií]tulos autom[aá]ticos|legendas autom[aá]ticas|sottotitoli automatici|automatische ondertiteling/i.test(captionRadioLabel(r)));
-        if (automatic) {
-          const checked = automatic.getAttribute('aria-checked') === 'true' || automatic.checked === true;
-          if (!checked) {
-            try { automatic.click(); } catch (_) {}
-          }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 250));
-        const close = [...dialog.querySelectorAll('button, [role="button"]')].find(el =>
-          /close|schließen|schliessen|fermer|cerrar|chiudi|sluiten/i.test(normalizeText([
-            el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')
-          ].filter(Boolean).join(' ')))
-        );
-        if (close) {
-          try { close.click(); } catch (_) {}
-        } else {
-          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (_) {}
-        }
-        log('Caption settings handled; automatic captions requested');
-        return true;
-      }
-      return false;
-    } finally {
-      captionSettingsBusy = false;
-    }
-  }
-
-  function requestNativeCaptionEnable() {
-    if (!ipcRenderer) return;
-    const now = Date.now();
-    if (now - lastNativeCaptionEnableRequestAt < 5000) return;
-    lastNativeCaptionEnableRequestAt = now;
-    ipcRenderer.send('meet-caption-native-enable-request', { at: now });
-  }
-
   function captionsAppearEnabled() {
-    const button = findCaptionToggleButton();
-    return isCaptionToggleOn(button);
+    // Not filtered by visibility: Meet auto-hides the control bar, and a hidden
+    // "Turn off captions" button still proves captions are already on.
+    const buttons = [...document.querySelectorAll('button, div[role="button"], span[role="button"]')];
+    return buttons.some(el => {
+      const pressed = el.getAttribute('aria-pressed');
+      const label = normalizeText([
+        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText
+      ].filter(Boolean).join(' '));
+      if (pressed === 'true' && /caption|subtitle|untertitel|sous-titre|sottotitoli|subtítulo|legenda|ondertiteling/i.test(label)) return true;
+      return /turn off captions|disable captions|hide captions|captions are on/i.test(label);
+    });
   }
 
   function ensureMeetCaptionsEnabled() {
@@ -715,44 +686,22 @@
       emitCaptionState('admitted');
     }
 
-    const openCaptionSettings = findCaptionSettingsDialog();
-    if (openCaptionSettings) handleCaptionSettingsDialog().catch(() => {});
-
-    // First consume any real caption text already present. This is the strongest
-    // possible proof that Meet CC is active and avoids toggling an already-on CC.
-    const directEntries = scanKnownCaptionTextNodes();
-    if (directEntries.length) {
-      processCaptionEntries(directEntries, 'direct-caption-text');
-      attachCaptionObserver();
-      return true;
-    }
     if (attachCaptionObserver()) return true;
-
-    const toggle = findCaptionToggleButton();
-    if (toggle && isCaptionToggleOn(toggle)) {
-      emitCaptionState('enabled');
-      return true;
-    }
+    if (captionsAppearEnabled()) return true;
 
     const now = Date.now();
     if (now - lastCaptionEnableAttemptAt < 2500) return false;
     lastCaptionEnableAttemptAt = now;
-    captionEnableAttempts += 1;
-
-    // Use the actual Meet CC control, not arbitrary page text. Some accounts open
-    // Settings -> Captions on first enable; handle that flow explicitly.
-    if (toggle) {
-      try { toggle.click(); } catch (_) {}
-      handleCaptionSettingsDialog().catch(() => {});
-    } else {
-      // DOM click is not always accepted in a nearly-hidden Electron window. Ask
-      // the main process to send a native Chromium "C" shortcut as a fallback.
-      requestNativeCaptionEnable();
+    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions', 'show captions']);
+    // The 'c' shortcut TOGGLES captions, so it is limited to a few attempts; an
+    // unlimited retry could switch already-enabled captions back off.
+    if (!clicked && captionKeyToggleAttempts < 3) {
+      captionKeyToggleAttempts += 1;
+      try {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
+        document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
+      } catch (_) {}
     }
-
-    // If several DOM attempts produced neither an ON toggle nor caption text, use
-    // the native shortcut even when a nominal button was found.
-    if (captionEnableAttempts >= 2 && !captionsAppearEnabled()) requestNativeCaptionEnable();
     return false;
   }
 
@@ -760,8 +709,6 @@
     if (!ipcRenderer) return;
     const bodyObserver = new MutationObserver(() => {
       if (!isInMeeting()) return;
-      const directEntries = scanKnownCaptionTextNodes();
-      if (directEntries.length) processCaptionEntries(directEntries, 'direct-caption-text');
       ensureMeetCaptionsEnabled();
       scanMeetCaptions();
     });
@@ -775,8 +722,6 @@
         captionObservedRoot = null;
         captionActiveStrategy = null;
       }
-      const directEntries = scanKnownCaptionTextNodes();
-      if (directEntries.length) processCaptionEntries(directEntries, 'direct-caption-text');
       attachCaptionObserver();
       scanMeetCaptions();
     }, 750);

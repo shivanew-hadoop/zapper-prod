@@ -679,72 +679,6 @@ async function joinMeet(meetUrl, guestName, onStatusUpdate) {
   return true;
 }
 
-async function ensureMeetCaptionsNative(onStatusUpdate) {
-  if (!meetWindow || meetWindow.isDestroyed()) return false;
-
-  const inspectToggle = async () => await meetWindow.webContents.executeJavaScript(`(() => {
-    function visible(el) {
-      if (!el) return false;
-      const r = el.getBoundingClientRect();
-      const s = getComputedStyle(el);
-      return r.width > 8 && r.height > 8 && s.display !== 'none' && s.visibility !== 'hidden';
-    }
-    const captionTerm = /caption|subtitle|untertitel|sous-titre|sottotitoli|subt[ií]tulo|legenda|ondertiteling|napisy|субтитры|字幕|자막/i;
-    const nodes = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
-    for (const el of nodes) {
-      const label = [el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')]
-        .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-      if (!captionTerm.test(label) || /settings|language|translate|translated/i.test(label)) continue;
-      const pressed = el.getAttribute('aria-pressed');
-      const on = pressed === 'true' || (pressed !== 'false' && /turn off|disable|hide|deaktivier|ausschalten|ausblenden|désactiver|masquer|desactivar|ocultar|disattiva|nascondi/i.test(label));
-      const r = el.getBoundingClientRect();
-      return { found: true, on, label, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-    }
-    return { found: false, on: false };
-  })()`, true).catch(() => ({ found: false, on: false }));
-
-  let state = await inspectToggle();
-  if (state.on) return true;
-
-  // First use Chromium's native input path. A DOM KeyboardEvent is untrusted and
-  // Meet may ignore it; sendInputEvent behaves like real keyboard input.
-  try {
-    meetWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'C' });
-    meetWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'C' });
-  } catch (_) {}
-  await sleep(650);
-  state = await inspectToggle();
-  if (state.on) {
-    safeStatus(onStatusUpdate, 'Google Meet captions enabled. Waiting for speech...');
-    return true;
-  }
-
-  // Final fallback: native mouse click on the exact CC control. Meet sometimes
-  // ignores input while the nearly-transparent BrowserWindow is click-through,
-  // so temporarily make only that hidden Meet window interactive, click, restore.
-  if (state.found && Number.isFinite(state.x) && Number.isFinite(state.y)) {
-    const restoreState = makeMeetWindowClickableForJoin();
-    try {
-      meetWindow.webContents.focus();
-      await sleep(120);
-      meetWindow.webContents.sendInputEvent({ type: 'mouseMove', x: state.x, y: state.y });
-      meetWindow.webContents.sendInputEvent({ type: 'mouseDown', x: state.x, y: state.y, button: 'left', clickCount: 1 });
-      await sleep(80);
-      meetWindow.webContents.sendInputEvent({ type: 'mouseUp', x: state.x, y: state.y, button: 'left', clickCount: 1 });
-      await sleep(500);
-    } finally {
-      restoreMeetWindowAfterJoinClick(restoreState);
-    }
-    state = await inspectToggle();
-    if (state.on) {
-      safeStatus(onStatusUpdate, 'Google Meet captions enabled. Waiting for speech...');
-      return true;
-    }
-  }
-
-  return false;
-}
-
 async function leaveMeet() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
@@ -1003,4 +937,4 @@ async function getGoogleAccountEmail() {
   }
 }
 
-module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting, ensureMeetCaptionsNative };
+module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting };

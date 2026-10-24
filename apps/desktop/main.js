@@ -398,12 +398,12 @@ function activateDeepgramFallback(reason = '') {
 }
 
 function scheduleDeepgramFallbackCheck() {
+  // Do not activate paid STT merely because Meet has not rendered a caption row
+  // yet. Before anyone speaks there is nothing to transcribe. Fallback is armed
+  // by actual audible Meet audio below and starts only after 10 seconds without
+  // a validated Google caption update.
   if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
-  captionFallbackTimer = setTimeout(() => {
-    captionFallbackTimer = null;
-    if (started && localCaptionAdmitted && !localCaptionReady) activateDeepgramFallback('caption DOM not detected');
-  }, 12000);
-  captionFallbackTimer.unref?.();
+  captionFallbackTimer = null;
 }
 
 ipcMain.on('meet-caption-state', (_, payload) => {
@@ -836,17 +836,21 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     onAudioChunk(pcmBuffer => {
       if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
 
-      // If Meet says captions are enabled but audible speech produces no caption
-      // updates for 10 seconds, treat the native caption path as unhealthy and
-      // temporarily fall back. Any later Meet caption immediately disables the
-      // fallback again and closes its Deepgram stream on the backend.
-      if (localCaptionReady && !deepgramFallbackActive) {
+      // Deepgram is a true fallback: do not start it because a caption DOM node
+      // has not appeared while the meeting is quiet. Start only after admitted
+      // Meet audio is actually audible for 10 seconds without a validated Google
+      // caption update. Any later Meet caption immediately disables fallback and
+      // closes its Deepgram stream on the backend.
+      if (localCaptionAdmitted && !deepgramFallbackActive) {
         if (pcmLooksAudible(pcmBuffer)) {
           if (!audibleWithoutCaptionSince) audibleWithoutCaptionSince = Date.now();
           const lastCaptionReference = localCaptionLastAt || audibleWithoutCaptionSince;
           if (Date.now() - Math.max(lastCaptionReference, audibleWithoutCaptionSince) >= 10000) {
+            const hadMeetCaptions = localCaptionReady || Boolean(localCaptionLastAt);
             localCaptionReady = false;
-            activateDeepgramFallback('no Meet caption text during audible speech');
+            activateDeepgramFallback(hadMeetCaptions
+              ? 'no Meet caption updates during audible speech'
+              : 'no Meet caption text during audible speech');
           }
         } else {
           audibleWithoutCaptionSince = 0;

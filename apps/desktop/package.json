@@ -1,6 +1,6 @@
 {
   "name": "@zapper/desktop",
-  "version": "4.2.4",
+  "version": "4.2.5",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis --x64",
-    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check transcriber/remoteDeepgram.js",
+    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/caption-dom-guard.js",
     "dist:portable": "electron-builder --win portable --x64",
     "test:chat": "node tests/chat-noise.js"
   },

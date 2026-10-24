@@ -282,16 +282,25 @@
   }
 
 
-  // Primary transcription path: read Google Meet's own captions in the same
-  // Electron Meet page. This adds no network/STT latency before the local overlay.
-  // Prefer the accessible Captions live region. Do not use tgaKEf as a root:
-  // current Meet builds can reuse that jsname for non-caption UI (for example
-  // the "Jump to bottom" control), which must never become transcript text.
-  const CAPTION_REGION_SELECTOR = '[role="region"][aria-label*="aption" i]';
-  const CAPTION_LEGACY_REGION_SELECTOR = 'div[jsname="YSxPC"]';
-  const CAPTION_ROW_SELECTOR = 'div.nMcdL.bj4p3b, div[jsname="dsyhDe"], div.CNusmb, div.TBMuR';
-  const CAPTION_SPEAKER_SELECTOR = 'div.NWpY1d, div.KcIKyf, div.zs7s8d, [data-self-name], [data-participant-id]';
-  const CAPTION_TEXT_SELECTOR = 'div.ygicle.VbkSUe, div.ygicle, div.bh44bd, div.iTTPOb';
+  // Primary transcription path: read only Google Meet's actual caption text
+  // nodes. Never use a whole region's innerText: Meet side panels (Q&A, tools,
+  // access notices and controls such as "Jump to bottom") can live near the
+  // captions DOM and must never become transcript text.
+  //
+  // Current Meet caption DOM (also used by maintained caption-capture tools):
+  //   row:     .nMcdL.bj4p3b
+  //   speaker: .NWpY1d
+  //   text:    .ygicle.VbkSUe
+  // Keep narrow legacy fallbacks for older Meet builds, but every accepted root
+  // must contain a real caption text node before it is considered healthy.
+  const CAPTION_REGION_SELECTOR = '[role="region"][aria-label*="caption" i], [role="region"][aria-label*="subtitle" i]';
+  const CAPTION_CURRENT_ROW_SELECTOR = 'div.nMcdL.bj4p3b, div[jsname="dsyhDe"]';
+  const CAPTION_CURRENT_TEXT_SELECTOR = 'div.ygicle.VbkSUe, div.ygicle';
+  const CAPTION_LEGACY_ROOT_SELECTOR = 'div[jscontroller="TEjq6e"], div[jscontroller="D1tHje"], div[jscontroller="KPn5nb"], div[jsname="YSxPC"]';
+  const CAPTION_LEGACY_TEXT_SELECTOR = 'div.iTTPOb, div.bh44bd';
+  const CAPTION_TEXT_SELECTOR = `${CAPTION_CURRENT_TEXT_SELECTOR}, ${CAPTION_LEGACY_TEXT_SELECTOR}`;
+  const CAPTION_SPEAKER_SELECTOR = 'div.NWpY1d, div.KcIKyf, div.zs7s8d';
+  const CAPTION_EXCLUDED_ANCESTOR_SELECTOR = '[role="dialog"], [role="menu"], [role="menubar"], [role="button"], [role="toolbar"], [role="tablist"], [role="listbox"], button, [data-panel-id]';
   let captionObserver = null;
   let captionObservedRoot = null;
   let captionReadySent = false;
@@ -323,58 +332,115 @@
 
   function cleanCaptionText(value, speaker = '') {
     let text = normalizeText(value);
-    if (!text) return '';
-    // Material-symbol labels can be concatenated with Meet controls in innerText.
-    // Strip only this known caption-chrome text; do not touch general transcript text.
-    if (isCaptionChrome(text)) return '';
+    if (!text || isCaptionChrome(text)) return '';
+
+    // Material Symbols can occasionally be serialized beside the real caption.
+    // Remove the symbol/control only when the material-symbol token is present;
+    // ordinary spoken phrases containing "jump to bottom" remain untouched.
     text = normalizeText(text
       .replace(/^arrow_downward\s*/i, '')
-      .replace(/^arrow down(?:ward)?\s*/i, ''));
+      .replace(/^arrow down(?:ward)?\s*/i, '')
+      .replace(/\s*arrow_downward\s*jump to bottom\s*$/i, '')
+      .replace(/\s*arrow down(?:ward)?\s*jump to bottom\s*$/i, ''));
     if (!text || isCaptionChrome(text)) return '';
+
     const cleanSpeaker = cleanCaptionSpeaker(speaker);
     if (cleanSpeaker && text.toLowerCase().startsWith(cleanSpeaker.toLowerCase())) {
       text = normalizeText(text.slice(cleanSpeaker.length).replace(/^[:\-–—]+\s*/, ''));
     }
-    const lines = textLines(text).filter(line => !isMeetNoise(line) && !isCaptionChrome(line) && !isClockText(line));
-    return normalizeText(lines.join(' ')).slice(0, 12000);
+    if (!text) return '';
+
+    // Caption text is already sourced from a verified caption node. Keep the
+    // speech intact; only reject an entire node when it is unmistakably Meet UI.
+    if (isMeetNoise(text) || isCaptionChrome(text) || isClockText(text)) return '';
+    return text.slice(0, 12000);
+  }
+
+  function isExcludedCaptionElement(el) {
+    if (!el || !visible(el)) return true;
+    try {
+      if (el.closest(CAPTION_EXCLUDED_ANCESTOR_SELECTOR)) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function isPlausibleCaptionTextElement(el) {
+    if (isExcludedCaptionElement(el)) return false;
+    const text = cleanCaptionText(el.innerText || el.textContent || '');
+    if (!text) return false;
+    try {
+      const r = el.getBoundingClientRect();
+      // Meet captions render in the lower portion of the meeting canvas. This
+      // rejects side-panel headers/tool chrome even if Google reuses a class.
+      if (r.width <= 0 || r.height <= 0) return false;
+      if (r.bottom < window.innerHeight * 0.35 || r.top > window.innerHeight) return false;
+    } catch (_) { return false; }
+    return true;
+  }
+
+  function captionTextNodesWithin(root) {
+    if (!root) return [];
+    return [...root.querySelectorAll(CAPTION_TEXT_SELECTOR)].filter(isPlausibleCaptionTextElement);
+  }
+
+  function rootContainsCaptionText(root) {
+    return captionTextNodesWithin(root).length > 0;
   }
 
   function findCaptionRoot() {
-    const ariaRoots = [...document.querySelectorAll(CAPTION_REGION_SELECTOR)].filter(visible);
+    // 1) Semantic caption region, but only if it contains an actual caption node.
+    const ariaRoots = [...document.querySelectorAll(CAPTION_REGION_SELECTOR)]
+      .filter(visible)
+      .filter(rootContainsCaptionText);
     if (ariaRoots.length) return ariaRoots[ariaRoots.length - 1];
 
-    // Legacy fallback retained for older Meet layouts, but only accept it when
-    // it actually contains a known caption-text node. This prevents generic Meet
-    // controls from being mistaken for captions.
-    const legacyRoots = [...document.querySelectorAll(CAPTION_LEGACY_REGION_SELECTOR)].filter(visible);
-    return legacyRoots.find(root => root.querySelector(CAPTION_TEXT_SELECTOR)) || null;
+    // 2) Current Meet row/container structure. This is intentionally anchored
+    // to .ygicle text rather than generic region text.
+    const currentTextNodes = [...document.querySelectorAll(CAPTION_CURRENT_TEXT_SELECTOR)]
+      .filter(isPlausibleCaptionTextElement);
+    if (currentTextNodes.length) {
+      const textEl = currentTextNodes[currentTextNodes.length - 1];
+      return textEl.closest('[jsname="dsyhDe"]') ||
+        textEl.closest('[role="region"]') ||
+        textEl.closest('div.nMcdL.bj4p3b')?.parentElement ||
+        textEl.parentElement;
+    }
+
+    // 3) Narrow legacy support. Again, a root is valid only when a known legacy
+    // caption text node is actually present and visible.
+    const legacyRoots = [...document.querySelectorAll(CAPTION_LEGACY_ROOT_SELECTOR)]
+      .filter(visible)
+      .filter(rootContainsCaptionText);
+    return legacyRoots.length ? legacyRoots[legacyRoots.length - 1] : null;
   }
 
   function captionEntries(root) {
     if (!root) return [];
-    const rows = [...root.querySelectorAll(CAPTION_ROW_SELECTOR)].filter(visible);
     const entries = [];
+
+    // Prefer current per-speaker rows. A row without a known caption text node
+    // is ignored completely; row.innerText is never treated as speech.
+    const rows = [...root.querySelectorAll(CAPTION_CURRENT_ROW_SELECTOR)].filter(visible);
     for (const row of rows) {
+      const textEl = [...row.querySelectorAll(CAPTION_CURRENT_TEXT_SELECTOR)].find(isPlausibleCaptionTextElement);
+      if (!textEl) continue;
       const speakerEl = row.querySelector(CAPTION_SPEAKER_SELECTOR);
-      const textEl = row.querySelector(CAPTION_TEXT_SELECTOR);
       const speaker = cleanCaptionSpeaker(speakerEl?.innerText || speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl?.innerText || textEl?.textContent || row.innerText || row.textContent || '', speaker);
+      const text = cleanCaptionText(textEl.innerText || textEl.textContent || '', speaker);
       if (text) entries.push({ speaker, text });
     }
     if (entries.length) return entries;
 
-    // Read current and retained legacy caption text nodes inside the verified caption root.
-    const direct = [...root.querySelectorAll(CAPTION_TEXT_SELECTOR)]
-      .filter(visible)
-      .map(el => cleanCaptionText(el.innerText || el.textContent || ''))
-      .filter(Boolean);
-    if (direct.length) return direct.map(text => ({ speaker: '', text }));
-
-    // Last-resort ARIA-region fallback. Use only the latest non-control line.
-    const fallbackLines = textLines(root.innerText || root.textContent || '')
-      .filter(line => !isMeetNoise(line) && !isCaptionChrome(line) && !isClockText(line));
-    const text = fallbackLines.length ? fallbackLines[fallbackLines.length - 1] : '';
-    return text ? [{ speaker: '', text }] : [];
+    // Direct caption nodes support current single-row and older Meet layouts.
+    // There is deliberately NO root.innerText fallback here.
+    for (const textEl of captionTextNodesWithin(root)) {
+      const row = textEl.closest(CAPTION_CURRENT_ROW_SELECTOR);
+      const speakerEl = row?.querySelector(CAPTION_SPEAKER_SELECTOR) || null;
+      const speaker = cleanCaptionSpeaker(speakerEl?.innerText || speakerEl?.textContent || '');
+      const text = cleanCaptionText(textEl.innerText || textEl.textContent || '', speaker);
+      if (text) entries.push({ speaker, text });
+    }
+    return entries;
   }
 
   function emitMeetCaption(text, isFinal) {
@@ -397,15 +463,22 @@
     }, 2500);
   }
 
+  function markCaptionReady() {
+    if (captionReadySent) return;
+    captionReadySent = true;
+    emitCaptionState('ready');
+  }
+
   function scanMeetCaptions() {
     const root = findCaptionRoot();
     if (!root) return false;
-    if (!captionReadySent) {
-      captionReadySent = true;
-      emitCaptionState('ready');
-    }
     const entries = captionEntries(root);
-    if (!entries.length) return true;
+    if (!entries.length) return false;
+
+    // "ready" now means a real caption text node was validated, not merely that
+    // some Meet region happened to contain the word "caption".
+    markCaptionReady();
+
     const latest = entries[entries.length - 1];
     const text = cleanCaptionText(latest.text, latest.speaker);
     const key = keyText(text);
@@ -445,14 +518,18 @@
       captionAdmittedSent = true;
       emitCaptionState('admitted');
     }
-    if (captionsAppearEnabled() || findCaptionRoot()) {
-      if (!captionReadySent) {
-        captionReadySent = true;
-        emitCaptionState('ready');
-      }
+
+    const root = findCaptionRoot();
+    if (root) {
       attachCaptionObserver();
+      scanMeetCaptions();
       return true;
     }
+
+    // Captions can be enabled before anyone has spoken, so there may be no text
+    // node yet. Do not call the source "ready" until real caption text appears.
+    if (captionsAppearEnabled()) return true;
+
     const now = Date.now();
     if (now - lastCaptionEnableAttemptAt < 2500) return false;
     lastCaptionEnableAttemptAt = now;
@@ -483,7 +560,7 @@
       attachCaptionObserver();
       scanMeetCaptions();
     }, 900);
-    log('Meet local caption observer installed (primary transcription path)');
+    log('Meet local caption observer installed (verified caption-node path)');
   }
 
   if (document.readyState === 'loading') {

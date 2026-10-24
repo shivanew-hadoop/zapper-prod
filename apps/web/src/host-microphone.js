@@ -125,7 +125,12 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
     status('Allow microphone access to transcribe your own voice. Camera stays off.');
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
     // If permission is revoked mid-meeting, immediately release the socket.
-    stream.getAudioTracks().forEach(track => { track.onended = () => stop('Microphone access ended. Click Start microphone to reconnect.'); });
+    stream.getAudioTracks().forEach(track => {
+      track.enabled = true;
+      track.onended = () => stop('Microphone access ended. Click Unmute to reconnect.');
+      track.onmute = () => status('Microphone input is muted by the browser or operating system. Check microphone permissions.');
+      track.onunmute = () => status('Microphone input restored.');
+    });
     context = new AudioContext();
     const blobUrl = URL.createObjectURL(new Blob([processorSource], { type: 'text/javascript' }));
     try { await context.audioWorklet.addModule(blobUrl); }
@@ -143,6 +148,7 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
       }
     };
     await context.resume();
+    if (context.state !== 'running') throw new Error('Browser suspended microphone audio. Click Unmute to activate it.');
     await connect();
     return { stop, get stopped() { return stopped; } };
   } catch (error) {

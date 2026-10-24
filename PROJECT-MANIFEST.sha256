@@ -6,12 +6,12 @@ bee14cc22b03de00643c6dd44041cb6fc5a9b7446dba54e747190e73a228c467  ./apps/api/.en
 9cc4ff80f881f5865f8fac0b8a71aeba5b9006fb8eff26a5430a3c40cc0b0dcd  ./apps/api/cashfree-payments.js
 7860643dbfd176c5254b47b8ab39e75be1c31d5a565d19d2ea32f4ae1245ca51  ./apps/api/demo-inquiries.js
 ae6513b5ccdcb67134ef0bd9a75d2dfbe3d9fcfd3059da05b3dd0ae5f6c55920  ./apps/api/google-meet.js
-ff0340104ee15512ad35f4a8bd17d99567d339b84bf4923f1f07b0dcb3ad5688  ./apps/api/live-caption-relay.js
+6feaf1d5281a55b615706c9f0c1cbfc59ad6e852841157e84ee6398575b5ddb3  ./apps/api/live-caption-relay.js
 27366c5f6b0fa052c536d649b3687cb379a6c0f3a80b8700756c9ea8f79afe71  ./apps/api/package.json
 a1500291f29a04e02a04eedbe37193e278988ee8b8514c9c4e6d0464c06f218e  ./apps/api/railway.json
 72674f3718edfb0c5d0ca58ccc5b2d739d3402340ed1112eb2345b4654022637  ./apps/api/scripts/activate-subscription.js
 966c95b87b5ab4726992ddb927a88e1fdd32dc60bb03e09aad49e4dcaa4a9f63  ./apps/api/scripts/list-users.js
-68958801987c7d5db3cc88db57da2fc6c37bf847b4d03ab38b16e4202820c0f8  ./apps/api/server.js
+fab53418a255d1437f978383aa6139298da1628a328329f91be7c687625585b6  ./apps/api/server.js
 d627127948f3c397e9f4df7610b4c088af6b8b20fa9e59c11782cf8b7460ab22  ./apps/api/session-control.js
 972d4aa95340002b6e6e3bd365507297aca14691378ba24741f647df2277c34e  ./apps/api/tests/caption-relay.js
 f371ebc3cbdb4c6ce12422cf68a71bbc379b7cca910fb67548818803180ef2d5  ./apps/api/tests/cashfree-payments.js
@@ -49,7 +49,7 @@ d62748397bda5da8926a99f4eb4ff05f2d6a1ac404c6103c6842bd54174b7727  ./apps/web/pub
 aa9ee11a131d5cfa2d99a9afb689049d347e09541c7c88dc6c90531c416296bb  ./apps/web/public/refund.html
 ae38a5cccc1e56dfb9c3e8b45b18133b287dfd2c1a9203ba75a7cd2d0e341f4f  ./apps/web/public/terms.html
 73f5c41ab05dd32a7b2a19212a1d8bf93de1ccca4149c902ab09f581dadccbf0  ./apps/web/src/app.css
-179ac8851aef09b9d246969a7f13c1e50e0d7028f37a9d0e41506d8e8747f17b  ./apps/web/src/host-microphone.js
+4c0db00bd5154405b54b41512262d7886de399803ae202a90b709058c15a6ecf  ./apps/web/src/host-microphone.js
 5e8f616e32fad2d15f1f7e7aa7de29d2362ee3518ea5aa4cabe34f7c62083679  ./apps/web/src/host-session-selection.js
 aacd15ac451db3cc5939b3ef98ed2f5a4f50dddd868c710de81d8da8f4f9fbdf  ./apps/web/src/how-it-works.jsx
 31bdabd789257b300f119f08bb3bc6385e715e9a2a7f20a4d50a9b9c8a3c5de9  ./apps/web/src/main.js

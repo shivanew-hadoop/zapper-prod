@@ -125,12 +125,7 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
     status('Allow microphone access to transcribe your own voice. Camera stays off.');
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
     // If permission is revoked mid-meeting, immediately release the socket.
-    stream.getAudioTracks().forEach(track => {
-      track.enabled = true;
-      track.onended = () => stop('Microphone access ended. Click Unmute to reconnect.');
-      track.onmute = () => status('Microphone input is muted by the browser or operating system. Check microphone permissions.');
-      track.onunmute = () => status('Microphone input restored.');
-    });
+    stream.getAudioTracks().forEach(track => { track.onended = () => stop('Microphone access ended. Click Start microphone to reconnect.'); });
     context = new AudioContext();
     const blobUrl = URL.createObjectURL(new Blob([processorSource], { type: 'text/javascript' }));
     try { await context.audioWorklet.addModule(blobUrl); }
@@ -147,8 +142,17 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
         socket.send(event.data);
       }
     };
-    await context.resume();
-    if (context.state !== 'running') throw new Error('Browser suspended microphone audio. Click Unmute to activate it.');
+    // Without a recent user gesture the browser can leave the AudioContext
+    // suspended and resume() never settles; that used to block connect() forever,
+    // so the microphone looked on but never reached the server. Do not wait on it.
+    const resumeContext = () => { context?.resume?.().catch(() => {}); };
+    resumeContext();
+    await Promise.race([context.resume().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
+    if (context.state !== 'running') {
+      const unlock = () => { resumeContext(); if (!context || context.state === 'running') { removeEventListener('pointerdown', unlock, true); removeEventListener('keydown', unlock, true); } };
+      addEventListener('pointerdown', unlock, true); addEventListener('keydown', unlock, true);
+      status('Click anywhere on this page once to start the microphone.');
+    }
     await connect();
     return { stop, get stopped() { return stopped; } };
   } catch (error) {

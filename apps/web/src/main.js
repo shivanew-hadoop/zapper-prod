@@ -31,6 +31,7 @@ let hostMicRequestGeneration = 0;
 let hostMicUserMuted = false;
 let hostMicStartingFor = '';
 let hostMicRetryCount = 0;
+const hostMicAutoStarted = new Set();
 let activeSessionStartedAt = 0;
 let sessionTimerInterval = null;
 let microphoneTestRunning = false;
@@ -591,7 +592,7 @@ function showHostMicPanel(session) {
 }
 
 async function startHostMicForSession(sessionId) {
-  if (!sessionId || hostMicUserMuted || (hostMicCapture && !hostMicCapture.stopped && hostMicSessionId === sessionId)) return;
+  if (!sessionId || hostMicCapture && hostMicSessionId === sessionId) return;
   if (hostMicStartingFor === sessionId) return; // permission/connect already in progress
   // Stop any previous recording, without changing the session/PIN lifecycle.
   stopHostMicrophone();
@@ -637,11 +638,6 @@ async function startHostMicForSession(sessionId) {
     });
     if (generation !== hostMicRequestGeneration || hostMicSessionId !== sessionId) {
       capture.stop();
-      return;
-    }
-    if (capture.stopped) {
-      hostMicStartingFor = '';
-      updateHostMicButtons(false);
       return;
     }
     hostMicCapture = capture;
@@ -749,8 +745,9 @@ function focusDeviceSession(session, startMicrophone = false) {
   // Start the microphone on create AND whenever an active Google-created session is
   // (re)shown (page reload, other tab, re-login), once per page load per session.
   const micEligible = session.googleCreated && session.status === 'active' && session.active !== false;
-  if (micEligible && !hostMicUserMuted && !microphoneTestRunning) {
-    // Idempotent: repeated session refreshes must not create duplicate audio sockets.
+  if (micEligible && (startMicrophone || (!hostMicUserMuted && !hostMicAutoStarted.has(session.id)))) {
+    hostMicAutoStarted.add(session.id);
+    if (startMicrophone) hostMicUserMuted = false;
     void startHostMicForSession(session.id);
   }
   $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';

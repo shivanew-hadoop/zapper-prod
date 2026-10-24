@@ -43,5 +43,18 @@ module.exports = function createHostCaptionRelay({ openState = 1, maxBufferedByt
     return sent;
   }
 
-  return { subscribe, unsubscribe, publish };
+  // Status-only notice (e.g. "host microphone connected") to every desktop viewer.
+  function notify(sessionId, text) {
+    const viewers = viewersBySession.get(String(sessionId || ''));
+    if (!viewers?.size || !text) return 0;
+    const message = JSON.stringify({ type: 'status', text: String(text) });
+    let sent = 0;
+    for (const socket of viewers) {
+      if (socket.readyState !== openState) continue;
+      try { socket.send(message); sent += 1; } catch (_) { /* closing socket */ }
+    }
+    return sent;
+  }
+
+  return { subscribe, unsubscribe, publish, notify };
 };

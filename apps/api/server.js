@@ -223,7 +223,6 @@ function buildDeepgramUrl() {
   return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 }
 
-const hostMicConnections = new Map(); // sessionId -> open host-microphone sockets
 wss.on('connection', (clientWs, req) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const sessionToken = String(requestUrl.searchParams.get('token') || '');
@@ -245,25 +244,9 @@ wss.on('connection', (clientWs, req) => {
   }
   const connectionId = crypto.randomUUID();
   registerCapture(capture.session.id, connectionId);
-  // Tell PIN desktops whether the host's web microphone is actually connected, so
-  // "Waiting for host to speak" can be told apart from "host mic is not sending".
-  if (hostAudio) {
-    hostMicConnections.set(capture.session.id, (hostMicConnections.get(capture.session.id) || 0) + 1);
-    hostCaptionRelay.notify(capture.session.id, 'Host microphone connected. Waiting for the host to speak...');
-  }
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
-  if (participant) {
-    hostCaptionRelay.subscribe(capture.session.id, clientWs);
-    try {
-      clientWs.send(JSON.stringify({
-        type: 'status',
-        text: hostMicConnections.get(capture.session.id)
-          ? 'Host microphone connected. Waiting for the host to speak...'
-          : 'Host microphone is not connected. On the Zapper web page, click Unmute and allow the microphone.'
-      }));
-    } catch (_) {}
-  }
+  if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -338,7 +321,6 @@ wss.on('connection', (clientWs, req) => {
       if (!deepgramUnavailableNotified) {
         deepgramUnavailableNotified = true;
         sendClient({ type: 'error', message: 'Google Meet captions are unavailable and Deepgram fallback is not configured.' });
-        if (hostAudio) hostCaptionRelay.notify(capture.session.id, 'Host microphone is connected but server transcription (Deepgram key) is not configured.');
       }
       return;
     }
@@ -388,8 +370,7 @@ wss.on('connection', (clientWs, req) => {
       let body = '';
       response.on('data', chunk => { body += chunk.toString(); });
       response.on('end', () => {
-        if (hostAudio) hostCaptionRelay.notify(capture.session.id, `Host microphone is connected but transcription failed to start (Deepgram ${response.statusCode}).`);
-      const invalidAuth = response.statusCode === 401 || response.statusCode === 403 || /INVALID_AUTH|INVALID CREDENTIALS/i.test(body);
+        const invalidAuth = response.statusCode === 401 || response.statusCode === 403 || /INVALID_AUTH|INVALID CREDENTIALS/i.test(body);
         sendClient({
           type: 'error',
           message: invalidAuth
@@ -471,11 +452,6 @@ wss.on('connection', (clientWs, req) => {
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
     if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
-    if (hostAudio) {
-      const left = (hostMicConnections.get(capture.session.id) || 1) - 1;
-      if (left > 0) hostMicConnections.set(capture.session.id, left); else hostMicConnections.delete(capture.session.id);
-      if (left <= 0) hostCaptionRelay.notify(capture.session.id, 'Host microphone disconnected. Ask the host to click Unmute on the Zapper web page.');
-    }
     unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);

@@ -142,17 +142,7 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
         socket.send(event.data);
       }
     };
-    // Without a recent user gesture the browser can leave the AudioContext
-    // suspended and resume() never settles; that used to block connect() forever,
-    // so the microphone looked on but never reached the server. Do not wait on it.
-    const resumeContext = () => { context?.resume?.().catch(() => {}); };
-    resumeContext();
-    await Promise.race([context.resume().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
-    if (context.state !== 'running') {
-      const unlock = () => { resumeContext(); if (!context || context.state === 'running') { removeEventListener('pointerdown', unlock, true); removeEventListener('keydown', unlock, true); } };
-      addEventListener('pointerdown', unlock, true); addEventListener('keydown', unlock, true);
-      status('Click anywhere on this page once to start the microphone.');
-    }
+    await context.resume();
     await connect();
     return { stop, get stopped() { return stopped; } };
   } catch (error) {

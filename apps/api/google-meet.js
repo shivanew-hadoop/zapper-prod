@@ -86,12 +86,12 @@ function googleMeetRoutes({ app, db, auth, isHostEligible, createSession, allowe
     res.set('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
     return res.send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Zapper Google Meet</title><style>body{font:16px system-ui;margin:3rem;background:#081625;color:#fff}a{color:#91c6ff}button{padding:10px 16px;cursor:pointer}</style><h2>${sessionLink ? 'Google Meet created' : 'Google Meet authorization'}</h2><p id="result"></p><p id="details"></p><p><a id="meet" hidden>Open Google Meet</a> <a id="return" hidden>Return to Zapper</a></p><button id="close" type="button">Close this window</button><script>
 const result=${safePayload}; const target=${safeOrigin}; const meetUrl=${safeLink}; const returnUrl=${safeReturn};
-document.getElementById('result').textContent=result.ok ? 'Your meeting has been created. Return to Zapper for the session PIN.' : result.error;
+document.getElementById('result').textContent=result.ok ? 'Your meeting has been created. Opening Google Meet — turn your camera off and keep your microphone on. Your session PIN is shown in Zapper.' : result.error;
 if(result.ok && result.session) document.getElementById('details').textContent='PIN: '+result.session.pin;
 if(meetUrl){const a=document.getElementById('meet');a.href=meetUrl;a.hidden=false;}
 if(returnUrl){const a=document.getElementById('return');a.href=returnUrl;a.hidden=false;}
 document.getElementById('close').onclick=()=>window.close();
-if(target && window.opener){window.opener.postMessage(result,target);if(result.ok)window.setTimeout(()=>window.close(),1200);}
+if(target && window.opener){window.opener.postMessage(result,target);if(result.ok){window.setTimeout(()=>{if(meetUrl)window.location.replace(meetUrl);else window.close();},1200);}}
 </script></html>`);
   }
 

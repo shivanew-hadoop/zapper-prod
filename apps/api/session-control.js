@@ -820,7 +820,11 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const meetUrl = normalizeMeetUrl(req.body?.meetUrl);
     if (!meetUrl) return res.status(400).json({ ok: false, error: 'Enter a valid Google Meet ID or link.' });
     // Existing manual Meet creation and PIN behavior remains available.
-    res.json({ ok: true, session: createHostSession(req.authUser, meetUrl) });
+    // An authenticated host may also register the Google Meet room generated
+    // by the installed, same-machine browser companion. This flag only affects
+    // auto-created-room UI and the existing four-desktop-seat limit.
+    const browserCreated = req.body?.googleCreated === true;
+    res.json({ ok: true, session: createHostSession(req.authUser, meetUrl, { googleCreated: browserCreated }) });
   });
 
   // The host captures ONLY their own microphone in the browser. Google Meet

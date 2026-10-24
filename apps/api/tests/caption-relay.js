@@ -107,6 +107,18 @@ class ClientSocket extends EventEmitter {
   assert.deepEqual(desktopB.messages.filter(m => m.type === 'transcript').map(m => m.source), ['host', 'host']);
   assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'another PIN cannot view host captions');
 
+  // When Deepgram is not available, browser recognition sends signed text on
+  // its existing host socket. The desktop must treat this as HOST speech, not
+  // as its own Meet caption source, and must never echo to unrelated PINs.
+  host.emit('message', Buffer.from(JSON.stringify({ type: 'local_caption', text: 'host browser speech fallback', isFinal: true, capturedAt: Date.now() })), false);
+  await new Promise(resolve => process.nextTick(resolve));
+  assert.equal(desktopA.messages.at(-1).source, 'host');
+  assert.equal(desktopA.messages.at(-1).text, 'host browser speech fallback');
+  assert.equal(desktopB.messages.at(-1).source, 'host');
+  assert.equal(host.messages.at(-1).type, 'caption_delivery');
+  assert.equal(host.messages.at(-1).viewerCount, 2);
+  assert.equal(foreign.messages.filter(m => m.text === 'host browser speech fallback').length, 0);
+
   // Meet DOM caption path: text is persisted/relayed without opening Deepgram.
   const beforeLocalCaptionProviders = deepgramSockets.length;
   desktopA.emit('message', Buffer.from(JSON.stringify({ type: 'local_caption', text: 'caption from Meet DOM', isFinal: true, capturedAt: Date.now() })), false);

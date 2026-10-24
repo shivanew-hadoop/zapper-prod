@@ -111,7 +111,7 @@ let audibleWithoutCaptionSince = 0;
 // While true, Zapper never activates Deepgram fallback and never sends Meet PCM
 // audio to the backend. The existing /stt socket remains open only so validated
 // local captions can still be persisted to the host PDF / relayed to the session.
-const GOOGLE_CAPTIONS_ONLY_TEST = false;
+const GOOGLE_CAPTIONS_ONLY = true;
 let meetOnlyFallbackNoticeSent = false;
 
 
@@ -398,12 +398,12 @@ ipcMain.on('meet-chat-message', (_, payload) => {
 
 
 function activateDeepgramFallback(reason = '') {
-  if (GOOGLE_CAPTIONS_ONLY_TEST) {
+  if (GOOGLE_CAPTIONS_ONLY) {
     deepgramFallbackActive = false;
     if (!meetOnlyFallbackNoticeSent) {
       meetOnlyFallbackNoticeSent = true;
       sendTranscriptionSource('detecting');
-      sendStatus(`Google Meet captions-only test mode. Deepgram is disabled${reason ? ` (${reason})` : ''}.`);
+      sendStatus(`Google Meet captions-only mode. Deepgram is disabled${reason ? ` (${reason})` : ''}.`);
     }
     return;
   }
@@ -799,8 +799,8 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
 
     meetOnlyFallbackNoticeSent = false;
     sendTranscriptionSource('detecting');
-    sendStatus(GOOGLE_CAPTIONS_ONLY_TEST
-      ? 'Session verified. Opening Meet... Google Meet captions-only test mode; Deepgram disabled.'
+    sendStatus(GOOGLE_CAPTIONS_ONLY
+      ? 'Session verified. Opening Meet... Google Meet captions-only mode; Deepgram disabled.'
       : 'Session verified. Opening Meet...');
     startSessionStatusPoller(sessionToken);
 
@@ -817,11 +817,11 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
       if (payload.error) {
-        // In Meet-captions-only test mode no PCM is ever sent to Deepgram. Keep
+        // In Meet-captions-only mode no PCM is ever sent to Deepgram. Keep
         // backend/session errors visible, but suppress provider-only noise if an
         // older backend instance reports it unexpectedly.
         const errorText = String(payload.error || '');
-        if (GOOGLE_CAPTIONS_ONLY_TEST && /deepgram|transcription credentials/i.test(errorText)) return;
+        if (GOOGLE_CAPTIONS_ONLY && /deepgram|transcription credentials/i.test(errorText)) return;
         overlayWindow.webContents.send('status', 'Transcription error: ' + errorText);
         return;
       }
@@ -852,8 +852,10 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       // If this desktop has Meet captions, render those directly and ignore
       // backend relay echoes/other viewers to prevent duplicate lines. Deepgram
       // transcripts are accepted only while fallback is explicitly active.
-      if (GOOGLE_CAPTIONS_ONLY_TEST && payload.source === 'deepgram') return;
-      if (localCaptionReady && payload.source !== 'deepgram') return;
+      if (GOOGLE_CAPTIONS_ONLY && payload.source === 'deepgram') return;
+      // Host-microphone captions ('host') are the host's own speech from the web app;
+      // they are never in Meet's captions, so they must always reach the overlay.
+      if (localCaptionReady && payload.source !== 'deepgram' && payload.source !== 'host') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       overlayWindow.webContents.send('transcript', {
         text: payload.text,
@@ -868,7 +870,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       // Diagnostic guarantee: this build must never send Meet PCM to Deepgram.
       // Audio capture may still exist for the unchanged Meet controller, but the
       // bytes stop here and never leave the desktop process.
-      if (GOOGLE_CAPTIONS_ONLY_TEST) return;
+      if (GOOGLE_CAPTIONS_ONLY) return;
 
       // Deepgram is a true fallback: do not start it because a caption DOM node
       // has not appeared while the meeting is quiet. Start only after admitted

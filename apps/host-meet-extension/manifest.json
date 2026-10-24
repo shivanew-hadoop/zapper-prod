@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Zapper Google Meet Host",
+  "description": "Joins a Zapper-created Google Meet on the host computer with microphone on and camera off.",
+  "version": "4.2.8",
+  "permissions": ["tabs", "storage", "contentSettings"],
+  "host_permissions": ["https://meet.google.com/*", "https://zapperapp.in/*", "https://www.zapperapp.in/*", "https://zapper.app/*", "https://www.zapper.app/*", "http://localhost:5173/*", "http://127.0.0.1:5173/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://zapperapp.in/*", "https://www.zapperapp.in/*", "https://zapper.app/*", "https://www.zapper.app/*", "https://zapper.app/*", "https://www.zapper.app/*", "http://localhost:5173/*", "http://127.0.0.1:5173/*"],
+      "js": ["web-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["meet-host.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

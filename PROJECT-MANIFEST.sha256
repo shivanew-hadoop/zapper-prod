@@ -27,11 +27,11 @@ d61b012917d36b0183ec76e35d66eab78a13d2db19c0caae7af55554763111b0  ./apps/desktop
 d9e3c629b568f64195650e2bf6567ed8fce87f613c9f32ef31b3537329b6a442  ./apps/desktop/build-installer.ps1
 987c83c1069319edbc8da04f8c5dad4162375c3f28f4e93cffde4fb581ee90f9  ./apps/desktop/main.js
 57ccf170e210a68e19399691566b93fb865fa0a512d9105658ec5677c3f485ae  ./apps/desktop/meet-controller/index.js
-65d3578f6dcfd74dbe5380191bc17e351dba20ba84645bd893110990e9f789ae  ./apps/desktop/meet-controller/meet-preload.js
+ba4d4fe67f2bdbd2b0c34dd9411e7c1d0d3d8c25c6c240b06c2d689042c9d5e9  ./apps/desktop/meet-controller/meet-preload.js
 e522505fe81f9d50e51db3d33a56b916437ac0f701fdeb414fa0bd6310a8d2c5  ./apps/desktop/overlay/index.html
 ab8e69f312c89bcf93c9d596bd8e2567845ca45f7cbe9039c1a694cb3ff26dc5  ./apps/desktop/overlay/overlay.css
 9cbd8eb939cd8c3d276eb861f5ae9d375f61e9c7ed07fe3b872057f4bd225027  ./apps/desktop/overlay/overlay.js
-1a519946375e71043d3f3efc4cb7e70c91a5323e64171cd238959ac439dac244  ./apps/desktop/package.json
+7c48fc976a74466ff511d9bcd7d6a43825ba914e7a159f4f975e7eb0f0d27a7f  ./apps/desktop/package.json
 4679c5f748cbbd6f1e1a632d557692c934bba9d2367aed97e97818b7daf9e676  ./apps/desktop/preload.js
 976822ed95d1e06c54485024289f1cbf1f9b6e976217aa2ce6235d21301e7ef4  ./apps/desktop/tests/chat-noise.js
 3e269a0742832e5e8b153516e206af089563b7666168eeb134f77cb7c238b25b  ./apps/desktop/transcriber/remoteDeepgram.js

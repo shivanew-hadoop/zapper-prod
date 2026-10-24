@@ -853,7 +853,9 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       // backend relay echoes/other viewers to prevent duplicate lines. Deepgram
       // transcripts are accepted only while fallback is explicitly active.
       if (GOOGLE_CAPTIONS_ONLY_TEST && payload.source === 'deepgram') return;
-      if (localCaptionReady && payload.source !== 'deepgram') return;
+      // Host-microphone captions ('host') are the host's own speech from the web app;
+      // they are never in Meet's captions, so they must always reach the overlay.
+      if (localCaptionReady && payload.source !== 'deepgram' && payload.source !== 'host') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       overlayWindow.webContents.send('transcript', {
         text: payload.text,

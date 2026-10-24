@@ -25,6 +25,13 @@ let sessionLoadGeneration = 0;
 let hostMicCapture = null;
 let hostMicSessionId = '';
 let hostMicRequestGeneration = 0;
+// Host microphone auto-start: the mic must be live whenever an active Google-created
+// session is shown, not only at the instant of Create Session. It stays off only
+// when the host presses Mute themselves.
+let hostMicUserMuted = false;
+let hostMicStartingFor = '';
+let hostMicRetryCount = 0;
+const hostMicAutoStarted = new Set();
 let activeSessionStartedAt = 0;
 let sessionTimerInterval = null;
 let microphoneTestRunning = false;
@@ -554,6 +561,7 @@ function updateHostMicButtons(recording = false) {
 
 function stopHostMicrophone(message = '', hide = false) {
   ++hostMicRequestGeneration; // Discard a pending microphone permission request.
+  hostMicStartingFor = '';
   if (hostMicCapture) hostMicCapture.stop();
   hostMicCapture = null;
   void recordingWakeLock.stop();
@@ -585,9 +593,11 @@ function showHostMicPanel(session) {
 
 async function startHostMicForSession(sessionId) {
   if (!sessionId || hostMicCapture && hostMicSessionId === sessionId) return;
+  if (hostMicStartingFor === sessionId) return; // permission/connect already in progress
   // Stop any previous recording, without changing the session/PIN lifecycle.
   stopHostMicrophone();
   hostMicSessionId = sessionId;
+  hostMicStartingFor = sessionId;
   const generation = ++hostMicRequestGeneration;
   $('sessionToolbar').classList.remove('hidden');
   $('hostMicToggle').disabled = true;
@@ -615,6 +625,15 @@ async function startHostMicForSession(sessionId) {
         void recordingWakeLock.stop();
         updateHostMicButtons();
         if (reason) $('hostMicStatus').textContent = reason;
+        // An unexpected drop (not Mute, not session end/limit/permission) must not
+        // leave the host silently muted: retry a few times.
+        if (!hostMicUserMuted && hostMicSessionId === sessionId && hostMicRetryCount < 3 &&
+            !/ended|limit|denied|not support/i.test(reason || '')) {
+          hostMicRetryCount += 1;
+          setTimeout(() => {
+            if (!hostMicCapture && !hostMicUserMuted && hostMicSessionId === sessionId) void startHostMicForSession(sessionId);
+          }, 3000);
+        }
       },
     });
     if (generation !== hostMicRequestGeneration || hostMicSessionId !== sessionId) {
@@ -622,11 +641,14 @@ async function startHostMicForSession(sessionId) {
       return;
     }
     hostMicCapture = capture;
+    hostMicStartingFor = '';
+    hostMicRetryCount = 0;
     void recordingWakeLock.start();
     void refreshMicrophoneChoices();
     updateHostMicButtons(true);
   } catch (error) {
     if (generation !== hostMicRequestGeneration) return;
+    hostMicStartingFor = '';
     hostMicCapture = null;
     updateHostMicButtons();
     $('hostMicStatus').textContent = error.name === 'NotAllowedError'
@@ -636,8 +658,8 @@ async function startHostMicForSession(sessionId) {
 }
 
 $('hostMicToggle').onclick = () => {
-  if (hostMicCapture) stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.');
-  else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
+  if (hostMicCapture) { hostMicUserMuted = true; stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.'); }
+  else if (hostMicSessionId) { hostMicUserMuted = false; hostMicRetryCount = 0; void startHostMicForSession(hostMicSessionId); }
 };
 
 function selectMicrophoneForThisBrowser(deviceId) {
@@ -709,7 +731,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
 }
 
 function focusDeviceSession(session, startMicrophone = false) {
-  if (currentSessionId && currentSessionId !== session.id) stopHostMicrophone('', true);
+  if (currentSessionId && currentSessionId !== session.id) { stopHostMicrophone('', true); hostMicUserMuted = false; hostMicRetryCount = 0; }
   currentSessionId = session.id;
   currentSessionPin = session.pin;
   saveDeviceSessionId(localStorage, account?.id, session.id);
@@ -720,7 +742,14 @@ function focusDeviceSession(session, startMicrophone = false) {
   $('pinMeet').textContent = session.meetUrl;
   showAutoMeetUrl(session);
   showHostMicPanel(session);
-  if (startMicrophone && session.googleCreated) void startHostMicForSession(session.id);
+  // Start the microphone on create AND whenever an active Google-created session is
+  // (re)shown (page reload, other tab, re-login), once per page load per session.
+  const micEligible = session.googleCreated && session.status === 'active' && session.active !== false;
+  if (micEligible && (startMicrophone || (!hostMicUserMuted && !hostMicAutoStarted.has(session.id)))) {
+    hostMicAutoStarted.add(session.id);
+    if (startMicrophone) hostMicUserMuted = false;
+    void startHostMicForSession(session.id);
+  }
   $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');

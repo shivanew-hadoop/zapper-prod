@@ -430,6 +430,10 @@ ipcMain.on('meet-caption-state', (_, payload) => {
     scheduleDeepgramFallbackCheck();
     return;
   }
+  if (state === 'diag') {
+    if (!localCaptionReady && payload.msg) sendStatus(String(payload.msg).slice(0, 300));
+    return;
+  }
   if (state === 'ready') {
     localCaptionReady = true;
     deepgramFallbackActive = false;

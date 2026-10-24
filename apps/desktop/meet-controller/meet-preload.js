@@ -278,7 +278,15 @@
     // Pre-join / waiting-room pages can still contain chat/people labels, so do not
     // open chat or auto-send the init message from those states.
     if (/ready to join|ask to join|join now|waiting for host admission|waiting to be admitted|someone will let you in|you.ll join when someone lets you in|asking to be joined/i.test(txt)) return false;
-    return /leave call|you are in the meeting|you are in this call/i.test(txt);
+    if (/leave call|you are in the meeting|you are in this call/i.test(txt)) return true;
+    // "Leave call" is usually only an aria-label / hidden tooltip, which innerText
+    // does not include, so also accept in-call controls that exist only after joining.
+    try {
+      return Boolean(document.querySelector(
+        '[aria-label^="Leave call" i], [aria-label*="Turn on captions" i], [aria-label*="Turn off captions" i], ' +
+        '[aria-label^="Chat with everyone" i], [aria-label^="Meeting details" i], [aria-label^="Present now" i]'
+      ));
+    } catch (_) { return false; }
   }
 
 
@@ -312,6 +320,23 @@
   let captionKeyToggleAttempts = 0;
   let captionFinalTimer = null;
   let lastCaptionEnableAttemptAt = 0;
+
+  let lastCaptionDiagAt = 0;
+  function emitCaptionDiag() {
+    if (captionReadySent) return;
+    const now = Date.now();
+    if (now - lastCaptionDiagAt < 8000) return;
+    lastCaptionDiagAt = now;
+    let msg = 'Meet: in call, waiting for captions';
+    try {
+      const on = captionsAppearEnabled();
+      const textNodes = document.querySelectorAll(CAPTION_TEXT_NODE_SELECTOR).length;
+      const regions = document.querySelectorAll(CAPTION_REGION_SELECTOR).length;
+      msg += on ? ' (captions ON' : ' (captions button not on';
+      msg += `, caption regions ${regions}, text nodes ${textNodes}). Speak in the meeting.`;
+    } catch (_) {}
+    emitCaptionState('diag', { msg });
+  }
 
   function emitCaptionState(state, extra = {}) {
     if (!ipcRenderer) return;
@@ -687,12 +712,20 @@
     }
 
     if (attachCaptionObserver()) return true;
+    emitCaptionDiag();
     if (captionsAppearEnabled()) return true;
 
     const now = Date.now();
     if (now - lastCaptionEnableAttemptAt < 2500) return false;
     lastCaptionEnableAttemptAt = now;
-    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions', 'show captions']);
+    let clicked = clickMeetButtonByText(['turn on captions', 'enable captions', 'show captions']);
+    if (!clicked) {
+      // Control bar may be auto-hidden (not "visible"); a direct click still works.
+      try {
+        const btn = document.querySelector('[aria-label*="Turn on captions" i], [data-tooltip*="Turn on captions" i]');
+        if (btn) { btn.click(); clicked = true; }
+      } catch (_) {}
+    }
     // The 'c' shortcut TOGGLES captions, so it is limited to a few attempts; an
     // unlimited retry could switch already-enabled captions back off.
     if (!clicked && captionKeyToggleAttempts < 3) {

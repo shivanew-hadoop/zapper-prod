@@ -144,16 +144,15 @@ function registerCapture(sessionId, connectionId) {
 function isCaptureLeader(sessionId, connectionId) {
   return getCaptureState(sessionId).leaderId === connectionId;
 }
-function markLocalCaptionSource(sessionId, connectionId, now = Date.now(), priority = 2) {
+function markLocalCaptionSource(sessionId, connectionId, now = Date.now()) {
   const state = getCaptureState(sessionId);
   const connection = state.connections.get(connectionId);
   if (!connection) return false;
   connection.localCaptionAt = now;
-  connection.captionPriority = priority;
   const leader = state.connections.get(state.leaderId);
   // Prefer Meet's built-in captions over paid STT. Keep the first healthy local
   // caption source as leader, and fail over only when it has gone quiet.
-  if (!leader || Number(priority) > Number(leader.captionPriority || 0) || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000) {
+  if (!leader || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000) {
     state.leaderId = connectionId;
   }
   return state.leaderId === connectionId;
@@ -234,7 +233,6 @@ wss.on('connection', (clientWs, req) => {
   const hostAudio = !participant && sessionControl.verifyHostAudioToken(sessionToken);
   const capture = participant || hostAudio;
   if (hostAudio && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
-    try { clientWs.send(JSON.stringify({ type: 'error', message: 'Host microphone origin is not allowed by backend WEB_ORIGINS. Check the web deployment domain.' })); } catch (_) {}
     try { clientWs.close(1008, 'origin not allowed'); } catch (_) {}
     return;
   }
@@ -249,11 +247,6 @@ wss.on('connection', (clientWs, req) => {
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
   if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
-  // A socket opening does not mean transcription is available. Report missing
-  // provider credentials immediately so the browser can enable its speech fallback.
-  if (hostAudio && !DEEPGRAM_API_KEY) {
-    clientWs.send(JSON.stringify({ type: 'host_stt_unavailable', message: 'DEEPGRAM_API_KEY is not configured on the backend' }));
-  }
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -367,10 +360,7 @@ wss.on('connection', (clientWs, req) => {
         const isFinal = Boolean(msg.is_final);
         const caption = { type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) };
         sendClient(caption);
-        if (hostAudio) {
-          const viewers = hostCaptionRelay.publish(capture.session.id, caption);
-          if (isFinal) sendClient({ type: 'caption_delivery', viewerCount: viewers });
-        }
+        if (hostAudio) hostCaptionRelay.publish(capture.session.id, caption);
         const now = Date.now();
         if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
         if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
@@ -421,18 +411,14 @@ wss.on('connection', (clientWs, req) => {
       const isFinal = Boolean(localCaption.isFinal);
       const capturedAt = Math.max(1, Math.min(Date.now() + 5000, Number(localCaption.capturedAt) || Date.now()));
       const caption = { type: 'transcript', text, isFinal, speechFinal: isFinal, confidence: 1, source: 'meet-captions' };
-      // A host browser may supply Chrome/Edge recognition text when Deepgram
-      // is unavailable. This is NOT Meet's caption DOM; mark it as host speech
-      // so an overlay with native Meet captions still accepts it.
+      // If this socket had temporarily fallen back to Deepgram, stop that paid
+      // stream immediately when native Meet captions recover.
       if (dgWs) cleanupDeepgram();
       pendingAudio = [];
-      markLocalCaptionSource(capture.session.id, connectionId, capturedAt, hostAudio ? 1 : 2);
+      markLocalCaptionSource(capture.session.id, connectionId, capturedAt);
       if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: capturedAt });
-      if (hostAudio || isCaptureLeader(capture.session.id, connectionId)) {
-        const viewers = hostCaptionRelay.publish(capture.session.id, caption, {
-          excludeSocket: clientWs, source: hostAudio ? 'host' : 'meet-captions',
-        });
-        if (hostAudio && isFinal) sendClient({ type: 'caption_delivery', viewerCount: viewers });
+      if (isCaptureLeader(capture.session.id, connectionId)) {
+        hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions' });
       }
       const now = Date.now();
       if (now - lastSpeechDbTouchAt >= 15000) {

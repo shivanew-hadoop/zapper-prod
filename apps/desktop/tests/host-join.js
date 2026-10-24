@@ -6,7 +6,7 @@ Module._load = function (request, ...rest) {
   if (request === 'electron') return { BrowserWindow: class {}, screen: {}, session: {}, systemPreferences: {} };
   return originalLoad.call(this, request, ...rest);
 };
-const { parseHostJoinUrl, sanitizeName } = require('../meet-controller/host-join');
+const { parseHostJoinUrl, parseHostControlUrl, sanitizeName } = require('../meet-controller/host-join');
 Module._load = originalLoad;
 
 const meet = encodeURIComponent('https://meet.google.com/abc-defg-hij');
@@ -17,4 +17,9 @@ assert.equal(parseHostJoinUrl(`zapper://host-join?meet=${encodeURIComponent('htt
 assert.equal(parseHostJoinUrl('https://meet.google.com/abc-defg-hij'), null, 'wrong scheme rejected');
 assert.equal(sanitizeName('<script>x</script>'), 'scriptxscript');
 assert.equal(sanitizeName(''), 'Host');
+assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=off'), { type: 'mic', on: false });
+assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=on'), { type: 'mic', on: true });
+assert.deepEqual(parseHostControlUrl('zapper://host-leave'), { type: 'leave' });
+assert.equal(parseHostControlUrl('zapper://host-mic?state=maybe'), null);
+assert.equal(parseHostControlUrl('zapper://launch'), null);
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

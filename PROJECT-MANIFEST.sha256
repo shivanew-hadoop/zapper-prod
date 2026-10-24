@@ -25,9 +25,9 @@ a95af4490d89f6a5e9ce847e81af48960a41eb857c6cd5f44801c985ed485440  ./apps/api/tra
 d61b012917d36b0183ec76e35d66eab78a13d2db19c0caae7af55554763111b0  ./apps/desktop/app-config.json
 7b968ac6570985a9f3b03e282ae3cdf77620f0a68310fee5901c16e563b3808b  ./apps/desktop/audio-ws/server.js
 d9e3c629b568f64195650e2bf6567ed8fce87f613c9f32ef31b3537329b6a442  ./apps/desktop/build-installer.ps1
-14349583c330cecc0e7725b0af567f93d7e3b4d61d02c22fffee07b0f8c43b5a  ./apps/desktop/main.js
+3aed9dbedf9f0e6091bee69a6ed1dae07c355253c84a7c9a139a0cc46e46fa1f  ./apps/desktop/main.js
 57ccf170e210a68e19399691566b93fb865fa0a512d9105658ec5677c3f485ae  ./apps/desktop/meet-controller/index.js
-a5bb92cd7cb4f8e6fb7036fa5f93e932955b93caf8216d96888dc9f704ad9d4f  ./apps/desktop/meet-controller/meet-preload.js
+e9561cba6531645f4a16d155954ece1efd528540735996d2ef9f9daabe600baa  ./apps/desktop/meet-controller/meet-preload.js
 e522505fe81f9d50e51db3d33a56b916437ac0f701fdeb414fa0bd6310a8d2c5  ./apps/desktop/overlay/index.html
 ab8e69f312c89bcf93c9d596bd8e2567845ca45f7cbe9039c1a694cb3ff26dc5  ./apps/desktop/overlay/overlay.css
 9cbd8eb939cd8c3d276eb861f5ae9d375f61e9c7ed07fe3b872057f4bd225027  ./apps/desktop/overlay/overlay.js
@@ -52,12 +52,12 @@ ae38a5cccc1e56dfb9c3e8b45b18133b287dfd2c1a9203ba75a7cd2d0e341f4f  ./apps/web/pub
 179ac8851aef09b9d246969a7f13c1e50e0d7028f37a9d0e41506d8e8747f17b  ./apps/web/src/host-microphone.js
 5e8f616e32fad2d15f1f7e7aa7de29d2362ee3518ea5aa4cabe34f7c62083679  ./apps/web/src/host-session-selection.js
 aacd15ac451db3cc5939b3ef98ed2f5a4f50dddd868c710de81d8da8f4f9fbdf  ./apps/web/src/how-it-works.jsx
-cd3436007b7ba597bd26f66fff69dc5a612da481d2fd02979181f99a57a2e8b5  ./apps/web/src/main.js
+feb75e97bed601a6ea4757f48d9e2c2ad7de2ce96850a2c936198e2668f13b66  ./apps/web/src/main.js
 e5ef893048cba63d33661334025667aa9501408cc23a0941328346e3d6009807  ./apps/web/src/recording-wake-lock.js
 2afc4741930a7dba4808c931f82ff9d29d0add61964a1daed2635ba7bad7e425  ./apps/web/tests/device-session-ownership.mjs
 c6881f8989345cafdb5dc476e72863641ad7100c9cbefd7e71ce290f243c263d  ./apps/web/tests/host-session-selection.mjs
 bbad1c6e2809d990c5426c7891c9153427c9d381ef55ffd7fa2e584675ad5cf2  ./apps/web/tests/recording-wake-lock.mjs
 e3def3fce32f55d01adf6d719c2fe4b904bcaee84a99114e2b52cebadec073de  ./scripts/first-push.ps1
 6c1a934c1f1c8a739abb849d25395a40d52b0bf4adf8d21266475f7ac6cfbe98  ./scripts/local-backend-smoke.ps1
-d47fae7f837fcd5c9d28ae23153b24045018dec7f3f57ea7709dfaa0f8b18717  ./apps/desktop/meet-controller/host-join.js
-68dea093e6fb2227ba4f96cd1f7b744be42fc4d43c0f31260f664e9fb148c7bf  ./apps/desktop/tests/host-join.js
+485d7f5dcd52488c2ce8c7cad52a0d696a882256bd16f6140842cbb37c84fc0f  ./apps/desktop/meet-controller/host-join.js
+f285e9066ec0f74f450dc78940f09c9d9b7bfc4245400bcede5d638e1a319810  ./apps/desktop/tests/host-join.js

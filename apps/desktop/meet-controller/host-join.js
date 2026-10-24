@@ -27,6 +27,21 @@ function parseHostJoinUrl(rawUrl) {
   return { meetUrl, name: sanitizeName(parsed.searchParams.get('name')) };
 }
 
+// zapper://host-mic?state=on|off and zapper://host-leave — the web portal's Mute button and
+// End Session control the host's Meet window through these.
+function parseHostControlUrl(rawUrl) {
+  let parsed;
+  try { parsed = new URL(String(rawUrl || '')); } catch (_) { return null; }
+  if (parsed.protocol !== 'zapper:') return null;
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'host-leave') return { type: 'leave' };
+  if (host === 'host-mic') {
+    const state = String(parsed.searchParams.get('state') || '').toLowerCase();
+    if (state === 'on' || state === 'off') return { type: 'mic', on: state === 'on' };
+  }
+  return null;
+}
+
 // Runs INSIDE the Meet page. Pre-join: fills the name for guests, turns the camera off,
 // turns the microphone on, and reports the Join button position. After joining it makes
 // sure (a few times only) that the microphone is on, so a manual mute is never fought.
@@ -187,7 +202,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       if (result.state === 'joined') {
         joinedTicks += 1;
         if (joinedTicks === 1) say('Host mode: you are in the meeting with your microphone on and camera off.');
-        if (joinedTicks > 4) stopHostTimer();
+        if (joinedTicks > 4) { stopHostTimer(); hideHostWindow(win); }
       } else if (result.state === 'ready') {
         if (Date.now() - lastClickAt > 4000) {
           lastClickAt = Date.now();
@@ -208,6 +223,49 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   return true;
 }
 
+// The host stays in the meeting but the window is kept out of the way (same technique as
+// the participant Meet window): nearly invisible and click-through. Ctrl+Shift+H shows it.
+function hideHostWindow(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    win.__zapperHidden = true;
+    win.setIgnoreMouseEvents(true, { forward: true });
+    win.setOpacity(0.01);
+    win.setSkipTaskbar(true);
+    win.setAlwaysOnTop(false);
+  } catch (_) {}
+}
+
+function toggleHostWindow() {
+  const win = hostWindow;
+  if (!win || win.isDestroyed()) return false;
+  if (win.__zapperHidden) {
+    win.__zapperHidden = false;
+    win.setIgnoreMouseEvents(false);
+    win.setOpacity(1);
+    win.setSkipTaskbar(false);
+    win.show();
+    win.focus();
+  } else {
+    hideHostWindow(win);
+  }
+  return true;
+}
+
+// Mute / unmute the host's microphone in the Meet call.
+async function setHostMic(on) {
+  const win = hostWindow;
+  if (!win || win.isDestroyed()) return false;
+  const want = on ? 'turn on microphone' : 'turn off microphone';
+  return await win.webContents.executeJavaScript(`(() => {
+    const btn = [...document.querySelectorAll('button, div[role="button"]')].find(b =>
+      ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-tooltip') || '')).toLowerCase().includes(${JSON.stringify(want)}));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`, true).catch(() => false);
+}
+
 function leaveHost() {
   stopHostTimer();
   const win = hostWindow;
@@ -215,4 +273,4 @@ function leaveHost() {
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-module.exports = { joinAsHost, leaveHost, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+module.exports = { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };

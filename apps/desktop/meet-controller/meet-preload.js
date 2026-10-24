@@ -582,13 +582,57 @@
     return strongEmpty;
   }
 
+  // Meet keeps ONE row per utterance and grows it while the speaker talks on, even after
+  // a pause. Sending the whole row every time re-printed the same words again and again
+  // ("Thank you" / "Thank you for joining" / ...). Only the words not yet committed as a
+  // final line are emitted.
+  let captionCommitted = []; // normalized words of the row text already sent as final
+  let lastEmittedFinalKey = '';
+  let lastEmittedFinalAt = 0;
+
+  function captionWordsOf(value) {
+    const words = normalizeText(value).split(/\s+/).filter(Boolean);
+    return { words, norm: words.map(w => w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')) };
+  }
+
+  function captionDelta(text) {
+    if (!captionCommitted.length) return text;
+    const { words, norm } = captionWordsOf(text);
+    const done = captionCommitted;
+    let lead = 0;
+    while (lead < done.length && lead < norm.length && norm[lead] === done[lead]) lead += 1;
+    // Same row, grown (tolerates a few words Meet corrected inside the committed part).
+    if (lead >= Math.max(1, Math.ceil(done.length * 0.7)) && norm.length >= done.length) {
+      return words.slice(done.length).join(' ');
+    }
+    if (norm.length < done.length && lead >= Math.max(1, Math.ceil(norm.length * 0.7))) return '';
+    // Row trimmed at the front by Meet: committed tail == new head.
+    for (let m = Math.min(done.length, norm.length); m >= 2; m -= 1) {
+      let same = true;
+      for (let i = 0; i < m; i += 1) { if (done[done.length - m + i] !== norm[i]) { same = false; break; } }
+      if (same) return words.slice(m).join(' ');
+    }
+    captionCommitted = []; // a different utterance
+    return text;
+  }
+
   function emitMeetCaption(text, isFinal) {
     const clean = cleanCaptionText(text);
     if (!clean || !ipcRenderer) return;
     const key = keyText(clean);
-    if (isFinal && key === lastCaptionFinalKey) return;
-    if (isFinal) lastCaptionFinalKey = key;
-    ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: Date.now() });
+    const now = Date.now();
+    // Only an immediate identical repeat is dropped; the same phrase said again later is real.
+    if (isFinal && key === lastEmittedFinalKey && now - lastEmittedFinalAt < 4000) return;
+    if (isFinal) { lastEmittedFinalKey = key; lastEmittedFinalAt = now; }
+    ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: now });
+  }
+
+  function commitCaptionFinal() {
+    if (!lastCaptionText) return;
+    const delta = captionDelta(lastCaptionText);
+    if (delta) emitMeetCaption(delta, true);
+    captionCommitted = captionWordsOf(lastCaptionText).norm;
+    lastCaptionFinalKey = lastCaptionKey;
   }
 
   function scheduleCaptionFinal(text) {
@@ -597,7 +641,7 @@
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
       if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2100) {
-        emitMeetCaption(lastCaptionText, true);
+        commitCaptionFinal();
       }
     }, 2250);
   }
@@ -636,13 +680,15 @@
       const speaker = cleanCaptionSpeaker(latest.speaker);
       if (lastCaptionKey && lastCaptionKey !== lastCaptionFinalKey &&
           !isCaptionContinuation(lastCaptionKey, key, lastCaptionSpeaker, speaker)) {
-        emitMeetCaption(lastCaptionText, true);
+        commitCaptionFinal();
+        captionCommitted = []; // next row is a new utterance
       }
       lastCaptionSpeaker = speaker;
       lastCaptionKey = key;
       lastCaptionText = text;
       lastCaptionChangedAt = Date.now();
-      emitMeetCaption(text, false);
+      const shown = captionDelta(text);
+      if (shown) emitMeetCaption(shown, false);
       scheduleCaptionFinal(text);
     }
     return true;

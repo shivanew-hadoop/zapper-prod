@@ -70,6 +70,18 @@ function launchHostApp(meetUrl) {
   });
 }
 
+// The Mute/Unmute button controls the host's microphone INSIDE the Meet window that the
+// desktop app keeps open (zapper://host-mic), and End Session leaves that Meet (host-leave).
+let hostMeetMicOn = true;
+function sendHostAppCommand(command, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = `zapper://${command}${query ? `?${query}` : ''}`;
+  document.body.appendChild(frame);
+  setTimeout(() => frame.remove(), 3000);
+}
+
 // After Create Session: the desktop app joins as host. Without it, fall back to the small
 // Meet window so the host can still join by hand.
 async function joinHostMeet(meetUrl, popup) {
@@ -77,6 +89,8 @@ async function joinHostMeet(meetUrl, popup) {
   if (!/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(String(meetUrl || ''))) return;
   const launched = await launchHostApp(meetUrl);
   if (launched === true) {
+    hostMeetMicOn = true;
+    updateHostMicButtons(true);
     $('hostMicStatus').classList.remove('hidden');
     $('hostMicStatus').textContent = 'Zapper desktop is joining your Google Meet as host (camera off, microphone on).';
     return;
@@ -606,6 +620,7 @@ async function loadHostPortal() {
 // audio by itself. With explicit browser permission, capture the HOST's own
 // microphone and use the existing /stt -> Deepgram -> transcript/PDF pipeline.
 function updateHostMicButtons(recording = false) {
+  if (!HOST_MIC_TO_STT) recording = hostMeetMicOn; // button reflects the Meet microphone
   $('hostMicToggle').disabled = microphoneTestRunning;
   $('hostMicToggle').textContent = recording ? 'Mute' : 'Unmute';
   $('hostMicToggle').setAttribute('aria-pressed', String(recording));
@@ -638,6 +653,11 @@ function showHostMicPanel(session) {
   hostMicSessionId = session.id;
   $('sessionToolbar').classList.remove('hidden');
   updateHostMicButtons(Boolean(hostMicCapture));
+  if (!HOST_MIC_TO_STT) {
+    // The mic level meter and device picker measure the browser mic, which is no longer used.
+    $('hostMicLevel').classList.add('hidden');
+    $('hostMicDevice').closest('.micDeviceSelect')?.classList.add('hidden');
+  }
   if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
     $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
   }
@@ -703,6 +723,14 @@ async function startHostMicForSession(sessionId) {
 }
 
 $('hostMicToggle').onclick = () => {
+  if (!HOST_MIC_TO_STT) {
+    hostMeetMicOn = !hostMeetMicOn;
+    sendHostAppCommand('host-mic', { state: hostMeetMicOn ? 'on' : 'off' });
+    updateHostMicButtons(hostMeetMicOn);
+    $('hostMicStatus').classList.remove('hidden');
+    $('hostMicStatus').textContent = hostMeetMicOn ? 'Microphone on in your Google Meet.' : 'Microphone muted in your Google Meet. Click Unmute to speak.';
+    return;
+  }
   if (hostMicCapture) stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.');
   else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
 };
@@ -756,6 +784,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
   if (button) button.disabled = true;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
+    if (currentSessionId === sessionId) sendHostAppCommand('host-leave');
     if (hostMicSessionId === sessionId) stopHostMicrophone('Session ended. Microphone stopped.', true);
     if (currentSessionId === sessionId) {
       $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';

@@ -72,7 +72,7 @@ const {
   getGoogleAccountEmail
 } = require('./meet-controller/index');
 
-const { joinAsHost, parseHostJoinUrl } = require('./meet-controller/host-join');
+const { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -80,8 +80,16 @@ const { joinAsHost, parseHostJoinUrl } = require('./meet-controller/host-join');
 function handleZapperUrl(rawUrl) {
   if (!rawUrl) return;
   const hostJoin = parseHostJoinUrl(rawUrl);
-  if (!hostJoin) return;
-  joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
+  if (hostJoin) {
+    joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
+    return;
+  }
+  const control = parseHostControlUrl(rawUrl);
+  if (!control) return;
+  if (control.type === 'leave') { leaveHost(); return; }
+  if (control.type === 'mic') {
+    setHostMic(control.on).then(ok => { if (ok) sendStatus(control.on ? 'Host microphone unmuted.' : 'Host microphone muted.'); });
+  }
 }
 app.on('open-url', (event, url) => { event.preventDefault(); handleZapperUrl(url); });
 
@@ -1034,6 +1042,9 @@ app.whenReady().then(async () => {
 
     enforceOverlayPrivacyAndTopmost();
   });
+
+  // Show/hide the host's Google Meet window (host mode keeps it out of the way after joining).
+  globalShortcut.register('CommandOrControl+Shift+H', () => { toggleHostWindow(); });
 
   globalShortcut.register('CommandOrControl+Shift+M', () => {
     toggleMeetDebug();

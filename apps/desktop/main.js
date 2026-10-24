@@ -111,7 +111,7 @@ let audibleWithoutCaptionSince = 0;
 // While true, Zapper never activates Deepgram fallback and never sends Meet PCM
 // audio to the backend. The existing /stt socket remains open only so validated
 // local captions can still be persisted to the host PDF / relayed to the session.
-const GOOGLE_CAPTIONS_ONLY_TEST = true;
+const GOOGLE_CAPTIONS_ONLY_TEST = false;
 let meetOnlyFallbackNoticeSent = false;
 
 

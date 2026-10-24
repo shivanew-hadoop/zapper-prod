@@ -282,27 +282,26 @@
   }
 
 
-  // Primary transcription path: read only Google Meet's actual caption text
-  // nodes. Never use a whole region's innerText: Meet side panels (Q&A, tools,
-  // access notices and controls such as "Jump to bottom") can live near the
-  // captions DOM and must never become transcript text.
+  // Primary transcription path: Google Meet native captions.
   //
-  // Current Meet caption DOM (also used by maintained caption-capture tools):
-  //   row:     .nMcdL.bj4p3b
-  //   speaker: .NWpY1d
-  //   text:    .ygicle.VbkSUe
-  // Keep narrow legacy fallbacks for older Meet builds, but every accepted root
-  // must contain a real caption text node before it is considered healthy.
-  const CAPTION_REGION_SELECTOR = '[role="region"][aria-label*="caption" i], [role="region"][aria-label*="subtitle" i]';
-  const CAPTION_CURRENT_ROW_SELECTOR = 'div.nMcdL.bj4p3b, div[jsname="dsyhDe"]';
-  const CAPTION_CURRENT_TEXT_SELECTOR = 'div.ygicle.VbkSUe, div.ygicle';
-  const CAPTION_LEGACY_ROOT_SELECTOR = 'div[jscontroller="TEjq6e"], div[jscontroller="D1tHje"], div[jscontroller="KPn5nb"], div[jsname="YSxPC"]';
-  const CAPTION_LEGACY_TEXT_SELECTOR = 'div.iTTPOb, div.bh44bd';
-  const CAPTION_TEXT_SELECTOR = `${CAPTION_CURRENT_TEXT_SELECTOR}, ${CAPTION_LEGACY_TEXT_SELECTOR}`;
-  const CAPTION_SPEAKER_SELECTOR = 'div.NWpY1d, div.KcIKyf, div.zs7s8d';
-  const CAPTION_EXCLUDED_ANCESTOR_SELECTOR = '[role="dialog"], [role="menu"], [role="menubar"], [role="button"], [role="toolbar"], [role="tablist"], [role="listbox"], button, [data-panel-id]';
+  // IMPORTANT: jsname="tgaKEf" is a caption CONTAINER in current Meet builds,
+  // but its whole textContent must never be treated as speech. Meet can place
+  // controls/announcements near that container. We only extract known nested
+  // speaker/text blocks, with structured aria-live fallbacks for UI variants.
+  const CAPTION_LABEL_WORDS = [
+    'caption', 'subtitle', 'untertitel', 'sous-titre', 'sottotitoli',
+    'subtítulo', 'subtitulo', 'legenda', 'ondertiteling', 'napisy',
+    'субтитры', '字幕', '자막'
+  ];
+  const CAPTION_REGION_SELECTOR = CAPTION_LABEL_WORDS
+    .map(word => `[role="region"][aria-label*="${word}" i]`).join(', ');
+  const CAPTION_LABELLED_SELECTOR = CAPTION_LABEL_WORDS
+    .map(word => `[aria-label*="${word}" i]`).join(', ') + ', [jsname="tgaKEf"], [jsname="DS9Ooe"]';
+  const CAPTION_EXCLUDED_ANCESTOR_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [role="toolbar"], [role="tablist"], [role="listbox"], button, [role="button"], [data-panel-id]';
+
   let captionObserver = null;
   let captionObservedRoot = null;
+  let captionActiveStrategy = null;
   let captionReadySent = false;
   let captionAdmittedSent = false;
   let lastCaptionKey = '';
@@ -324,123 +323,179 @@
       /^(?:captions?|closed captions?|captions controls?|turn (?:on|off) captions?)$/i.test(t);
   }
 
+  const MEET_ANNOUNCEMENT_RE = new RegExp([
+    'panel is (open|closed)',
+    '\\b(your|the)\\b.{0,20}\\b(camera|microphone)\\b',
+    '\\b(camera|microphone)\\b.{0,20}\\b(is )?(on|off)\\b',
+    '\\b(joined|left)\\b.{0,30}\\b(meeting|call)\\b',
+    '\\b(joined|left)\\s*$',
+    'wants to join|admit or deny',
+    '\\b(is|are)\\s+(now\\s+)?(presenting|pinned|muted|unmuted)',
+    '\\brecording\\b.{0,20}\\b(started|stopped)',
+    'raised (their )?hand',
+    'you are the only (one|person) here',
+    'access and management is limited',
+    'ask and answer questions',
+    '^q&a$'
+  ].join('|'), 'i');
+
+  function isMeetAnnouncement(value) {
+    const t = normalizeText(value);
+    return Boolean(t && t.length < 160 && MEET_ANNOUNCEMENT_RE.test(t));
+  }
+
   function cleanCaptionSpeaker(value) {
     const t = normalizeText(value);
-    if (!t || t.length > 100 || isMeetNoise(t) || isCaptionChrome(t) || isClockText(t)) return '';
+    if (!t || t.length > 100 || isMeetNoise(t) || isCaptionChrome(t) || isClockText(t) || isMeetAnnouncement(t)) return '';
     return t;
   }
 
   function cleanCaptionText(value, speaker = '') {
     let text = normalizeText(value);
     if (!text || isCaptionChrome(text)) return '';
-
-    // Material Symbols can occasionally be serialized beside the real caption.
-    // Remove the symbol/control only when the material-symbol token is present;
-    // ordinary spoken phrases containing "jump to bottom" remain untouched.
     text = normalizeText(text
       .replace(/^arrow_downward\s*/i, '')
       .replace(/^arrow down(?:ward)?\s*/i, '')
       .replace(/\s*arrow_downward\s*jump to bottom\s*$/i, '')
       .replace(/\s*arrow down(?:ward)?\s*jump to bottom\s*$/i, ''));
     if (!text || isCaptionChrome(text)) return '';
-
     const cleanSpeaker = cleanCaptionSpeaker(speaker);
     if (cleanSpeaker && text.toLowerCase().startsWith(cleanSpeaker.toLowerCase())) {
       text = normalizeText(text.slice(cleanSpeaker.length).replace(/^[:\-–—]+\s*/, ''));
     }
-    if (!text) return '';
-
-    // Caption text is already sourced from a verified caption node. Keep the
-    // speech intact; only reject an entire node when it is unmistakably Meet UI.
-    if (isMeetNoise(text) || isCaptionChrome(text) || isClockText(text)) return '';
+    if (!text || isMeetNoise(text) || isCaptionChrome(text) || isClockText(text) || isMeetAnnouncement(text)) return '';
     return text.slice(0, 12000);
   }
 
+  function isInDialog(el) {
+    try { return Boolean(el?.closest?.('[role="dialog"], [role="alertdialog"]')); } catch (_) { return false; }
+  }
+
   function isExcludedCaptionElement(el) {
-    if (!el || !visible(el)) return true;
+    if (!el) return true;
+    try { return Boolean(el.closest?.(CAPTION_EXCLUDED_ANCESTOR_SELECTOR)); } catch (_) { return false; }
+  }
+
+  function looksLikeCaptionRegion(el) {
+    if (!el || isInDialog(el)) return false;
     try {
-      if (el.closest(CAPTION_EXCLUDED_ANCESTOR_SELECTOR)) return true;
+      if (el.closest(CAPTION_LABELLED_SELECTOR)) return true;
     } catch (_) {}
+    for (const block of [...(el.children || [])]) {
+      const kids = [...(block.children || [])].filter(k => normalizeText(k.textContent || '').length > 0);
+      if (kids.length >= 2) return true;
+    }
     return false;
   }
 
-  function isPlausibleCaptionTextElement(el) {
-    if (isExcludedCaptionElement(el)) return false;
-    const text = cleanCaptionText(el.innerText || el.textContent || '');
-    if (!text) return false;
-    try {
-      const r = el.getBoundingClientRect();
-      // Meet captions render in the lower portion of the meeting canvas. This
-      // rejects side-panel headers/tool chrome even if Google reuses a class.
-      if (r.width <= 0 || r.height <= 0) return false;
-      if (r.bottom < window.innerHeight * 0.35 || r.top > window.innerHeight) return false;
-    } catch (_) { return false; }
-    return true;
-  }
-
-  function captionTextNodesWithin(root) {
-    if (!root) return [];
-    return [...root.querySelectorAll(CAPTION_TEXT_SELECTOR)].filter(isPlausibleCaptionTextElement);
-  }
-
-  function rootContainsCaptionText(root) {
-    return captionTextNodesWithin(root).length > 0;
-  }
-
-  function findCaptionRoot() {
-    // 1) Semantic caption region, but only if it contains an actual caption node.
-    const ariaRoots = [...document.querySelectorAll(CAPTION_REGION_SELECTOR)]
-      .filter(visible)
-      .filter(rootContainsCaptionText);
-    if (ariaRoots.length) return ariaRoots[ariaRoots.length - 1];
-
-    // 2) Current Meet row/container structure. This is intentionally anchored
-    // to .ygicle text rather than generic region text.
-    const currentTextNodes = [...document.querySelectorAll(CAPTION_CURRENT_TEXT_SELECTOR)]
-      .filter(isPlausibleCaptionTextElement);
-    if (currentTextNodes.length) {
-      const textEl = currentTextNodes[currentTextNodes.length - 1];
-      return textEl.closest('[jsname="dsyhDe"]') ||
-        textEl.closest('[role="region"]') ||
-        textEl.closest('div.nMcdL.bj4p3b')?.parentElement ||
-        textEl.parentElement;
-    }
-
-    // 3) Narrow legacy support. Again, a root is valid only when a known legacy
-    // caption text node is actually present and visible.
-    const legacyRoots = [...document.querySelectorAll(CAPTION_LEGACY_ROOT_SELECTOR)]
-      .filter(visible)
-      .filter(rootContainsCaptionText);
-    return legacyRoots.length ? legacyRoots[legacyRoots.length - 1] : null;
-  }
-
-  function captionEntries(root) {
-    if (!root) return [];
+  // Current stable jsname path used by Meet caption capture tools:
+  // container tgaKEf/DS9Ooe -> block YSxPC -> speaker r4nke -> text bVV8Bd.
+  // We never read container.innerText/textContent as a transcript.
+  function extractByJsname(container) {
     const entries = [];
-
-    // Prefer current per-speaker rows. A row without a known caption text node
-    // is ignored completely; row.innerText is never treated as speech.
-    const rows = [...root.querySelectorAll(CAPTION_CURRENT_ROW_SELECTOR)].filter(visible);
-    for (const row of rows) {
-      const textEl = [...row.querySelectorAll(CAPTION_CURRENT_TEXT_SELECTOR)].find(isPlausibleCaptionTextElement);
+    if (!container || isInDialog(container)) return entries;
+    for (const block of container.querySelectorAll('[jsname="YSxPC"]')) {
+      if (isExcludedCaptionElement(block)) continue;
+      const speakerEl = block.querySelector('[jsname="r4nke"]');
+      const textEl = block.querySelector('[jsname="bVV8Bd"]');
       if (!textEl) continue;
-      const speakerEl = row.querySelector(CAPTION_SPEAKER_SELECTOR);
-      const speaker = cleanCaptionSpeaker(speakerEl?.innerText || speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl.innerText || textEl.textContent || '', speaker);
-      if (text) entries.push({ speaker, text });
-    }
-    if (entries.length) return entries;
-
-    // Direct caption nodes support current single-row and older Meet layouts.
-    // There is deliberately NO root.innerText fallback here.
-    for (const textEl of captionTextNodesWithin(root)) {
-      const row = textEl.closest(CAPTION_CURRENT_ROW_SELECTOR);
-      const speakerEl = row?.querySelector(CAPTION_SPEAKER_SELECTOR) || null;
-      const speaker = cleanCaptionSpeaker(speakerEl?.innerText || speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl.innerText || textEl.textContent || '', speaker);
+      const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
+      const text = cleanCaptionText(textEl.textContent || '', speaker);
       if (text) entries.push({ speaker, text });
     }
     return entries;
+  }
+
+  // Current class-based path retained as a second independent strategy.
+  function extractByCurrentClasses(container) {
+    const entries = [];
+    if (!container || isInDialog(container)) return entries;
+    const rows = [...container.querySelectorAll('div.nMcdL.bj4p3b')];
+    for (const row of rows) {
+      if (isExcludedCaptionElement(row)) continue;
+      const textEl = row.querySelector('div.ygicle.VbkSUe, div.ygicle');
+      if (!textEl) continue;
+      const speakerEl = row.querySelector('div.NWpY1d');
+      const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
+      const text = cleanCaptionText(textEl.textContent || '', speaker);
+      if (text) entries.push({ speaker, text });
+    }
+    return entries;
+  }
+
+  function extractByPosition(container) {
+    const entries = [];
+    if (!container || isInDialog(container) || !looksLikeCaptionRegion(container)) return entries;
+    for (const block of [...(container.children || [])]) {
+      if (!block || isExcludedCaptionElement(block)) continue;
+      const textKids = [...(block.children || [])]
+        .filter(el => !isExcludedCaptionElement(el))
+        .map(el => ({ el, text: normalizeText(el.textContent || '') }))
+        .filter(item => item.text && !isMeetAnnouncement(item.text) && !isCaptionChrome(item.text));
+      if (textKids.length < 2) continue;
+      const speaker = cleanCaptionSpeaker(textKids[0].text);
+      if (!speaker || speaker.length > 60) continue;
+      const text = cleanCaptionText(textKids.slice(1).map(item => item.text).join(' '), speaker);
+      if (text) entries.push({ speaker, text });
+    }
+    return entries;
+  }
+
+  function findAriaLiveContainer() {
+    const candidates = [...document.querySelectorAll('[aria-live="polite"], [aria-live="assertive"]')]
+      .filter(el => !isInDialog(el))
+      .filter(el => (el.children?.length || 0) > 0)
+      .filter(el => !isMeetAnnouncement(normalizeText(el.textContent || '')))
+      .filter(looksLikeCaptionRegion);
+    if (!candidates.length) return null;
+    return candidates.sort((a, b) => (b.children?.length || 0) - (a.children?.length || 0))[0];
+  }
+
+  const CAPTION_STRATEGIES = [
+    {
+      name: 'jsname-tgaKEf',
+      findContainer: () => document.querySelector('[jsname="tgaKEf"]'),
+      extract: extractByJsname,
+      strongContainer: true,
+    },
+    {
+      name: 'jsname-DS9Ooe',
+      findContainer: () => document.querySelector('[jsname="DS9Ooe"]'),
+      extract: extractByJsname,
+      strongContainer: true,
+    },
+    {
+      name: 'current-classes',
+      findContainer: () => {
+        const textEl = document.querySelector('div.ygicle.VbkSUe, div.ygicle');
+        return textEl?.closest?.('[jsname="tgaKEf"], [jsname="DS9Ooe"], [role="region"]') ||
+          textEl?.closest?.('div.nMcdL.bj4p3b')?.parentElement || null;
+      },
+      extract: extractByCurrentClasses,
+      strongContainer: false,
+    },
+    {
+      name: 'caption-region',
+      findContainer: () => [...document.querySelectorAll(CAPTION_REGION_SELECTOR)].find(el => !isInDialog(el)) || null,
+      extract: extractByPosition,
+      strongContainer: false,
+    },
+    {
+      name: 'aria-live-structured',
+      findContainer: findAriaLiveContainer,
+      extract: extractByPosition,
+      strongContainer: false,
+    },
+  ];
+
+  function detectCaptionStrategy() {
+    for (const strategy of CAPTION_STRATEGIES) {
+      const container = strategy.findContainer();
+      if (!container || isInDialog(container)) continue;
+      const entries = strategy.extract(container);
+      if (entries.length || strategy.strongContainer) return { strategy, container, entries };
+    }
+    return null;
   }
 
   function emitMeetCaption(text, isFinal) {
@@ -457,32 +512,25 @@
     const scheduledKey = keyText(text);
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
-      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2300) {
+      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2100) {
         emitMeetCaption(lastCaptionText, true);
       }
-    }, 2500);
+    }, 2250);
   }
 
-  function markCaptionReady() {
+  function markCaptionReady(strategyName) {
     if (captionReadySent) return;
     captionReadySent = true;
-    emitCaptionState('ready');
+    emitCaptionState('ready', { strategy: strategyName || '' });
   }
 
-  function scanMeetCaptions() {
-    const root = findCaptionRoot();
-    if (!root) return false;
-    const entries = captionEntries(root);
-    if (!entries.length) return false;
-
-    // "ready" now means a real caption text node was validated, not merely that
-    // some Meet region happened to contain the word "caption".
-    markCaptionReady();
-
+  function processCaptionEntries(entries, strategyName) {
+    if (!entries?.length) return false;
     const latest = entries[entries.length - 1];
     const text = cleanCaptionText(latest.text, latest.speaker);
     const key = keyText(text);
-    if (!key) return true;
+    if (!key) return false;
+    markCaptionReady(strategyName);
     if (key !== lastCaptionKey) {
       lastCaptionKey = key;
       lastCaptionText = text;
@@ -493,23 +541,58 @@
     return true;
   }
 
-  function attachCaptionObserver() {
-    const root = findCaptionRoot();
-    if (!root) return false;
-    if (captionObservedRoot === root && captionObserver) return true;
+  function scanMeetCaptions() {
+    let strategy = captionActiveStrategy;
+    let root = captionObservedRoot;
+    if (!strategy || !root || !root.isConnected) {
+      const match = detectCaptionStrategy();
+      if (!match) return false;
+      strategy = match.strategy;
+      root = match.container;
+      attachCaptionObserver(match);
+      return processCaptionEntries(match.entries?.length ? match.entries : strategy.extract(root), strategy.name);
+    }
+    return processCaptionEntries(strategy.extract(root), strategy.name);
+  }
+
+  function attachCaptionObserver(existingMatch = null) {
+    const match = existingMatch || detectCaptionStrategy();
+    if (!match) return false;
+    const { strategy, container } = match;
+    if (captionObservedRoot === container && captionObserver && captionActiveStrategy === strategy) {
+      processCaptionEntries(match.entries?.length ? match.entries : strategy.extract(container), strategy.name);
+      return true;
+    }
     try { captionObserver?.disconnect(); } catch (_) {}
-    captionObservedRoot = root;
-    captionObserver = new MutationObserver(() => scanMeetCaptions());
-    captionObserver.observe(root, { childList: true, subtree: true, characterData: true });
-    scanMeetCaptions();
+    captionObservedRoot = container;
+    captionActiveStrategy = strategy;
+    captionObserver = new MutationObserver(() => {
+      if (!captionObservedRoot?.isConnected) {
+        try { captionObserver?.disconnect(); } catch (_) {}
+        captionObserver = null;
+        captionObservedRoot = null;
+        captionActiveStrategy = null;
+        attachCaptionObserver();
+        return;
+      }
+      processCaptionEntries(strategy.extract(captionObservedRoot), strategy.name);
+    });
+    captionObserver.observe(container, { childList: true, subtree: true, characterData: true });
+    processCaptionEntries(match.entries?.length ? match.entries : strategy.extract(container), strategy.name);
+    log('Meet caption observer attached via', strategy.name);
     return true;
   }
 
   function captionsAppearEnabled() {
     const buttons = [...document.querySelectorAll('button, div[role="button"], span[role="button"]')].filter(visible);
-    return buttons.some(el => /turn off captions|captions are on/i.test(normalizeText([
-      el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText
-    ].filter(Boolean).join(' '))));
+    return buttons.some(el => {
+      const pressed = el.getAttribute('aria-pressed');
+      const label = normalizeText([
+        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText
+      ].filter(Boolean).join(' '));
+      if (pressed === 'true' && /caption|subtitle|untertitel|sous-titre|sottotitoli|subtítulo|legenda|ondertiteling/i.test(label)) return true;
+      return /turn off captions|disable captions|hide captions|captions are on/i.test(label);
+    });
   }
 
   function ensureMeetCaptionsEnabled() {
@@ -519,24 +602,14 @@
       emitCaptionState('admitted');
     }
 
-    const root = findCaptionRoot();
-    if (root) {
-      attachCaptionObserver();
-      scanMeetCaptions();
-      return true;
-    }
-
-    // Captions can be enabled before anyone has spoken, so there may be no text
-    // node yet. Do not call the source "ready" until real caption text appears.
+    if (attachCaptionObserver()) return true;
     if (captionsAppearEnabled()) return true;
 
     const now = Date.now();
     if (now - lastCaptionEnableAttemptAt < 2500) return false;
     lastCaptionEnableAttemptAt = now;
-    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions']);
+    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions', 'show captions']);
     if (!clicked) {
-      // Official Meet shortcut fallback. Dispatch only after admission and only
-      // when the UI does not already report captions enabled.
       try {
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
         document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
@@ -550,17 +623,22 @@
     const bodyObserver = new MutationObserver(() => {
       if (!isInMeeting()) return;
       ensureMeetCaptionsEnabled();
-      attachCaptionObserver();
       scanMeetCaptions();
     });
-    if (document.body) bodyObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    if (document.body) bodyObserver.observe(document.body, { childList: true, subtree: true });
     setInterval(() => {
       if (!isInMeeting()) return;
       ensureMeetCaptionsEnabled();
+      if (!captionObservedRoot?.isConnected) {
+        try { captionObserver?.disconnect(); } catch (_) {}
+        captionObserver = null;
+        captionObservedRoot = null;
+        captionActiveStrategy = null;
+      }
       attachCaptionObserver();
       scanMeetCaptions();
-    }, 900);
-    log('Meet local caption observer installed (verified caption-node path)');
+    }, 750);
+    log('Meet local caption observer installed (multi-strategy caption-block path)');
   }
 
   if (document.readyState === 'loading') {

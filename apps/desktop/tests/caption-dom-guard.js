@@ -4,14 +4,20 @@ const assert = require('assert');
 const source = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 
-assert(source.includes('div.ygicle.VbkSUe'), 'current Meet caption text selector must be present');
+assert(source.includes('[jsname="tgaKEf"]'), 'current Meet jsname caption container must be present');
+assert(source.includes('[jsname="YSxPC"]'), 'current Meet speaker block selector must be present');
+assert(source.includes('[jsname="r4nke"]'), 'current Meet speaker-name selector must be present');
+assert(source.includes('[jsname="bVV8Bd"]'), 'current Meet caption-text selector must be present');
+assert(source.includes('div.ygicle.VbkSUe'), 'class-based Meet caption text fallback must be present');
 assert(source.includes('div.NWpY1d'), 'current Meet speaker selector must be present');
 assert(source.includes('div.nMcdL.bj4p3b'), 'current Meet caption row selector must be present');
 assert(source.includes('CAPTION_EXCLUDED_ANCESTOR_SELECTOR'), 'caption extraction must exclude side-panel/control ancestors');
 assert(!/fallbackLines\s*=\s*textLines\(root\.innerText/.test(source), 'whole caption-region innerText fallback must never return');
 assert(!/textEl\?\.innerText\s*\|\|\s*textEl\?\.textContent\s*\|\|\s*row\.innerText/.test(source), 'caption rows must never fall back to row.innerText');
 assert(source.includes("replace(/\\s*arrow_downward\\s*jump to bottom\\s*$/i, '')"), 'material-symbol Jump to bottom suffix must be stripped');
-assert(source.includes('markCaptionReady();'), 'source should become ready only after validated caption entries exist');
+assert(source.includes('markCaptionReady(strategyName);'), 'source should become ready only after validated caption entries exist');
+assert(!/cleanCaptionText\(container\.(?:innerText|textContent)/.test(source), 'caption container text must never be emitted as speech');
+assert(source.includes('strongContainer: true'), 'known jsname caption containers should be observed even before first speech');
 
 function extractFunction(name) {
   const marker = `function ${name}(`;
@@ -38,9 +44,9 @@ const normalizeText = value => String(value || '')
   .trim();
 const isCaptionChrome = new Function('normalizeText', `return (${extractFunction('isCaptionChrome')});`)(normalizeText);
 const cleanCaptionText = new Function(
-  'normalizeText', 'isCaptionChrome', 'cleanCaptionSpeaker', 'isMeetNoise', 'isClockText',
+  'normalizeText', 'isCaptionChrome', 'cleanCaptionSpeaker', 'isMeetNoise', 'isClockText', 'isMeetAnnouncement',
   `return (${extractFunction('cleanCaptionText')});`
-)(normalizeText, isCaptionChrome, () => '', () => false, () => false);
+)(normalizeText, isCaptionChrome, () => '', () => false, () => false, () => false);
 
 assert.equal(cleanCaptionText('Can can you hear me? arrow_downwardJump to bottom'), 'Can can you hear me?', 'Jump-to-bottom chrome must be removed from a real caption');
 assert.equal(cleanCaptionText('arrow_downwardJump to bottom'), '', 'standalone Jump-to-bottom chrome must never become a caption');
@@ -51,7 +57,7 @@ assert(mainSource.includes('>= 10000'), 'fallback must wait for sustained audibl
 
 console.log(JSON.stringify({
   ok: true,
-  currentCaptionNodesRequired: true,
+  currentJsnameCaptionBlocksRequired: true,
   wholeRegionFallbackRemoved: true,
   sidePanelControlsExcluded: true,
   sourceReadyAfterValidatedCaption: true,

@@ -68,7 +68,8 @@ const {
   clearGoogleProfile,
   isGoogleLoggedIn,
   sendMeetChatToMeeting,
-  getGoogleAccountEmail
+  getGoogleAccountEmail,
+  ensureMeetCaptionsNative
 } = require('./meet-controller/index');
 
 const {
@@ -106,6 +107,7 @@ let localCaptionLastWasFinal = false;
 let deepgramFallbackActive = false;
 let captionFallbackTimer = null;
 let audibleWithoutCaptionSince = 0;
+let nativeCaptionEnableInFlight = false;
 
 // TEMPORARY DIAGNOSTIC BUILD: prove Google Meet DOM captions end-to-end.
 // While true, Zapper never activates Deepgram fallback and never sends Meet PCM
@@ -422,12 +424,30 @@ function scheduleDeepgramFallbackCheck() {
   captionFallbackTimer = null;
 }
 
+ipcMain.on('meet-caption-native-enable-request', async () => {
+  if (!started || nativeCaptionEnableInFlight) return;
+  nativeCaptionEnableInFlight = true;
+  try {
+    const enabled = await ensureMeetCaptionsNative(sendStatus);
+    if (enabled) sendTranscriptionSource('meet-captions-waiting');
+  } catch (err) {
+    console.error('[Captions] Native enable failed:', err && err.message ? err.message : err);
+  } finally {
+    nativeCaptionEnableInFlight = false;
+  }
+});
+
 ipcMain.on('meet-caption-state', (_, payload) => {
   if (!started || !payload) return;
   const state = String(payload.state || '');
   if (state === 'admitted') {
     localCaptionAdmitted = true;
     scheduleDeepgramFallbackCheck();
+    return;
+  }
+  if (state === 'enabled') {
+    sendTranscriptionSource('meet-captions-waiting');
+    sendStatus('Google Meet captions are ON. Waiting for speech...');
     return;
   }
   if (state === 'ready') {
@@ -794,6 +814,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     activeCaptureGoogleEmail = String(googleEmail || '');
 
     meetOnlyFallbackNoticeSent = false;
+    nativeCaptionEnableInFlight = false;
     sendTranscriptionSource('detecting');
     sendStatus(GOOGLE_CAPTIONS_ONLY_TEST
       ? 'Session verified. Opening Meet... Google Meet captions-only test mode; Deepgram disabled.'

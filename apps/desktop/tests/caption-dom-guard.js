@@ -17,7 +17,14 @@ assert(!/textEl\?\.innerText\s*\|\|\s*textEl\?\.textContent\s*\|\|\s*row\.innerT
 assert(source.includes("replace(/\\s*arrow_downward\\s*jump to bottom\\s*$/i, '')"), 'material-symbol Jump to bottom suffix must be stripped');
 assert(source.includes('markCaptionReady(strategyName);'), 'source should become ready only after validated caption entries exist');
 assert(!/cleanCaptionText\(container\.(?:innerText|textContent)/.test(source), 'caption container text must never be emitted as speech');
-assert(source.includes('strongContainer: true'), 'known jsname caption containers should be observed even before first speech');
+assert(!source.includes('strongContainer: true'), 'Meet jsname containers must not be trusted before they own real caption children');
+assert(source.includes('findJsnameCaptionContainer'), 'jsname caption containers must be selected by real caption children');
+assert(source.includes('scanKnownCaptionTextNodes'), 'document-level direct caption-node scanner must be present');
+assert(source.includes('findCaptionToggleButton'), 'Meet CC toggle detection must be present');
+assert(source.includes('handleCaptionSettingsDialog'), 'first-run Meet caption settings dialog must be handled');
+assert(source.includes("ipcRenderer.send('meet-caption-native-enable-request'"), 'preload must be able to request native CC enable');
+assert(mainSource.includes("ipcMain.on('meet-caption-native-enable-request'"), 'main process must handle native CC enable requests');
+assert(mainSource.includes("sendTranscriptionSource('meet-captions-waiting')"), 'overlay must distinguish CC enabled from first caption received');
 
 function extractFunction(name) {
   const marker = `function ${name}(`;

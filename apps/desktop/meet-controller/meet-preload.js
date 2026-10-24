@@ -310,6 +310,9 @@
   let lastCaptionFinalKey = '';
   let captionFinalTimer = null;
   let lastCaptionEnableAttemptAt = 0;
+  let captionEnableAttempts = 0;
+  let captionSettingsBusy = false;
+  let lastNativeCaptionEnableRequestAt = 0;
 
   function emitCaptionState(state, extra = {}) {
     if (!ipcRenderer) return;
@@ -451,18 +454,29 @@
     return candidates.sort((a, b) => (b.children?.length || 0) - (a.children?.length || 0))[0];
   }
 
+  function findJsnameCaptionContainer(jsname) {
+    // Meet can reuse jsname values outside the live caption widget. Never bind to
+    // the first matching container merely because it exists. Prefer the candidate
+    // that actually owns a known caption text child. Before the first spoken word
+    // we intentionally return null; the document-level observer will retry as soon
+    // as Meet inserts the real caption block.
+    const candidates = [...document.querySelectorAll(`[jsname="${jsname}"]`)].filter(el => !isInDialog(el));
+    return candidates.find(el =>
+      el.querySelector('[jsname="YSxPC"] [jsname="bVV8Bd"]') ||
+      el.querySelector('div.nMcdL.bj4p3b div.ygicle.VbkSUe, div.nMcdL.bj4p3b div.ygicle')
+    ) || null;
+  }
+
   const CAPTION_STRATEGIES = [
     {
       name: 'jsname-tgaKEf',
-      findContainer: () => document.querySelector('[jsname="tgaKEf"]'),
+      findContainer: () => findJsnameCaptionContainer('tgaKEf'),
       extract: extractByJsname,
-      strongContainer: true,
     },
     {
       name: 'jsname-DS9Ooe',
-      findContainer: () => document.querySelector('[jsname="DS9Ooe"]'),
+      findContainer: () => findJsnameCaptionContainer('DS9Ooe'),
       extract: extractByJsname,
-      strongContainer: true,
     },
     {
       name: 'current-classes',
@@ -472,19 +486,16 @@
           textEl?.closest?.('div.nMcdL.bj4p3b')?.parentElement || null;
       },
       extract: extractByCurrentClasses,
-      strongContainer: false,
     },
     {
       name: 'caption-region',
       findContainer: () => [...document.querySelectorAll(CAPTION_REGION_SELECTOR)].find(el => !isInDialog(el)) || null,
       extract: extractByPosition,
-      strongContainer: false,
     },
     {
       name: 'aria-live-structured',
       findContainer: findAriaLiveContainer,
       extract: extractByPosition,
-      strongContainer: false,
     },
   ];
 
@@ -493,9 +504,30 @@
       const container = strategy.findContainer();
       if (!container || isInDialog(container)) continue;
       const entries = strategy.extract(container);
-      if (entries.length || strategy.strongContainer) return { strategy, container, entries };
+      if (entries.length) return { strategy, container, entries };
     }
     return null;
+  }
+
+  function scanKnownCaptionTextNodes() {
+    // Independent safety net: inspect only known caption text nodes anywhere in
+    // the Meet document. This does not read body/region text, so Q&A, tooltips,
+    // chat and accessibility announcements cannot become transcript lines.
+    const entries = [];
+    const seen = new Set();
+    for (const textEl of document.querySelectorAll('[jsname="bVV8Bd"], div.ygicle.VbkSUe, div.ygicle')) {
+      if (!textEl || isInDialog(textEl) || isExcludedCaptionElement(textEl)) continue;
+      const row = textEl.closest('[jsname="YSxPC"], div.nMcdL.bj4p3b');
+      if (!row) continue;
+      const speakerEl = row.querySelector('[jsname="r4nke"], div.NWpY1d');
+      const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
+      const text = cleanCaptionText(textEl.textContent || '', speaker);
+      const key = `${keyText(speaker)}|${keyText(text)}`;
+      if (!text || seen.has(key)) continue;
+      seen.add(key);
+      entries.push({ speaker, text });
+    }
+    return entries;
   }
 
   function emitMeetCaption(text, isFinal) {
@@ -583,16 +615,97 @@
     return true;
   }
 
-  function captionsAppearEnabled() {
-    const buttons = [...document.querySelectorAll('button, div[role="button"], span[role="button"]')].filter(visible);
-    return buttons.some(el => {
-      const pressed = el.getAttribute('aria-pressed');
+  function findCaptionToggleButton() {
+    const CAPTION_TERM = /caption|subtitle|untertitel|sous-titre|sottotitoli|subt[ií]tulo|legenda|ondertiteling|napisy|субтитры|字幕|자막/i;
+    const nodes = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
+    return nodes.find(el => {
       const label = normalizeText([
-        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText
+        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')
       ].filter(Boolean).join(' '));
-      if (pressed === 'true' && /caption|subtitle|untertitel|sous-titre|sottotitoli|subtítulo|legenda|ondertiteling/i.test(label)) return true;
-      return /turn off captions|disable captions|hide captions|captions are on/i.test(label);
-    });
+      return CAPTION_TERM.test(label) && !/settings|language|translate|translated/i.test(label);
+    }) || null;
+  }
+
+  function isCaptionToggleOn(button) {
+    if (!button) return false;
+    const pressed = button.getAttribute('aria-pressed');
+    if (pressed === 'true') return true;
+    if (pressed === 'false') return false;
+    const label = normalizeText([
+      button.getAttribute('aria-label'), button.getAttribute('data-tooltip'), button.getAttribute('title')
+    ].filter(Boolean).join(' '));
+    return /turn off|disable|hide|deaktivier|ausschalten|ausblenden|désactiver|masquer|desactivar|ocultar|disattiva|nascondi/i.test(label);
+  }
+
+  function findCaptionSettingsDialog() {
+    const CAPTION_TERM = /caption|subtitle|untertitel|sous-titre|sottotitoli|subt[ií]tulo|legenda|ondertiteling/i;
+    const DANGEROUS = /leave|end (?:the )?(?:call|meeting)|remove|report/i;
+    for (const dialog of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
+      const text = normalizeText([
+        dialog.getAttribute('aria-label'), (dialog.textContent || '').slice(0, 900)
+      ].filter(Boolean).join(' '));
+      if (!CAPTION_TERM.test(text) || DANGEROUS.test(text)) continue;
+      if (dialog.querySelector('[role="radio"], input[type="radio"]')) return dialog;
+    }
+    return null;
+  }
+
+  function captionRadioLabel(radio) {
+    const own = normalizeText(radio.getAttribute('aria-label') || '');
+    if (own) return own;
+    const row = radio.closest('label, li, [role="radiogroup"] > *') || radio.parentElement;
+    return normalizeText(row?.textContent || '');
+  }
+
+  async function handleCaptionSettingsDialog() {
+    if (captionSettingsBusy) return false;
+    captionSettingsBusy = true;
+    try {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const dialog = findCaptionSettingsDialog();
+        if (!dialog) continue;
+
+        const radios = [...dialog.querySelectorAll('[role="radio"], input[type="radio"]')];
+        const automatic = radios.find(r => /automatic captions?|automatische untertitel|sous-titres automatiques|subt[ií]tulos autom[aá]ticos|legendas autom[aá]ticas|sottotitoli automatici|automatische ondertiteling/i.test(captionRadioLabel(r)));
+        if (automatic) {
+          const checked = automatic.getAttribute('aria-checked') === 'true' || automatic.checked === true;
+          if (!checked) {
+            try { automatic.click(); } catch (_) {}
+          }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const close = [...dialog.querySelectorAll('button, [role="button"]')].find(el =>
+          /close|schließen|schliessen|fermer|cerrar|chiudi|sluiten/i.test(normalizeText([
+            el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')
+          ].filter(Boolean).join(' ')))
+        );
+        if (close) {
+          try { close.click(); } catch (_) {}
+        } else {
+          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (_) {}
+        }
+        log('Caption settings handled; automatic captions requested');
+        return true;
+      }
+      return false;
+    } finally {
+      captionSettingsBusy = false;
+    }
+  }
+
+  function requestNativeCaptionEnable() {
+    if (!ipcRenderer) return;
+    const now = Date.now();
+    if (now - lastNativeCaptionEnableRequestAt < 5000) return;
+    lastNativeCaptionEnableRequestAt = now;
+    ipcRenderer.send('meet-caption-native-enable-request', { at: now });
+  }
+
+  function captionsAppearEnabled() {
+    const button = findCaptionToggleButton();
+    return isCaptionToggleOn(button);
   }
 
   function ensureMeetCaptionsEnabled() {
@@ -602,19 +715,44 @@
       emitCaptionState('admitted');
     }
 
+    const openCaptionSettings = findCaptionSettingsDialog();
+    if (openCaptionSettings) handleCaptionSettingsDialog().catch(() => {});
+
+    // First consume any real caption text already present. This is the strongest
+    // possible proof that Meet CC is active and avoids toggling an already-on CC.
+    const directEntries = scanKnownCaptionTextNodes();
+    if (directEntries.length) {
+      processCaptionEntries(directEntries, 'direct-caption-text');
+      attachCaptionObserver();
+      return true;
+    }
     if (attachCaptionObserver()) return true;
-    if (captionsAppearEnabled()) return true;
+
+    const toggle = findCaptionToggleButton();
+    if (toggle && isCaptionToggleOn(toggle)) {
+      emitCaptionState('enabled');
+      return true;
+    }
 
     const now = Date.now();
     if (now - lastCaptionEnableAttemptAt < 2500) return false;
     lastCaptionEnableAttemptAt = now;
-    const clicked = clickMeetButtonByText(['turn on captions', 'enable captions', 'show captions']);
-    if (!clicked) {
-      try {
-        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
-        document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true }));
-      } catch (_) {}
+    captionEnableAttempts += 1;
+
+    // Use the actual Meet CC control, not arbitrary page text. Some accounts open
+    // Settings -> Captions on first enable; handle that flow explicitly.
+    if (toggle) {
+      try { toggle.click(); } catch (_) {}
+      handleCaptionSettingsDialog().catch(() => {});
+    } else {
+      // DOM click is not always accepted in a nearly-hidden Electron window. Ask
+      // the main process to send a native Chromium "C" shortcut as a fallback.
+      requestNativeCaptionEnable();
     }
+
+    // If several DOM attempts produced neither an ON toggle nor caption text, use
+    // the native shortcut even when a nominal button was found.
+    if (captionEnableAttempts >= 2 && !captionsAppearEnabled()) requestNativeCaptionEnable();
     return false;
   }
 
@@ -622,6 +760,8 @@
     if (!ipcRenderer) return;
     const bodyObserver = new MutationObserver(() => {
       if (!isInMeeting()) return;
+      const directEntries = scanKnownCaptionTextNodes();
+      if (directEntries.length) processCaptionEntries(directEntries, 'direct-caption-text');
       ensureMeetCaptionsEnabled();
       scanMeetCaptions();
     });
@@ -635,6 +775,8 @@
         captionObservedRoot = null;
         captionActiveStrategy = null;
       }
+      const directEntries = scanKnownCaptionTextNodes();
+      if (directEntries.length) processCaptionEntries(directEntries, 'direct-caption-text');
       attachCaptionObserver();
       scanMeetCaptions();
     }, 750);

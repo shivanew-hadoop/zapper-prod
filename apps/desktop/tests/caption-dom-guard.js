@@ -23,6 +23,8 @@ assert(/strongEmpty/.test(source), 'an empty strong container must not shadow st
 assert(source.includes('isCaptionContinuation'), 'a new utterance must finalize the previous caption line');
 assert(source.includes('captionKeyToggleAttempts < 3'), 'the c-key caption toggle must be bounded');
 assert(source.includes('CAPTION_STABLE_MS'), 'words must be held until stable so Meet revisions are not shown');
+assert(mainSource.includes('CalculateNativeWinOcclusion'), 'hidden Meet window must not be throttled when covered by other apps');
+assert(/CAPTION_STABLE_MS\s*=\s*(\d+)/.test(source) && Number(source.match(/CAPTION_STABLE_MS\s*=\s*(\d+)/)[1]) <= 400, 'word-stability hold must stay small to keep captions low-latency');
 assert(source.includes('function captionDelta'), 'only new words may be emitted so a growing Meet row is not re-printed');
 
 function extractFunction(name) {

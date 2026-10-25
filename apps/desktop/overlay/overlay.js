@@ -436,10 +436,52 @@ function isDuplicateChat(payload) {
   );
 }
 
+// Automatic notices and panel text produced by Google Meet (or by Zapper itself), never typed
+// by the host or a participant. They must not appear as chat messages.
+const MEET_SYSTEM_CHAT_RE = new RegExp([
+  '^messages (?:can only be|are only|will not be|won.t be|you send|sent)\\b',
+  'deleted when (?:the )?(?:call|meeting) ends',
+  '^(?:continuous chat|chat) (?:is|was|has been) (?:turned )?(?:on|off)\\b',
+  '^(?:the )?host (?:has )?(?:turned|disabled|enabled|limited|restricted)\\b',
+  '^(?:everyone|participants) (?:can|cannot|can.t) (?:now )?(?:send|see|use|present|share|unmute|turn)\\b',
+  '^.{1,60} (?:has |have )?(?:joined|left) (?:the |this )?(?:call|meeting)\\.?$',
+  '^.{1,60} (?:was |has been )?(?:admitted|removed from|let in|denied)\\b',
+  '\\bis (?:now )?(?:presenting|pinned)\\b',
+  '^.{1,60} (?:started|stopped) (?:presenting|recording|sharing|the recording)\\b',
+  '^(?:this meeting|the meeting|this call) is (?:now )?being (?:recorded|transcribed)\\b',
+  '^(?:recording|transcript|transcription|live captions?|captions?|notes) (?:has |have |is |are |was )?(?:started|stopped|turned|on|off|ready|available)\\b',
+  '^.{1,60} (?:pinned|unpinned) a message\\b',
+  '^.{1,60} (?:raised|lowered) (?:your|their) hand\\b',
+  '^you (?:can.t|cannot) send messages\\b',
+  '^chat here\\.?$',
+  '^(?:people|everyone) in this (?:call|meeting) (?:can|will)\\b',
+  '^(?:take notes for me|notes for this meeting|gemini)\\b',
+  '^(?:meeting|call) (?:has )?(?:ended|ending)\\b',
+  '^someone wants to join\\b',
+  '\\b[a-z]{3}-[a-z]{4}-[a-z]{3}\\b',
+  'meet\\.google\\.com',
+  '^(?:joining info|copy joining info|meeting details|share this meeting link|add others|attachments?)\\b',
+  '^(?!(?:i|we|he|she|they|you|it)\\b)[^.!?]{1,50} (?:has |have )?(?:joined|left)\\.?$',
+  '\\b(?:you.re|you are) (?:now )?(?:presenting|the only (?:one|person))\\b',
+  '^(?:you|everyone|all) (?:have |has )?(?:been )?(?:admitted|removed|muted)\\b',
+  '^.{1,50} (?:turned|has turned) (?:on|off) (?:chat|captions?|(?:their |the )?(?:camera|microphone))\\b',
+  '^(?:press enter to send|send a message to everyone|no messages yet)\\b',
+  '^(?:chat|messages?) (?:is|are) (?:currently )?(?:disabled|unavailable|turned off)\\b',
+  '^only (?:the )?host(?:s)? (?:can|may)\\b',
+  '^(?:host controls|host management)\\b',
+  '^(?:learn more|got it|dismiss)\\.?$',
+  '^(?:you can.t|you cannot) (?:unmute|turn on)\\b'
+].join('|'), 'i');
+function isMeetSystemChatText(value) {
+  const t = String(value || '').replace(/\s+/g, ' ').trim();
+  return Boolean(t) && t.length < 400 && MEET_SYSTEM_CHAT_RE.test(t);
+}
+
 function isIncomingHostChat(payload) {
   const sender = String(payload?.sender || '').trim();
   const message = String(payload?.message || '').trim();
   if (!message || !sender) return false;
+  if (isMeetSystemChatText(message) || isMeetSystemChatText(sender)) return false;
   if (/^(you|me)$/i.test(sender)) return false;
   if (isMeetControlText(sender) || isMeetControlText(message)) return false;
   // Only reject panel noise when it is the sender/exact whole message. Do not drop real long messages

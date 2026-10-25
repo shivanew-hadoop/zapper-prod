@@ -182,26 +182,38 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
+  win.webContents.setUserAgent(USER_AGENT);
   win.__zapperMeetUrl = meetUrl;
   hostWindow = win;
   win.on('closed', () => {
-    if (hostWindow === win) { hostWindow = null; stopHostTimer(); }
+    if (hostWindow === win) { hostWindow = null; stopHostTimer(); stopHostChatWatcher(); }
   });
 
-  say('Host mode: opening your Google Meet…');
-  await win.loadURL(meetUrl, { userAgent: USER_AGENT });
+  // Google refuses anonymous guests ("You can't join this video call"), so the host window
+  // is signed in ONCE and remembered (persistent profile). First launch goes straight to the
+  // Google sign-in page and returns to the Meet by itself; every later launch is already signed in.
+  let askedSignIn = false;
+  if (await hostSignedIn()) {
+    say('Host mode: opening your Google Meet…');
+    await win.loadURL(meetUrl, { userAgent: USER_AGENT }).catch(() => {});
+  } else {
+    askedSignIn = true;
+    showHostWindow(win);
+    say('Host mode: sign in to Google once in the Zapper Host window. It is remembered afterwards.');
+    await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
+  }
 
   let busy = false;
   let lastClickAt = 0;
   let joinedTicks = 0;
-  let askedSignIn = false;
   let lastNavAt = Date.now();
+  let lastSignInPromptAt = 0;
   let lastProgressAt = Date.now();
   let lastState = '';
   let reloads = 0;
   const roomCode = meetUrl.split('/').pop();
   const reopenRoom = async () => {
-    if (win.isDestroyed() || Date.now() - lastNavAt < 5000) return;
+    if (win.isDestroyed() || Date.now() - lastNavAt < 1500) return; // retry almost immediately
     lastNavAt = Date.now();
     reloads += 1;
     await win.loadURL(meetUrl, { userAgent: USER_AGENT }).catch(() => {});
@@ -226,7 +238,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       if (result.state === 'joined') {
         joinedTicks += 1;
         if (joinedTicks === 1) say('Host mode: you are in the meeting with your microphone on and camera off.');
-        if (joinedTicks > 4) { stopHostTimer(); hideHostWindow(win); }
+        if (joinedTicks > 4) { stopHostTimer(); startHostChatWatcher(win, say); hideHostWindow(win); }
       } else if (result.state === 'ready') {
         if (Date.now() - lastClickAt > 4000) {
           lastClickAt = Date.now();
@@ -237,13 +249,17 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
         say('Host mode: waiting to be admitted to the meeting…');
       } else if (result.state === 'cant_join' || result.state === 'signin_required') {
         const signedIn = await hostSignedIn();
-        if (!signedIn && !askedSignIn) {
+        if (!signedIn) {
           // Google will not let an anonymous guest in: sign in ONCE in this window.
-          askedSignIn = true;
-          showHostWindow(win);
-          say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
-          await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
-        } else if (reloads < 8) {
+          if (!askedSignIn || Date.now() - lastSignInPromptAt > 20000) {
+            askedSignIn = true;
+            lastSignInPromptAt = Date.now();
+            showHostWindow(win);
+            say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
+            await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
+          }
+        } else if (reloads < 80) {
+          // Signed in but Meet still bounced us: drop the error page and try again right away.
           await reopenRoom();
         }
       } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
@@ -260,16 +276,13 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   return true;
 }
 
-// The host stays in the meeting but the window is kept out of the way (same technique as
-// the participant Meet window): nearly invisible and click-through. Ctrl+Shift+H shows it.
+// The host stays in the meeting while the window is minimized to the taskbar (click it, or
+// press Ctrl+Shift+H, to read and send chat). The taskbar button flashes on a new chat message.
 function hideHostWindow(win) {
   try {
     if (!win || win.isDestroyed()) return;
     win.__zapperHidden = true;
-    win.setIgnoreMouseEvents(true, { forward: true });
-    win.setOpacity(0.01);
-    win.setSkipTaskbar(true);
-    win.setAlwaysOnTop(false);
+    win.minimize();
   } catch (_) {}
 }
 
@@ -280,14 +293,19 @@ function showHostWindow(win) {
     win.setIgnoreMouseEvents(false);
     win.setOpacity(1);
     win.setSkipTaskbar(false);
+    if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    win.flashFrame(false);
   } catch (_) {}
 }
 
 async function hostSignedIn() {
   try {
-    const cookies = await session.fromPartition(HOST_PARTITION).cookies.get({ name: 'SAPISID' });
+    const ses = session.fromPartition(HOST_PARTITION);
+    const cookies = await ses.cookies.get({ name: 'SAPISID' });
+    // Write the sign-in to disk now so the next launch is already signed in.
+    if (cookies.length) ses.cookies.flushStore().catch(() => {});
     return cookies.length > 0;
   } catch (_) { return false; }
 }
@@ -295,16 +313,8 @@ async function hostSignedIn() {
 function toggleHostWindow() {
   const win = hostWindow;
   if (!win || win.isDestroyed()) return false;
-  if (win.__zapperHidden) {
-    win.__zapperHidden = false;
-    win.setIgnoreMouseEvents(false);
-    win.setOpacity(1);
-    win.setSkipTaskbar(false);
-    win.show();
-    win.focus();
-  } else {
-    hideHostWindow(win);
-  }
+  if (win.__zapperHidden || win.isMinimized()) showHostWindow(win);
+  else hideHostWindow(win);
   return true;
 }
 
@@ -322,7 +332,46 @@ async function setHostMic(on) {
   })()`, true).catch(() => false);
 }
 
+// After joining: open the chat panel once so it is ready when the host restores the window,
+// and flash the taskbar button when a new chat message arrives from a participant.
+let hostChatTimer = null;
+function stopHostChatWatcher() {
+  if (hostChatTimer) clearInterval(hostChatTimer);
+  hostChatTimer = null;
+}
+function startHostChatWatcher(win, say) {
+  stopHostChatWatcher();
+  let lastCount = -1;
+  let openedChat = false;
+  hostChatTimer = setInterval(async () => {
+    if (!win || win.isDestroyed()) { stopHostChatWatcher(); return; }
+    try {
+      const info = await win.webContents.executeJavaScript(`(() => {
+        const count = document.querySelectorAll('[data-message-id]').length;
+        const chatBtn = [...document.querySelectorAll('button, div[role="button"]')].find(b =>
+          /chat with everyone|in-call messages/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-tooltip') || '')));
+        const open = !!chatBtn && (chatBtn.getAttribute('aria-pressed') === 'true' || chatBtn.getAttribute('aria-expanded') === 'true');
+        return { count, hasChatButton: !!chatBtn, open };
+      })()`, true);
+      if (info.hasChatButton && !info.open && !openedChat) {
+        openedChat = true;
+        await win.webContents.executeJavaScript(`(() => {
+          const b = [...document.querySelectorAll('button, div[role="button"]')].find(b =>
+            /chat with everyone|in-call messages/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-tooltip') || '')));
+          if (b) b.click();
+        })()`, true).catch(() => {});
+      }
+      if (lastCount >= 0 && info.count > lastCount && win.isMinimized()) {
+        win.flashFrame(true);
+        say('Host mode: new chat message in your Meet window (click it on the taskbar, or press Ctrl+Shift+H).');
+      }
+      lastCount = info.count;
+    } catch (_) {}
+  }, 2000);
+}
+
 function leaveHost() {
+  stopHostChatWatcher();
   stopHostTimer();
   const win = hostWindow;
   hostWindow = null;

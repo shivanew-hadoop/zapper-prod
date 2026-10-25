@@ -102,7 +102,14 @@ const {
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
+// CalculateNativeWinOcclusion: Windows marks a window "occluded" when other apps cover it, and
+// Chromium then throttles its timers and updates. The hidden Meet window is always covered, so on
+// some laptops captions arrived 1-2 s late. Keep it running at full speed. (One combined
+// disable-features value: a second appendSwitch of the same name would replace the first.)
+app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process,CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 let overlayWindow = null;
 let privateCursorWindow = null;

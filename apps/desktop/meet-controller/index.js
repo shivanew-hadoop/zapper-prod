@@ -859,13 +859,40 @@ async function sendMeetChatToMeeting(message) {
     const inserted = insertIntoInput(input, message);
     if (!inserted) return { success: false, error: 'Could not type into Meet chat input' };
 
+    window.__zapperChatInput = input;
     await sendInput(input);
+    await sleep(450);
+    // A sent message empties the box. Text still there means Meet ignored the click.
+    const stillThere = norm(input.value !== undefined ? input.value : (input.innerText || input.textContent)).length > 0;
     try { if (window.__zapperRememberLocalOutgoingChat) window.__zapperRememberLocalOutgoingChat(message); } catch (_) {}
-    return { success: true };
+    return { success: true, pending: stillThere };
   })()`;
 
+  const chatBoxHasText = () => meetWindow.webContents.executeJavaScript(`(() => {
+    const i = window.__zapperChatInput;
+    if (!i || !i.isConnected) return false;
+    const v = i.value !== undefined ? i.value : (i.innerText || i.textContent || '');
+    return String(v).replace(/\\s+/g, ' ').trim().length > 0;
+  })()`, true).catch(() => false);
+
   try {
-    return await meetWindow.webContents.executeJavaScript(sendJs, true);
+    const result = await meetWindow.webContents.executeJavaScript(sendJs, true);
+    if (!result || !result.success || !result.pending) return result;
+
+    // The hidden Meet window ignores synthetic clicks at times. Press Enter with a real
+    // (trusted) key event on the focused chat box; retry once, then report the failure
+    // instead of pretending the message was sent.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        meetWindow.webContents.focus();
+        await sleep(150);
+        meetWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        meetWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      } catch (_) {}
+      await sleep(600);
+      if (!(await chatBoxHasText())) return { success: true };
+    }
+    return { success: false, error: 'Meet did not accept the message. Check that chat is enabled by the host, then send it again.' };
   } catch (err) {
     return { success: false, error: err.message || 'Could not send Meet chat message' };
   }

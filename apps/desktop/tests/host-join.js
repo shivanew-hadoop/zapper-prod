@@ -22,4 +22,10 @@ assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=on'), { type: 'mic
 assert.deepEqual(parseHostControlUrl('zapper://host-leave'), { type: 'leave' });
 assert.equal(parseHostControlUrl('zapper://host-mic?state=maybe'), null);
 assert.equal(parseHostControlUrl('zapper://launch'), null);
+// Chat reliability guards (read as text: these live inside Meet-page scripts).
+const fs = require('fs');
+const indexSrc = fs.readFileSync(require('path').join(__dirname, '../meet-controller/index.js'), 'utf8');
+assert(indexSrc.includes('pending: stillThere') && indexSrc.includes("keyCode: 'Return'"), 'chat send must verify the box emptied and fall back to a real Enter key');
+const hostSrc = fs.readFileSync(require('path').join(__dirname, '../meet-controller/host-join.js'), 'utf8');
+assert(hostSrc.includes('win.minimize()') && hostSrc.includes('flashFrame(true)'), 'host window must stay reachable for chat (minimized, taskbar flash)');
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

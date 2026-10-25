@@ -97,6 +97,9 @@ async function hostAutomation(hostName) {
   if (enforceDevices()) await sleep(450);
 
   const text = bodyText();
+  // Google refused / bounced an anonymous guest ("You can't join this video call",
+  // "Returning to home screen"): the desktop side signs in or reloads the room.
+  if (/returning to (the )?home screen|you can.t join this video call|check your meeting code/.test(text)) return { state: 'cant_join' };
   if (/getting ready|you.ll be able to join/.test(text)) return { state: 'getting_ready' };
   if (/asking to be joined|waiting to be admitted|someone will let you in|you.ll join when someone lets you in/.test(text)) return { state: 'waiting' };
 
@@ -104,7 +107,7 @@ async function hostAutomation(hostName) {
   const stillWrong = buttons().some(b => CAMERA_ON.test(labelOf(b)) || MIC_OFF.test(labelOf(b)));
   if (stillWrong) return { state: 'preparing' };
 
-  const PATTERNS = ['join now', 'ask to join', 'request to join', 'join meeting', 'join this call', 'join call', 'switch here'];
+  const PATTERNS = ['join now', 'ask to join', 'request to join', 'join meeting', 'join this call', 'join call', 'switch here', 'join here'];
   for (const b of buttons()) {
     if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
     const l = labelOf(b);
@@ -190,15 +193,36 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
 
   let busy = false;
   let lastClickAt = 0;
-  let attempts = 0;
   let joinedTicks = 0;
+  let askedSignIn = false;
+  let lastNavAt = Date.now();
+  let lastProgressAt = Date.now();
+  let lastState = '';
+  let reloads = 0;
+  const roomCode = meetUrl.split('/').pop();
+  const reopenRoom = async () => {
+    if (win.isDestroyed() || Date.now() - lastNavAt < 5000) return;
+    lastNavAt = Date.now();
+    reloads += 1;
+    await win.loadURL(meetUrl, { userAgent: USER_AGENT }).catch(() => {});
+  };
   stopHostTimer();
   hostTimer = setInterval(async () => {
     if (busy || win.isDestroyed()) return;
     busy = true;
     try {
-      attempts += 1;
+      const currentUrl = win.webContents.getURL() || '';
+      const onGoogleSignIn = /^https:\/\/accounts\.google\.com\//.test(currentUrl);
+      const onRoom = currentUrl.includes(roomCode);
+      // Bounced to the Meet home / landing page (e.g. "Returning to home screen"): go back.
+      if (!onGoogleSignIn && !onRoom && /^https:\/\/meet\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
+      // Signed in through Google (one-time): return to the room afterwards.
+      if (!onGoogleSignIn && !onRoom && /^https:\/\/(myaccount|www)\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
+      if (onGoogleSignIn) { lastProgressAt = Date.now(); return; } // let the host sign in undisturbed
+
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
+      if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
+
       if (result.state === 'joined') {
         joinedTicks += 1;
         if (joinedTicks === 1) say('Host mode: you are in the meeting with your microphone on and camera off.');
@@ -211,8 +235,21 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
         }
       } else if (result.state === 'waiting') {
         say('Host mode: waiting to be admitted to the meeting…');
-      } else if (result.state === 'signin_required') {
-        say('Host mode: Google needs you to sign in in the Zapper Host window (one time).');
+      } else if (result.state === 'cant_join' || result.state === 'signin_required') {
+        const signedIn = await hostSignedIn();
+        if (!signedIn && !askedSignIn) {
+          // Google will not let an anonymous guest in: sign in ONCE in this window.
+          askedSignIn = true;
+          showHostWindow(win);
+          say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
+          await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
+        } else if (reloads < 8) {
+          await reopenRoom();
+        }
+      } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
+        // Stuck on the pre-join page for 30 s: reload the room and try again.
+        lastProgressAt = Date.now();
+        await reopenRoom();
       }
     } catch (error) {
       console.error('[HostJoin]', error.message);
@@ -234,6 +271,25 @@ function hideHostWindow(win) {
     win.setSkipTaskbar(true);
     win.setAlwaysOnTop(false);
   } catch (_) {}
+}
+
+function showHostWindow(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    win.__zapperHidden = false;
+    win.setIgnoreMouseEvents(false);
+    win.setOpacity(1);
+    win.setSkipTaskbar(false);
+    win.show();
+    win.focus();
+  } catch (_) {}
+}
+
+async function hostSignedIn() {
+  try {
+    const cookies = await session.fromPartition(HOST_PARTITION).cookies.get({ name: 'SAPISID' });
+    return cookies.length > 0;
+  } catch (_) { return false; }
 }
 
 function toggleHostWindow() {

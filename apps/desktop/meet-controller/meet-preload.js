@@ -627,12 +627,45 @@
     ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: now });
   }
 
+  // Meet's recognizer keeps revising the newest words for a second or two ("wurld" ->
+  // "world"). A word is shown only once it (and everything before it) has stayed unchanged
+  // for CAPTION_STABLE_MS, so corrections happen before display instead of on screen. The
+  // whole line is still shown when the speaker pauses (final). Lower = faster, higher = steadier.
+  const CAPTION_STABLE_MS = 900;
+  let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
+  let lastShownInterim = '';
+
+  function stampCaptionWords(text) {
+    const { norm } = captionWordsOf(text);
+    const now = Date.now();
+    captionWordStamps = norm.map((word, i) =>
+      (captionWordStamps[i] && captionWordStamps[i].norm === word) ? captionWordStamps[i] : { norm: word, since: now });
+  }
+
+  function stableCaptionText(text) {
+    const { words } = captionWordsOf(text);
+    const now = Date.now();
+    let count = 0;
+    while (count < words.length && captionWordStamps[count] && now - captionWordStamps[count].since >= CAPTION_STABLE_MS) count += 1;
+    return words.slice(0, count).join(' ');
+  }
+
+  function flushStableInterim() {
+    if (!lastCaptionText) return;
+    const shown = captionDelta(stableCaptionText(lastCaptionText));
+    if (shown && shown !== lastShownInterim) {
+      lastShownInterim = shown;
+      emitMeetCaption(shown, false);
+    }
+  }
+
   function commitCaptionFinal() {
     if (!lastCaptionText) return;
     const delta = captionDelta(lastCaptionText);
     if (delta) emitMeetCaption(delta, true);
     captionCommitted = captionWordsOf(lastCaptionText).norm;
     lastCaptionFinalKey = lastCaptionKey;
+    lastShownInterim = '';
   }
 
   function scheduleCaptionFinal(text) {
@@ -661,12 +694,25 @@
   // must be committed as a final line before it is replaced.
   function isCaptionContinuation(prevKey, nextKey, prevSpeaker, nextSpeaker) {
     if (prevSpeaker && nextSpeaker && prevSpeaker.toLowerCase() !== nextSpeaker.toLowerCase()) return false;
-    const a = captionSquash(prevKey);
-    const b = captionSquash(nextKey);
-    const head = Math.min(16, a.length, b.length);
-    if (head < 4) return true;
-    return b.startsWith(a.slice(0, head)) || a.startsWith(b.slice(0, head)) ||
-      b.includes(a.slice(-head)) || a.includes(b.slice(0, head));
+    const a = captionWordsOf(prevKey).norm;
+    const b = captionWordsOf(nextKey).norm;
+    const shorter = Math.min(a.length, b.length);
+    if (!shorter) return true;
+    // Same row edited in place: most leading words are unchanged (a revised word or two is fine).
+    let lead = 0;
+    while (lead < shorter && a[lead] === b[lead]) lead += 1;
+    if (lead / shorter >= 0.6) return true;
+    // Row trimmed at the front by Meet: the old tail is the new head (or vice versa).
+    for (let m = Math.min(a.length, b.length); m >= 2; m -= 1) {
+      let tail = true, head = true;
+      for (let i = 0; i < m; i += 1) {
+        if (a[a.length - m + i] !== b[i]) tail = false;
+        if (b[b.length - m + i] !== a[i]) head = false;
+        if (!tail && !head) break;
+      }
+      if (tail || head) return true;
+    }
+    return false;
   }
 
   function processCaptionEntries(entries, strategyName) {
@@ -687,8 +733,8 @@
       lastCaptionKey = key;
       lastCaptionText = text;
       lastCaptionChangedAt = Date.now();
-      const shown = captionDelta(text);
-      if (shown) emitMeetCaption(shown, false);
+      stampCaptionWords(text);
+      flushStableInterim();
       scheduleCaptionFinal(text);
     }
     return true;
@@ -804,6 +850,8 @@
       attachCaptionObserver();
       scanMeetCaptions();
     }, 750);
+    // Words become "stable" with the passage of time, not only when the DOM changes.
+    setInterval(() => { if (isInMeeting()) flushStableInterim(); }, 200);
     log('Meet local caption observer installed (multi-strategy caption-block path)');
   }
 

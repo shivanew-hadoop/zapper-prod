@@ -22,6 +22,8 @@ assert(source.includes('caption-text-nodes'), 'leaf text-node strategy must exis
 assert(/strongEmpty/.test(source), 'an empty strong container must not shadow strategies that yield captions');
 assert(source.includes('isCaptionContinuation'), 'a new utterance must finalize the previous caption line');
 assert(source.includes('captionKeyToggleAttempts < 3'), 'the c-key caption toggle must be bounded');
+assert(source.includes('CAPTION_STABLE_MS'), 'words must be held until stable so Meet revisions are not shown');
+assert(source.includes('function captionDelta'), 'only new words may be emitted so a growing Meet row is not re-printed');
 
 function extractFunction(name) {
   const marker = `function ${name}(`;

@@ -141,6 +141,31 @@ function registerCapture(sessionId, connectionId) {
   state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [] });
   if (!state.leaderId) state.leaderId = connectionId;
 }
+function isCaptureLeader(sessionId, connectionId) {
+  return getCaptureState(sessionId).leaderId === connectionId;
+}
+function markLocalCaptionSource(sessionId, connectionId, now = Date.now()) {
+  const state = getCaptureState(sessionId);
+  const connection = state.connections.get(connectionId);
+  if (!connection) return false;
+  connection.localCaptionAt = now;
+  const leader = state.connections.get(state.leaderId);
+  // Prefer Meet's built-in captions over paid STT. Keep the first healthy local
+  // caption source as leader, and fail over only when it has gone quiet.
+  if (!leader || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000) {
+    state.leaderId = connectionId;
+  }
+  return state.leaderId === connectionId;
+}
+// Native Meet captions include all meeting speakers. While those captions are
+// flowing, do not also relay the host browser microphone's copy of the same
+// voice to PIN viewers; doing so created parallel, duplicated live captions.
+function hasFreshMeetCaptions(sessionId, now = Date.now()) {
+  const state = sessionCaptureRegistry.get(String(sessionId || ''));
+  if (!state) return false;
+  return [...state.connections.values()].some(connection =>
+    Number(connection.localCaptionAt || 0) > 0 && now - Number(connection.localCaptionAt) < 5500);
+}
 function persistCaptureSegment(sessionId, connectionId, segment) {
   const state = getCaptureState(sessionId);
   const connection = state.connections.get(connectionId);
@@ -200,7 +225,7 @@ function unregisterCapture(sessionId, connectionId) {
 
 function buildDeepgramUrl() {
   const params = new URLSearchParams({
-    model: 'nova-2', language: 'en-US', encoding: 'linear16', sample_rate: '16000', channels: '1',
+    model: 'nova-2', language: 'en', encoding: 'linear16', sample_rate: '16000', channels: '1',
     interim_results: 'true', punctuate: 'true', smart_format: 'true', endpointing: '300',
     utterance_end_ms: '1000', vad_events: 'true',
   });
@@ -216,7 +241,7 @@ wss.on('connection', (clientWs, req) => {
   const participant = sessionControl.verifyParticipantToken(sessionToken);
   const hostAudio = !participant && sessionControl.verifyHostAudioToken(sessionToken);
   const capture = participant || hostAudio;
-  if (hostAudio && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
+  if (hostAudio && req.headers.origin && !WEB_ORIGINS.includes(String(req.headers.origin))) {
     try { clientWs.close(1008, 'origin not allowed'); } catch (_) {}
     return;
   }
@@ -226,12 +251,6 @@ wss.on('connection', (clientWs, req) => {
     clientWs.close(1008, 'invalid session');
     return;
   }
-  if (!DEEPGRAM_API_KEY) {
-    try { clientWs.send(JSON.stringify({ type: 'error', message: 'Transcription service is not configured.' })); } catch (_) {}
-    clientWs.close(1011, 'stt unavailable');
-    return;
-  }
-
   const connectionId = crypto.randomUUID();
   registerCapture(capture.session.id, connectionId);
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
@@ -253,6 +272,7 @@ wss.on('connection', (clientWs, req) => {
   let lastSpeechDbTouchAt = 0;
   let limitReached = false;
   let pendingAudio = [];
+  let deepgramUnavailableNotified = false;
   const MAX_PENDING_AUDIO = 50;
 
   const sendClient = payload => {
@@ -306,6 +326,13 @@ wss.on('connection', (clientWs, req) => {
 
   function connectDeepgram() {
     if (limitReached) return;
+    if (!DEEPGRAM_API_KEY) {
+      if (!deepgramUnavailableNotified) {
+        deepgramUnavailableNotified = true;
+        sendClient({ type: 'error', message: 'Google Meet captions are unavailable and Deepgram fallback is not configured.' });
+      }
+      return;
+    }
     if (dgWs && [WebSocket.OPEN, WebSocket.CONNECTING].includes(dgWs.readyState)) return;
     dgOpen = false; dgConnecting = true;
     dgWs = new WebSocket(buildDeepgramUrl(), { headers: { Authorization: `Token ${DEEPGRAM_API_KEY}` } });
@@ -342,9 +369,12 @@ wss.on('connection', (clientWs, req) => {
         const isFinal = Boolean(msg.is_final);
         const caption = { type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) };
         sendClient(caption);
-        if (hostAudio) hostCaptionRelay.publish(capture.session.id, caption);
         const now = Date.now();
-        if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
+        const meetHasPriority = hostAudio && hasFreshMeetCaptions(capture.session.id, now);
+        if (hostAudio && !meetHasPriority) hostCaptionRelay.publish(capture.session.id, caption);
+        // The host still sees microphone captions in the browser, but these
+        // must not duplicate Meet's live captions in participant PDFs.
+        if (isFinal && !meetHasPriority) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
         if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
       } catch (error) { console.error('[STT] Deepgram parse error:', error.message); }
     });
@@ -377,8 +407,43 @@ wss.on('connection', (clientWs, req) => {
     });
   }
 
-  clientWs.on('message', audioChunk => {
-    if (limitReached || !audioChunk?.length) return;
+  clientWs.on('message', (incoming, isBinary) => {
+    if (limitReached || !incoming?.length) return;
+
+    // Primary zero-STT-cost path: Electron observes Google Meet's own live
+    // captions and sends only text here. The sender renders locally first; the
+    // backend persists final text and relays the leader's captions to any other
+    // PIN-authorized desktops. No Deepgram socket is opened for this path.
+    if (!isBinary) {
+      let localCaption = null;
+      try { localCaption = JSON.parse(incoming.toString()); } catch (_) { return; }
+      if (localCaption?.type !== 'local_caption') return;
+      const text = String(localCaption.text || '').trim().slice(0, 12000);
+      if (!text) return;
+      const isFinal = Boolean(localCaption.isFinal);
+      const capturedAt = Math.max(1, Math.min(Date.now() + 5000, Number(localCaption.capturedAt) || Date.now()));
+      const caption = { type: 'transcript', text, isFinal, speechFinal: isFinal, confidence: 1, source: 'meet-captions' };
+      // If this socket had temporarily fallen back to Deepgram, stop that paid
+      // stream immediately when native Meet captions recover.
+      if (dgWs) cleanupDeepgram();
+      pendingAudio = [];
+      markLocalCaptionSource(capture.session.id, connectionId, Date.now());
+      if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: capturedAt });
+      if (isCaptureLeader(capture.session.id, connectionId)) {
+        hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions' });
+      }
+      const now = Date.now();
+      if (now - lastSpeechDbTouchAt >= 15000) {
+        lastSpeechDbTouchAt = now;
+        setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now));
+      }
+      return;
+    }
+
+    // Fallback only: audio reaches Deepgram only when the desktop explicitly
+    // decides Meet captions are unavailable. This preserves the existing STT
+    // implementation without paying for it during the normal caption path.
+    const audioChunk = incoming;
     lastDeepgramAudioAt = Date.now();
     if (!dgWs || [WebSocket.CLOSED, WebSocket.CLOSING].includes(dgWs.readyState)) {
       pendingAudio.push(Buffer.from(audioChunk));

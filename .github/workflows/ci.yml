@@ -21,9 +21,16 @@ jobs:
       - name: Desktop syntax
         run: |
           node --check apps/desktop/main.js
+          node --check apps/desktop/audio-ws/server.js
+          node apps/desktop/tests/overlay-readiness.js
           node --check apps/desktop/preload.js
           node --check apps/desktop/overlay/overlay.js
           node --check apps/desktop/meet-controller/index.js
           node --check apps/desktop/transcriber/remoteDeepgram.js
-      - name: Web syntax
-        run: node --check apps/web/src/main.js
+      - name: Web syntax and session guards
+        run: |
+          node --check apps/web/src/main.js
+          node apps/web/tests/desktop-readiness.mjs
+          node apps/web/tests/create-session-availability.mjs
+          node apps/web/tests/device-session-ownership.mjs
+          node apps/web/tests/host-session-selection.mjs

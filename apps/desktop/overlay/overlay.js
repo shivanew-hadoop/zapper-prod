@@ -25,6 +25,7 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const appVersionEl = document.getElementById('appVersion');
 const latestVersionBtn = document.getElementById('latestVersionBtn');
+const transcriptionSourceEl = document.getElementById('transcriptionSource');
 let privateCursor = null;
 
 async function initAppVersionAndDownload() {
@@ -80,6 +81,25 @@ let transcriptRenderRestoring = false;
 let transcriptUserScrollIntent = false;
 let transcriptRenderVersion = 0;
 let finalizingSession = false;
+let hostMirrorActive = false;
+
+function setTranscriptionSource(source) {
+  if (!transcriptionSourceEl) return;
+  const normalized = String(source || '').trim().toLowerCase();
+  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting');
+  if (normalized === 'meet-captions') {
+    transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
+    transcriptionSourceEl.classList.add('source-meet');
+    return;
+  }
+  if (normalized === 'deepgram') {
+    transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
+    transcriptionSourceEl.classList.add('source-deepgram');
+    return;
+  }
+  transcriptionSourceEl.textContent = normalized === 'idle' ? 'Source: —' : 'Source: Detecting…';
+  transcriptionSourceEl.classList.add('source-detecting');
+}
 
 
 function normalizeGoogleMeetInput(value) {
@@ -286,14 +306,13 @@ function setSessionInfo(text, cls = '') {
   const cfg = await window.electronAPI.getAppConfig().catch(() => ({}));
   localStorage.setItem('backendUrl', cfg.backendUrl || DEFAULT_BACKEND_URL);
   showJoin();
+  // Zapper session authorization is the PIN. Google login is optional for
+  // meetings which allow guests; avoid launching Google Sign-In automatically.
   const login = await window.electronAPI.checkGoogleLogin().catch(() => ({ loggedIn: false }));
-  if (login.loggedIn) {
-    loginAlert.classList.add('hidden');
-    setSessionInfo('Google is signed in. Enter the 6-digit session PIN.', 'ok');
-    return;
-  }
-  showJoinError('You must log in with your Google account before joining. Google Sign-In is opening now.');
-  setTimeout(() => signinBtn.click(), 250);
+  loginAlert.classList.add('hidden');
+  setSessionInfo(login.loggedIn
+    ? 'Google is signed in. Enter the 6-digit session PIN.'
+    : 'Enter your session PIN. Google sign-in is optional; Meet may require admission.', 'ok');
 })();
 
 let overlayCollapsed = localStorage.getItem('overlayCollapsed') === 'true';
@@ -610,13 +629,8 @@ if (window.electronAPI.onGoogleSignInComplete) {
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const login = await window.electronAPI.checkGoogleLogin().catch(() => ({ loggedIn: false }));
-  if (!login.loggedIn) {
-    showJoinError('You must log in with your Google account before joining. Google Sign-In is opening now.');
-    await window.electronAPI.googleSignIn().catch(() => null);
-    return;
-  }
-
+  // Do not block captions for a guest who has a valid Zapper PIN. Meet's
+  // existing join controller decides whether the meeting admits that guest.
   const pinInput = document.getElementById('sessionPin');
   const pin = String(pinInput?.value || '').replace(/\D/g, '').slice(0, 6);
   if (!/^\d{6}$/.test(pin)) {
@@ -735,7 +749,42 @@ if (window.electronAPI.onSessionEnded) {
     finalizeActiveSession({ endBackend: false, reason: message || 'This session is no longer active. Ask the host for a new PIN.' }).catch(() => null);
   });
 }
-window.electronAPI.onTranscript(({ text, isFinal }) => {
+if (window.electronAPI.onTranscriptionSource) {
+  window.electronAPI.onTranscriptionSource((source) => setTranscriptionSource(source));
+}
+
+// The automatically joined host Meet has a separate, caption-only path.
+// It works without an overlay Google login or a second participant PIN.
+// A PIN-connected desktop still uses its existing (independent) live view.
+window.electronAPI.onHostSessionActive?.(() => {
+  if (activeSessionToken) return;
+  if (!hostMirrorActive) {
+    hostMirrorActive = true;
+    transcriptArchive = [];
+    transcriptSegments = [];
+    finalLines = [];
+    interimText = '';
+    renderTranscript();
+  }
+  if (currentPanel !== 'live') showLive('Host Meet captions are live.');
+  leaveBtn.classList.add('hidden'); // Host End Session stays in the web portal.
+  setTranscriptionSource('meet-captions');
+});
+window.electronAPI.onHostSessionStopped?.((reason) => {
+  if (!hostMirrorActive) return;
+  hostMirrorActive = false;
+  if (activeSessionToken) return;
+  finalLines = [];
+  interimText = '';
+  transcriptArchive = [];
+  transcriptSegments = [];
+  renderTranscript();
+  showJoin({ force: true });
+  setSessionInfo(reason || 'Host session ended.');
+});
+
+window.electronAPI.onTranscript(({ text, isFinal, source }) => {
+  if (source === 'meet-captions' || source === 'deepgram') setTranscriptionSource(source);
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();

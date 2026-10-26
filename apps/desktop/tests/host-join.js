@@ -12,6 +12,7 @@ Module._load = originalLoad;
 const meet = encodeURIComponent('https://meet.google.com/abc-defg-hij');
 assert.deepEqual(parseHostJoinUrl(`zapper://host-join?meet=${meet}&name=Zed%20Host`), { meetUrl: 'https://meet.google.com/abc-defg-hij', name: 'Zed Host' });
 assert.equal(parseHostJoinUrl('zapper://launch'), null, 'other zapper:// links must be ignored');
+assert.deepEqual(parseHostJoinUrl(`zapper://host-join?meet=${meet}&captureToken=host-opaque-123`), { meetUrl: 'https://meet.google.com/abc-defg-hij', name: 'Host', captureToken: 'host-opaque-123' }, 'authorized host caption token carried to desktop');
 assert.equal(parseHostJoinUrl(`zapper://host-join?meet=${encodeURIComponent('https://evil.example/abc-defg-hij')}`), null, 'non-Meet hosts must be rejected');
 assert.equal(parseHostJoinUrl(`zapper://host-join?meet=${encodeURIComponent('https://meet.google.com/abc-defg-hij/../x')}`), null, 'only exact room links');
 assert.equal(parseHostJoinUrl('https://meet.google.com/abc-defg-hij'), null, 'wrong scheme rejected');

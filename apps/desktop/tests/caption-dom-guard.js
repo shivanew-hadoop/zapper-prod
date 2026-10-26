@@ -59,7 +59,25 @@ assert.equal(cleanCaptionText('arrow_downwardJump to bottom'), '', 'standalone J
 assert.equal(cleanCaptionText('We should jump to bottom of the document'), 'We should jump to bottom of the document', 'ordinary spoken words must not be over-filtered');
 assert(!mainSource.includes("activateDeepgramFallback('caption DOM not detected')"), 'quiet meetings must not activate Deepgram just because caption DOM is absent');
 assert(mainSource.includes('localCaptionAdmitted && !deepgramFallbackActive'), 'fallback must be gated by admitted meeting audio');
-assert(mainSource.includes('>= 10000'), 'fallback must wait for sustained audible speech without captions');
+assert(mainSource.includes('>= 4000'), 'fallback must require sustained audible speech without captions');
+
+// Caption stream regressions: stable committed words must not be replayed
+// when Meet revises a single token, nor when it extends the same utterance.
+const vm = require('node:vm');
+const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionDelta', 'isCaptionContinuation'];
+const captionContext = vm.createContext({ normalizeText, captionCommitted: [] });
+for (const name of captionFns) vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, captionContext);
+vm.runInContext(`captionCommitted = captionWordsOf('Thank you for joining the call').norm;`, captionContext);
+assert.equal(captionContext.captionDelta('Thank u for joining the call'), '', 'one corrected word must not replay full caption');
+assert.equal(captionContext.captionDelta('Thank you for joining the call today'), 'today', 'same-row growth should show only new speech');
+assert.equal(captionContext.captionDelta('Coming to my roles and responsibilities'), 'Coming to my roles and responsibilities', 'different utterance must survive');
+assert.equal(captionContext.captionMostlySame('Great now it is working as expected', 'Great now its working as expected'), true,
+  'brief recognizer correction should count as duplicated text');
+assert.equal(captionContext.captionMostlySame('Yes', 'Yes'), false, 'short genuine replies must remain visible');
+assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Thank u for joining the call today', '', ''), true);
+assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Coming to my roles and responsibilities', '', ''), false);
+assert(source.includes('const CAPTION_STABLE_MS = 240'), 'interim captions should have a short stabilization window');
+assert(source.includes('}, 1300)'), 'final captions should not wait the previous 2.25 seconds');
 
 console.log(JSON.stringify({
   ok: true,

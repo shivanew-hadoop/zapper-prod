@@ -23,6 +23,9 @@ class ClientSocket extends EventEmitter {
   assert.equal(a.messages[0].source, 'host');
   assert.equal(b.messages[0].text, 'Host speaking');
   assert.equal(other.messages.length, 0);
+  assert.equal(relay.publish('room1', { text: 'Local caption', isFinal: true }, { excludeSocket: a, source: 'meet-captions' }), 1);
+  assert.equal(a.messages.filter(m => m.text === 'Local caption').length, 0);
+  assert.equal(b.messages.at(-1).source, 'meet-captions');
   b.bufferedAmount = 1024 * 1024;
   assert.equal(relay.publish('room1', { text: 'Interim', isFinal: false }), 1);
   relay.unsubscribe('room1', a);
@@ -91,7 +94,7 @@ class ClientSocket extends EventEmitter {
   serverSocket.emit('connection', foreign, fakeReq('x'));
   serverSocket.emit('connection', host, fakeReq('host'));
   assert.equal(deepgramSockets.length, 0, 'desktop should listen without sending any PCM');
-  host.emit('message', Buffer.alloc(3200));
+  host.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 1, 'host PCM opens the transcription provider');
   const providerPayload = (text, final) => Buffer.from(JSON.stringify({
@@ -104,18 +107,46 @@ class ClientSocket extends EventEmitter {
   assert.deepEqual(desktopB.messages.filter(m => m.type === 'transcript').map(m => m.source), ['host', 'host']);
   assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'another PIN cannot view host captions');
 
+  // Meet DOM caption path: text is persisted/relayed without opening Deepgram.
+  const beforeLocalCaptionProviders = deepgramSockets.length;
+  desktopA.emit('message', Buffer.from(JSON.stringify({ type: 'local_caption', text: 'caption from Meet DOM', isFinal: true, capturedAt: Date.now() })), false);
+  await new Promise(resolve => process.nextTick(resolve));
+  assert.equal(deepgramSockets.length, beforeLocalCaptionProviders, 'local Meet captions must not open Deepgram');
+  assert.equal(desktopA.messages.filter(m => m.text === 'caption from Meet DOM').length, 0, 'sender renders locally and should not receive an echo');
+  assert.equal(desktopB.messages.filter(m => m.text === 'caption from Meet DOM').at(-1)?.source, 'meet-captions');
+
   // Existing desktop -> backend transcription remains local, not rebroadcast.
-  desktopA.emit('message', Buffer.alloc(3200));
+  desktopA.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 2);
   deepgramSockets[1].emit('message', providerPayload('desktop Meet audio', true));
   assert.equal(desktopA.messages.at(-1).text, 'desktop Meet audio');
   assert.equal(desktopB.messages.filter(m => m.text === 'desktop Meet audio').length, 0);
 
+  // When native Meet captions exist, the web host microphone must not also
+  // broadcast the same voice to participants. The browser host still sees
+  // their own Deepgram result.
+  const beforeDuplicateA = desktopA.messages.length;
+  const beforeDuplicateB = desktopB.messages.length;
+  deepgramSockets[0].emit('message', providerPayload('caption from Meet DOM', true));
+  assert.equal(desktopA.messages.length, beforeDuplicateA, 'Meet takes priority over host microphone relay');
+  assert.equal(desktopB.messages.length, beforeDuplicateB, 'second viewer should not see duplicate host speech');
+  assert.equal(host.messages.at(-1).text, 'caption from Meet DOM', 'host mic preview remains working');
+
   desktopB.close();
   deepgramSockets[0].emit('message', providerPayload('after disconnect', true));
   assert.equal(desktopB.messages.filter(m => m.text === 'after disconnect').length, 0);
-  assert.equal(desktopA.messages.at(-1).text, 'after disconnect');
+  assert.equal(host.messages.at(-1).text, 'after disconnect', 'host microphone STT continues');
+  assert.equal(desktopA.messages.filter(m => m.text === 'after disconnect').length, 0, 'Meet remains the active relay source');
+  // Native desktop host token is allowed without a browser Origin; a hostile
+  // website with a different Origin is still rejected.
+  const nativeHost = new ClientSocket();
+  serverSocket.emit('connection', nativeHost, { headers: { host: 'localhost' }, url: '/stt?token=host' });
+  assert.equal(nativeHost.readyState, 1, 'native host caption relay may use authorized token without browser Origin');
+  const hostile = new ClientSocket();
+  serverSocket.emit('connection', hostile, { headers: { host: 'localhost', origin: 'https://evil.example' }, url: '/stt?token=host' });
+  assert.equal(hostile.readyState, 3, 'unauthorized browser origin must still be rejected');
+  nativeHost.close();
   desktopA.close(); foreign.close(); host.close();
   console.log(JSON.stringify({ ok: true, hostCaptionForwardedToTwoSilentPINClients: true,
     interimAndFinal: true, crossSessionIsolated: true, desktopCaptureUnchanged: true, disconnectRemoved: true }));

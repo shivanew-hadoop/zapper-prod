@@ -5,6 +5,7 @@
 // Participants then join with the PIN and the existing caption pipeline does the rest.
 // This never sends microphone audio to Zapper servers or to Deepgram: the audio goes only to Meet.
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
+const path = require('node:path');
 
 const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
@@ -24,7 +25,11 @@ function parseHostJoinUrl(rawUrl) {
   if (parsed.protocol !== 'zapper:' || parsed.hostname.toLowerCase() !== 'host-join') return null;
   const meetUrl = String(parsed.searchParams.get('meet') || '').trim().toLowerCase();
   if (!MEET_URL.test(meetUrl)) return null; // never open anything but a Meet room link
-  return { meetUrl, name: sanitizeName(parsed.searchParams.get('name')) };
+  // Optional short-lived host capture token is supplied only by the signed-in
+  // web portal after Create Session. No token means legacy host join still works.
+  const captureToken = String(parsed.searchParams.get('captureToken') || '');
+  return { meetUrl, name: sanitizeName(parsed.searchParams.get('name')),
+    ...(captureToken && captureToken.length <= 4096 ? { captureToken } : {}) };
 }
 
 // zapper://host-mic?state=on|off and zapper://host-leave — the web portal's Mute button and
@@ -179,6 +184,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      preload: path.join(__dirname, 'host-caption-preload.js'),
       autoplayPolicy: 'no-user-gesture-required',
     },
   });

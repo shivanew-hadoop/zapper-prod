@@ -6,6 +6,7 @@ let socket = null;
 let transcriptCb = () => {};
 let opened = false;
 let bufferedChunks = [];
+let bufferedLocalCaptions = [];
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let currentUrl = '';
@@ -15,6 +16,7 @@ let permanentClose = false;
 let streamGeneration = 0;
 
 const MAX_BUFFERED_CHUNKS = 40;
+const MAX_BUFFERED_LOCAL_CAPTIONS = 120;
 const BACKEND_HEARTBEAT_MS = 15000;
 const BASE_RECONNECT_MS = 3000;
 const MAX_RECONNECT_MS = 15000;
@@ -108,6 +110,11 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
       }
     }, BACKEND_HEARTBEAT_MS);
 
+    for (const caption of bufferedLocalCaptions.splice(0)) {
+      try {
+        if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(caption);
+      } catch (_) {}
+    }
     for (const chunk of bufferedChunks.splice(0)) {
       try {
         if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(chunk);
@@ -146,6 +153,7 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
         text: msg.text,
         isFinal: !!msg.isFinal,
         confidence: msg.confidence || 0,
+        source: String(msg.source || 'deepgram'),
       });
     }
   });
@@ -194,6 +202,7 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken, googleEmail = '
   reconnectAttempt = 0;
   opened = false;
   bufferedChunks = [];
+  bufferedLocalCaptions = [];
 
   connectSocket(currentUrl, false, generation);
   return true;
@@ -217,6 +226,31 @@ function sendAudioChunk(pcmBuffer) {
   }
 }
 
+
+function sendLocalCaption({ text, isFinal = false, capturedAt = Date.now() } = {}) {
+  const cleanText = String(text || '').trim().slice(0, 12000);
+  if (!cleanText || manuallyStopped || permanentClose) return false;
+  const message = JSON.stringify({
+    type: 'local_caption',
+    text: cleanText,
+    isFinal: Boolean(isFinal),
+    capturedAt: Math.max(1, Number(capturedAt) || Date.now()),
+  });
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    try { socket.send(message); return true; } catch (_) {}
+  }
+  // Final captions are the PDF ledger. Keep a bounded local queue across a
+  // short Railway/network reconnect; interim captions remain best-effort.
+  if (isFinal) {
+    bufferedLocalCaptions.push(message);
+    if (bufferedLocalCaptions.length > MAX_BUFFERED_LOCAL_CAPTIONS) bufferedLocalCaptions.shift();
+    if (!isSocketActive() && currentUrl && !reconnectTimer) {
+      scheduleReconnect(1006, 'local caption arrived while backend socket was closed', streamGeneration);
+    }
+  }
+  return false;
+}
+
 function stopRemoteTranscriptStream() {
   // Invalidate every event handler belonging to the previous stream before
   // asking its socket to close. This prevents a late close/error event from
@@ -225,6 +259,7 @@ function stopRemoteTranscriptStream() {
   manuallyStopped = true;
   permanentClose = false;
   bufferedChunks = [];
+  bufferedLocalCaptions = [];
   opened = false;
   currentUrl = '';
   reconnectAttempt = 0;
@@ -244,5 +279,6 @@ function stopRemoteTranscriptStream() {
 module.exports = {
   startRemoteTranscriptStream,
   sendAudioChunk,
+  sendLocalCaption,
   stopRemoteTranscriptStream,
 };

@@ -4,7 +4,6 @@ const leaveBtn = document.getElementById('leaveBtn');
 const signinBtn = document.getElementById('signinBtn');
 const backToLiveBtn = document.getElementById('backToLiveBtn');
 const closeBtn = document.getElementById('closeBtn');
-const exitAppBtn = document.getElementById('exitAppBtn');
 const collapseBtn = document.getElementById('collapseBtn');
 const appEl = document.getElementById('app');
 const livePanel = document.getElementById('livePanel');
@@ -334,10 +333,6 @@ collapseBtn.addEventListener('click', async () => {
 });
 setTimeout(() => { applyOverlayCollapsed(); }, 250);
 closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay(); });
-exitAppBtn?.addEventListener('click', async () => {
-  const confirmed = window.confirm('Exit Zapper completely? This will disconnect any Zapper-hosted Google Meet and stop background transcription. The session in the web portal must be ended separately.');
-  if (confirmed) await window.electronAPI.exitZapperCompletely();
-});
 
 function escapeHtml(value) {
   return String(value || '')
@@ -357,7 +352,7 @@ function formatChatTime(ts, displayTime = '') {
 function renderMeetChat() {
   if (!chatMessagesEl) return;
   if (!chatMessages.length) {
-    chatMessagesEl.textContent = 'No chat messages yet.';
+    chatMessagesEl.textContent = 'No host chat yet.';
     return;
   }
 
@@ -472,11 +467,7 @@ if (chatSendForm) {
         if (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages = chatMessages.slice(-MAX_CHAT_MESSAGES);
         renderMeetChat();
         if (chatInput) chatInput.value = '';
-        statusEl.textContent = res.pendingDelivery
-          ? 'Message queued. Waiting to reconnect to the session…'
-          : res.sessionQueued
-            ? 'Message sent. Confirming session delivery…'
-            : 'Message sent in Google Meet.';
+        statusEl.textContent = 'Chat message sent to Meet host.';
       } else {
         statusEl.textContent = (res && res.error) || 'Could not send Meet chat message.';
       }
@@ -763,14 +754,6 @@ if (window.electronAPI.onSessionEnded) {
     finalizeActiveSession({ endBackend: false, reason: message || 'This session is no longer active. Ask the host for a new PIN.' }).catch(() => null);
   });
 }
-if (window.electronAPI.onHostModeStarted) window.electronAPI.onHostModeStarted(() => {
-  if (activeSessionToken) return; // PIN participant UI has priority when on the same PC
-  showLive('Host meeting active. Captions and chat are connected to your session.');
-  leaveBtn.classList.add('hidden'); // Host leaves by End Session in the web portal
-});
-if (window.electronAPI.onHostModeEnded) window.electronAPI.onHostModeEnded(() => {
-  if (!activeSessionToken) showJoin({ force: true });
-});
 if (window.electronAPI.onTranscriptionSource) {
   window.electronAPI.onTranscriptionSource((source) => setTranscriptionSource(source));
 }
@@ -795,9 +778,6 @@ window.electronAPI.onTranscript(({ text, isFinal, source }) => {
 });
 
 
-if (window.electronAPI.onChatDelivered) window.electronAPI.onChatDelivered(() => {
-  if (currentPanel === 'live') statusEl.textContent = 'Message accepted by Zapper session relay.';
-});
 if (window.electronAPI.onMeetChat) {
   window.electronAPI.onMeetChat((payload) => {
     if (!isIncomingHostChat(payload)) return;

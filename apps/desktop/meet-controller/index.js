@@ -1,6 +1,5 @@
 // meet-controller/index.js — Google Meet inside Electron BrowserWindow with persistent Google profile
 const { BrowserWindow, screen, session } = require('electron');
-const { getMeetUserAgent } = require('./browser-compat');
 const path = require('path');
 
 const GOOGLE_PROFILE_PARTITION = 'persist:gmeet-profile';
@@ -624,10 +623,9 @@ async function joinMeet(meetUrl, guestName, onStatusUpdate) {
     safeStatus(onStatusUpdate, 'Opening Google Meet. Joining as guest...');
   }
 
-  // Meet receives a Chromium UA tied to the actual installed runtime.
-  // Do not advertise Chrome 124 irrespective of the packaged Electron version.
-  const meetUserAgent = getMeetUserAgent(getBotSession().getUserAgent());
-  await meetWindow.loadURL(url, { userAgent: meetUserAgent });
+  await meetWindow.loadURL(url, {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+  });
   await sleep(1000);
 
   // AUTOMATIC JOIN FLOW:
@@ -706,10 +704,10 @@ async function leaveMeet() {
 }
 
 
-async function sendChatToWindow(targetWindow, message) {
+async function sendMeetChatToMeeting(message) {
   const text = String(message || '').trim();
   if (!text) return { success: false, error: 'Empty chat message' };
-  if (!targetWindow || targetWindow.isDestroyed()) return { success: false, error: 'Meet window is not active' };
+  if (!meetWindow || meetWindow.isDestroyed()) return { success: false, error: 'Meet window is not active' };
 
   // Keep the customer message complete. Overlay currently caps at 8000 chars; Meet may still enforce
   // its own product-side limit, but this app should not truncate before sending.
@@ -867,7 +865,7 @@ async function sendChatToWindow(targetWindow, message) {
   })()`;
 
   try {
-    return await targetWindow.webContents.executeJavaScript(sendJs, true);
+    return await meetWindow.webContents.executeJavaScript(sendJs, true);
   } catch (err) {
     return { success: false, error: err.message || 'Could not send Meet chat message' };
   }
@@ -939,6 +937,4 @@ async function getGoogleAccountEmail() {
   }
 }
 
-async function sendMeetChatToMeeting(message) { return sendChatToWindow(meetWindow, message); }
-
-module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting, sendChatToWindow };
+module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting };

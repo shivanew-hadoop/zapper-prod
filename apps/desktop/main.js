@@ -1,5 +1,5 @@
 // main.js — Electron main process
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -51,9 +51,9 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on('second-instance', (_event, argv) => {
     handleZapperUrl((argv || []).find(arg => /^zapper:\/\//i.test(String(arg))));
-    const url = (argv || []).find(arg => /^zapper:\/\//i.test(String(arg))) || '';
-    if ((!url || /^zapper:\/\/(?:launch|host-join)(?:[/?#]|$)/i.test(url)) && overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.showInactive();
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.show();
+      overlayWindow.focus();
       enforceOverlayPrivacyAndTopmost();
     }
   });
@@ -69,85 +69,24 @@ const {
   clearGoogleProfile,
   isGoogleLoggedIn,
   sendMeetChatToMeeting,
-  sendChatToWindow,
   getGoogleAccountEmail
 } = require('./meet-controller/index');
 
-const { joinAsHost, leaveHost, setHostMic, selectHostMicrophone, isHostWebContents, isHostMeetingActive, getHostWindow, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
-const { createSessionChannel } = require('./transcriber/session-channel');
-let hostChannel = null;
-let currentHostRoom = '';
-let hostLastCaption = '';
-let hostLastFinal = false;
-function stopHostChannel() {
-  if (hostLastCaption && !hostLastFinal) hostChannel?.caption({ text: hostLastCaption, isFinal: true });
-  hostChannel?.stop();
-  hostChannel = null;
-  hostLastCaption = '';
-  hostLastFinal = false;
-  currentHostRoom = '';
-}
-function startHostChannel(token, meetUrl) {
-  stopHostChannel();
-  currentHostRoom = meetUrl;
-  if (!token) { sendStatus('Host Meet opened, but session captions need the updated API and web portal.'); return; }
-  try {
-    hostChannel = createSessionChannel({ backendUrl: BACKEND_URL, token, onEvent: packet => {
-      if (packet.type === 'transcript' && packet.text && !started) {
-        sendHostOverlayTranscript(packet);
-      } else if (packet.type === 'chat_ack') {
-        if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('chat-delivered');
-      } else if (packet.type === 'chat_message') {
-        sendMeetChat(packet);
-      } else if (packet.type === 'session_ended') {
-        leaveHost(); stopHostChannel();
-        if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-mode-ended');
-      } else if (packet.type === 'error') sendStatus('Host caption connection: ' + packet.message);
-    }});
-  } catch (error) { sendStatus('Host caption connection failed: ' + error.message); }
-}
-function sendHostOverlayTranscript(payload) {
-  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('transcript', {
-    text: payload.text, isFinal: Boolean(payload.isFinal), source: payload.source || 'meet-captions'
-  });
-}
+const { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
 // Any other zapper:// link (e.g. zapper://launch) keeps its existing behaviour.
 function handleZapperUrl(rawUrl) {
-  if (!rawUrl || forceExitScheduled) return;
+  if (!rawUrl) return;
   const hostJoin = parseHostJoinUrl(rawUrl);
   if (hostJoin) {
-    // Wait for the protected overlay to initialize before starting Meet on cold launch.
-    (async () => {
-      await app.whenReady();
-      if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
-      if (overlayWindow.webContents.isLoadingMainFrame()) {
-        await new Promise(resolve => {
-          const timeout = setTimeout(resolve, 8000);
-          overlayWindow.webContents.once('did-finish-load', () => { clearTimeout(timeout); resolve(); });
-        });
-      }
-      if (!overlayWindow.isDestroyed()) overlayWindow.showInactive();
-      if (currentHostRoom !== hostJoin.meetUrl || !hostChannel) startHostChannel(hostJoin.captureToken, hostJoin.meetUrl);
-      await joinAsHost(hostJoin, message => {
-        sendStatus(message);
-        if (message === 'Host mode: joined and verified.') {
-          if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-mode-started');
-        }
-      });
-    })().catch(error => sendStatus('Host mode could not join: ' + error.message));
+    joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
     return;
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') {
-    leaveHost(); stopHostChannel();
-    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-mode-ended');
-    return;
-  }
-  if (control.type === 'device') { selectHostMicrophone(control.microphone).catch(() => {}); return; }
+  if (control.type === 'leave') { leaveHost().catch(err => sendStatus('Host close failed: ' + err.message)); return; }
   if (control.type === 'mic') {
     setHostMic(control.on).then(ok => { if (ok) sendStatus(control.on ? 'Host microphone unmuted.' : 'Host microphone muted.'); });
   }
@@ -158,8 +97,6 @@ const {
   startRemoteTranscriptStream,
   sendAudioChunk,
   sendLocalCaption,
-  sendRemoteChat,
-  isRemoteTranscriptConnected,
   stopRemoteTranscriptStream
 } = require('./transcriber/remoteDeepgram');
 
@@ -168,7 +105,6 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 
 let overlayWindow = null;
-let appTray = null;
 let privateCursorWindow = null;
 let started = false;
 let remoteSttStarted = false;
@@ -471,21 +407,8 @@ function sendMeetChat(payload) {
   overlayWindow.webContents.send('meet-chat', payload);
 }
 
-ipcMain.on('host-mic-result', (event, payload) => {
-  if (!isHostWebContents(event.sender)) return;
-  sendStatus(payload?.success ? `Google Meet microphone selected: ${payload.label || 'default'}`
-    : `Microphone selection failed: ${payload?.error || 'Selected device not found'}. Open Meet settings to select it manually.`);
-});
-
-ipcMain.on('meet-chat-message', (event, payload) => {
+ipcMain.on('meet-chat-message', (_, payload) => {
   if (!payload || !payload.message) return;
-  // Only relay captions/chat from our actual Meet windows. Never trust
-  // arbitrary webContents, and avoid replaying Meet UI chrome as application chat.
-  if (isHostWebContents(event.sender)) {
-    const sender = String(payload.sender || 'Host').trim() || 'Host';
-    const msg = String(payload.message || '').trim();
-    if (msg) hostChannel?.chat(msg, sender);
-  }
   sendMeetChat({
     sender: String(payload.sender || 'Host').trim() || 'Host',
     message: String(payload.message || '').trim(),
@@ -521,8 +444,7 @@ function scheduleDeepgramFallbackCheck() {
   captionFallbackTimer = null;
 }
 
-ipcMain.on('meet-caption-state', (event, payload) => {
-  if (isHostWebContents(event.sender)) { if (payload?.state === 'ready') sendStatus('Host Google Meet captions connected.'); return; }
+ipcMain.on('meet-caption-state', (_, payload) => {
   if (!started || !payload) return;
   const state = String(payload.state || '');
   if (state === 'admitted') {
@@ -544,17 +466,7 @@ ipcMain.on('meet-caption-state', (event, payload) => {
   }
 });
 
-ipcMain.on('meet-caption-message', (event, payload) => {
-  if (isHostWebContents(event.sender)) {
-    const text = String(payload?.text || '').trim();
-    if (!text) return;
-    hostLastCaption = text;
-    hostLastFinal = Boolean(payload.isFinal);
-    hostChannel?.caption({ text, isFinal: hostLastFinal, capturedAt: payload.capturedAt || Date.now() });
-    if (!started) sendHostOverlayTranscript({ text, isFinal: hostLastFinal });
-    return;
-  }
-
+ipcMain.on('meet-caption-message', (_, payload) => {
   if (!started || !payload) return;
   const text = String(payload.text || '').trim();
   if (!text) return;
@@ -580,19 +492,7 @@ ipcMain.on('meet-caption-message', (event, payload) => {
 ipcMain.handle('send-meet-chat-message', async (_, message) => {
   const text = String(message || '').trim();
   if (!text) return { success: false, error: 'Empty chat message' };
-  const target = !started && isHostMeetingActive() ? getHostWindow() : null;
-  // Deliver to authenticated session members independently of the Meet chat
-  // widget. Meet chat is best effort; a hidden/closed Meet side-panel cannot
-  // prevent the host or participant from exchanging messages in Zapper.
-  const nativeResult = await (target ? sendChatToWindow(target, text) : sendMeetChatToMeeting(text));
-  const relayConnected = started ? isRemoteTranscriptConnected() : Boolean(hostChannel?.isConnected());
-  const relayQueued = started ? sendRemoteChat(text, 'Participant')
-    : Boolean(hostChannel?.chat(text, 'Host'));
-  if (nativeResult?.success || relayQueued) {
-    return { success: true, meetSent: Boolean(nativeResult?.success),
-      sessionQueued: relayQueued, pendingDelivery: relayQueued && !relayConnected };
-  }
-  return nativeResult;
+  return await sendMeetChatToMeeting(text);
 });
 
 function sendLoginRequired(msg) {
@@ -702,34 +602,9 @@ function startSessionStatusPoller(sessionToken) {
   sessionStatusPoller.unref?.();
 }
 
-function showOverlayFromTray() {
-  if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.showInactive();
-    enforceOverlayPrivacyAndTopmost();
-  }
-}
-
-function installTrayMenu() {
-  if (appTray) return;
-  try {
-    appTray = new Tray(path.join(__dirname, 'assets', 'tray.png'));
-    appTray.setToolTip('Zapper — right-click to show or exit completely');
-    appTray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Show Zapper Overlay', click: showOverlayFromTray },
-      { label: 'Hide Zapper Overlay', click: () => { if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide(); } },
-      { type: 'separator' },
-      { label: 'Exit Zapper Completely', click: () => { void terminateApplicationCompletely(); } },
-    ]));
-    appTray.on('double-click', showOverlayFromTray);
-  } catch (error) { console.error('[Tray] Could not initialize exit menu:', error.message); }
-}
-
 async function terminateApplicationCompletely() {
   if (forceExitScheduled) return;
   forceExitScheduled = true;
-  stopHostChannel();
-  leaveHost();
 
   resetRuntimeFlags();
   stopSessionStatusPoller();
@@ -741,6 +616,8 @@ async function terminateApplicationCompletely() {
     new Promise(resolve => setTimeout(resolve, 300))
   ]);
 
+  // Close Zapper-managed Chrome/Edge before exiting. Do not kill other browser sessions.
+  await Promise.race([leaveHost().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1500))]);
   try { closeGoogleSignInWindow(); } catch (_) {}
   stopRemoteTranscriptStream();
   stopAudioWSServer();
@@ -749,16 +626,15 @@ async function terminateApplicationCompletely() {
   stopOverlayManualResize();
   destroyPrivateCursorWindow();
   try { globalShortcut.unregisterAll(); } catch (_) {}
-  try { if (appTray) appTray.destroy(); } catch (_) {}
-  appTray = null;
 
   // Close/destroy every Electron window, including hidden Meet/sign-in windows.
   for (const win of BrowserWindow.getAllWindows()) {
     try { if (!win.isDestroyed()) win.destroy(); } catch (_) {}
   }
 
-  // Explicit Exit App or tray Quit uses app.exit() after stopping both Meet
-  // windows. Overlay X remains Hide; it must never terminate a live session.
+  // app.exit() is intentional here. The overlay X means "Exit Zapper", not
+  // "hide to background". This guarantees the single-instance lock and all
+  // background resources are released before the user launches Zapper again.
   setTimeout(() => {
     try { app.exit(0); } catch (_) { process.exit(0); }
   }, 25);
@@ -992,8 +868,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
-      if (payload.type === 'chat_message') { sendMeetChat(payload); return; }
-      if (payload.type === 'chat_ack') { if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('chat-delivered'); return; }
       if (payload.type === 'speech_started') {
         overlayWindow.webContents.send('speech-started');
         return;
@@ -1091,16 +965,13 @@ ipcMain.handle('leave-meet', async () => {
   return { success: true };
 });
 
-ipcMain.handle('exit-zapper-completely', async () => {
-  // Explicit user command, unlike X/Hide. Do not retain a background singleton.
-  void terminateApplicationCompletely();
-  return { success: true };
-});
-
 ipcMain.handle('close-overlay', async () => {
-  // Hide only the UI. Keep the host Meet, participant capture and relay alive.
-  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
-  return { success: true, background: true };
+  // The X button is a true application exit. No tray/background Electron
+  // process is intentionally retained after this action.
+  terminateApplicationCompletely().catch(() => {
+    try { app.exit(0); } catch (_) { process.exit(0); }
+  });
+  return { success: true };
 });
 
 ipcMain.handle('close-google-signin-window', async () => {
@@ -1161,7 +1032,6 @@ app.whenReady().then(async () => {
 
   // Renderer owns the startup sequence: Google Sign-In first, then 6-digit session PIN.
   createOverlayWindow();
-  installTrayMenu();
   // App started by the portal's zapper://host-join link (Windows passes it in argv).
   handleZapperUrl(process.argv.find(arg => /^zapper:\/\//i.test(String(arg))));
 
@@ -1188,10 +1058,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => {
-  try { if (appTray) appTray.destroy(); } catch (_) {}
-  appTray = null;
-  leaveHost();
-  stopHostChannel();
+  void leaveHost().catch(() => {});
   stopOverlayTopmostGuard();
   stopOverlayPointerGuard();
   destroyPrivateCursorWindow();
@@ -1201,6 +1068,7 @@ app.on('will-quit', () => {
 app.on('window-all-closed', async () => {
   resetRuntimeFlags();
   await leaveMeet().catch(() => {});
+  await leaveHost().catch(() => {});
   stopRemoteTranscriptStream();
   stopAudioWSServer();
   app.quit();

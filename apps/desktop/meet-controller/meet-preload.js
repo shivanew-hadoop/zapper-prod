@@ -29,8 +29,7 @@
       ws.onerror = (e) => log('Audio relay error', e && e.message ? e.message : e);
     } catch (_) { setTimeout(connectWS, 700); }
   }
-  const isHostMode = process.argv.includes('--zapper-host-mode');
-  if (!isHostMode) connectWS();
+  connectWS();
 
 
   // Google Meet chat bridge.
@@ -632,7 +631,7 @@
   // "world"). A word is shown only once it (and everything before it) has stayed unchanged
   // for CAPTION_STABLE_MS, so corrections happen before display instead of on screen. The
   // whole line is still shown when the speaker pauses (final). Lower = faster, higher = steadier.
-  const CAPTION_STABLE_MS = 450;
+  const CAPTION_STABLE_MS = 900;
   let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
   let lastShownInterim = '';
 
@@ -674,10 +673,10 @@
     const scheduledKey = keyText(text);
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
-      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 1350) {
+      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2100) {
         commitCaptionFinal();
       }
-    }, 1450);
+    }, 2250);
   }
 
   function markCaptionReady(strategyName) {
@@ -852,7 +851,7 @@
       scanMeetCaptions();
     }, 750);
     // Words become "stable" with the passage of time, not only when the DOM changes.
-    setInterval(() => { if (isInMeeting()) flushStableInterim(); }, 100);
+    setInterval(() => { if (isInMeeting()) flushStableInterim(); }, 200);
     log('Meet local caption observer installed (multi-strategy caption-block path)');
   }
 
@@ -1313,8 +1312,6 @@
     }
   }
 
-  // Host needs captions/chat, not the participant-only remote PCM/Deepgram tap.
-  if (isHostMode) return;
   const OrigRTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
   if (!OrigRTC) return;
 

@@ -1,6 +1,6 @@
 {
   "name": "@zapper/desktop",
-  "version": "4.3.3",
+  "version": "4.3.32",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis --x64",
-    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/browser-compat.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/session-channel.js && node tests/host-microphone-selection.js && node tests/host-microphone-fallback.js && node tests/meet-browser-compat.js && node tests/host-stuck-recovery.js && node tests/exit-lifecycle.js",
+    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/host-browser.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/host-browser.js",
     "dist:portable": "electron-builder --win portable --x64",
     "test:chat": "node tests/chat-noise.js"
   },
@@ -16,8 +16,8 @@
     "ws": "^8.17.0"
   },
   "devDependencies": {
-    "electron": "45.0.0",
-    "electron-builder": "26.18.0"
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "in.zapper.desktop",
@@ -42,7 +42,6 @@
       "app-config.json",
       "overlay/**/*",
       "meet-controller/**/*",
-      "assets/**/*",
       "transcriber/**/*",
       "audio-ws/**/*",
       "package.json",

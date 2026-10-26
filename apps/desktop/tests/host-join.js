@@ -22,15 +22,4 @@ assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=on'), { type: 'mic
 assert.deepEqual(parseHostControlUrl('zapper://host-leave'), { type: 'leave' });
 assert.equal(parseHostControlUrl('zapper://host-mic?state=maybe'), null);
 assert.equal(parseHostControlUrl('zapper://launch'), null);
-// Chat reliability guards (read as text: these live inside Meet-page scripts).
-const fs = require('fs');
-const indexSrc = fs.readFileSync(require('path').join(__dirname, '../meet-controller/index.js'), 'utf8');
-assert(indexSrc.includes('pending: stillThere') && indexSrc.includes("keyCode: 'Return'"), 'chat send must verify the box emptied and fall back to a real Enter key');
-const hostSrc = fs.readFileSync(require('path').join(__dirname, '../meet-controller/host-join.js'), 'utf8');
-assert(hostSrc.includes('setOpacity(0.01)') && hostSrc.includes('setSkipTaskbar(true)') && !hostSrc.includes('win.minimize()'), 'host window must be concealed (see-through, no taskbar), not minimized');
-assert(hostSrc.includes('restartFresh') && hostSrc.includes('win.destroy()'), 'cant_join must close the window and start a new one');
-assert(hostSrc.includes('show: false') && hostSrc.includes('showInactive()'), 'host window must never pop up while joining');
-const mainSrc2 = fs.readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
-assert(mainSrc2.includes('silentHostCommand') && mainSrc2.includes("startupControl.type === 'leave'"), 'End Session must close Zapper, never open it');
-assert(hostSrc.includes("HOST_PARTITION = 'persist:gmeet-profile'"), 'host must reuse the existing signed-in Google profile');
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

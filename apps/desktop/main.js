@@ -50,11 +50,8 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    const zapperUrl = (argv || []).find(arg => /^zapper:\/\//i.test(String(arg)));
-    handleZapperUrl(zapperUrl);
-    // Host commands from the portal (join, mute, end) run silently: they must not pop the overlay up.
-    const silentHostCommand = Boolean(zapperUrl && (parseHostJoinUrl(zapperUrl) || parseHostControlUrl(zapperUrl)));
-    if (!silentHostCommand && overlayWindow && !overlayWindow.isDestroyed()) {
+    handleZapperUrl((argv || []).find(arg => /^zapper:\/\//i.test(String(arg))));
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.show();
       overlayWindow.focus();
       enforceOverlayPrivacyAndTopmost();
@@ -75,7 +72,7 @@ const {
   getGoogleAccountEmail
 } = require('./meet-controller/index');
 
-const { joinAsHost, leaveHost, setHostMic, toggleHostWindow, isHostActive, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
+const { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -89,12 +86,7 @@ function handleZapperUrl(rawUrl) {
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') {
-    // End Session in the portal: stop everything this app is running and close Zapper completely.
-    leaveHost();
-    terminateApplicationCompletely().catch(() => { try { app.exit(0); } catch (_) { process.exit(0); } });
-    return;
-  }
+  if (control.type === 'leave') { leaveHost(); return; }
   if (control.type === 'mic') {
     setHostMic(control.on).then(ok => { if (ok) sendStatus(control.on ? 'Host microphone unmuted.' : 'Host microphone muted.'); });
   }
@@ -358,122 +350,8 @@ function normalizeGoogleMeetUrl(rawUrl) {
   }
 }
 
-// SILENCE-GUARD-BEGIN
-// ---------------------------------------------------------------------------------------------
-// Silence guard. If nobody speaks (no caption arrives) for 10 minutes the overlay asks the user
-// to confirm with a Continue button. With no answer by minute 15 the transcript so far is saved
-// as a PDF, the Meet connections and the overlay are closed and Zapper exits.
-// ---------------------------------------------------------------------------------------------
-const SILENCE_PROMPT_MS = Number(process.env.ZAPPER_SILENCE_PROMPT_MS) || 10 * 60 * 1000;
-const SILENCE_END_MS = Number(process.env.ZAPPER_SILENCE_END_MS) || 15 * 60 * 1000;
-const SILENCE_TICK_MS = Math.min(5000, Math.max(50, Math.floor(SILENCE_PROMPT_MS / 10)));
-const SILENCE_EXIT_DELAY_MS = Number(process.env.ZAPPER_SILENCE_EXIT_MS) || 10000;
-let lastSpeechAt = 0;
-let silenceTimer = null;
-let silencePromptShown = false;
-let silenceEnding = false;
-let sessionFinals = []; // [{ text, at }] final caption lines of this run (for the PDF)
-
-function noteSpeechActivity(text, isFinal) {
-  lastSpeechAt = Date.now();
-  if (silencePromptShown) clearSilencePrompt();
-  if (isFinal && text) {
-    sessionFinals.push({ text: String(text).trim(), at: lastSpeechAt });
-    if (sessionFinals.length > 20000) sessionFinals = sessionFinals.slice(-20000);
-  }
-}
-
-function clearSilencePrompt() {
-  silencePromptShown = false;
-  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('silence-clear');
-}
-
-function stopSilenceMonitor() {
-  if (silenceTimer) clearInterval(silenceTimer);
-  silenceTimer = null;
-  silencePromptShown = false;
-}
-
-function startSilenceMonitor() {
-  stopSilenceMonitor();
-  lastSpeechAt = Date.now();
-  silenceEnding = false;
-  sessionFinals = [];
-  silenceTimer = setInterval(() => {
-    if (!started || silenceEnding) return;
-    const idle = Date.now() - lastSpeechAt;
-    if (idle >= SILENCE_END_MS) { endSessionForSilence().catch(() => {}); return; }
-    if (idle < SILENCE_PROMPT_MS) return;
-    if (!overlayWindow || overlayWindow.isDestroyed()) return;
-    if (!silencePromptShown) {
-      silencePromptShown = true;
-      // The overlay may be hidden (closed with X): bring it back so the question is seen.
-      try { if (!overlayWindow.isVisible()) overlayWindow.showInactive(); } catch (_) {}
-      try { overlayWindow.flashFrame(true); } catch (_) {}
-      enforceOverlayPrivacyAndTopmost();
-    }
-    overlayWindow.webContents.send('silence-prompt', { endsAt: lastSpeechAt + SILENCE_END_MS, silentMs: idle });
-  }, SILENCE_TICK_MS);
-  silenceTimer.unref?.();
-}
-
-async function writeTranscriptPdf(lines, startedAtMs) {
-  const esc = v => String(v).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const stamp = ms => new Date(ms).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  const body = lines.length
-    ? lines.map(l => `<p><span class="t">${esc(stamp(l.at))}</span> ${esc(l.text)}</p>`).join('')
-    : '<p class="empty">No captions were captured.</p>';
-  const html = `<!doctype html><meta charset="utf-8"><style>
-    body{font:13px/1.55 "Segoe UI",Arial,sans-serif;color:#111;margin:0}
-    h1{font-size:20px;margin:0 0 4px}.m{color:#555;margin:0 0 18px}
-    p{margin:0 0 8px}.t{color:#777;font-size:11px;margin-right:8px}.empty{color:#777}</style>
-    <h1>Zapper transcript</h1>
-    <p class="m">${esc(new Date(startedAtMs).toLocaleString('en-IN'))} to ${esc(new Date().toLocaleString('en-IN'))} · saved automatically after 15 minutes of silence</p>${body}`;
-  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
-  try {
-    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-    const pdf = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true });
-    const dir = path.join(app.getPath('documents'), 'Zapper Transcripts');
-    fs.mkdirSync(dir, { recursive: true });
-    const d = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    const file = path.join(dir, `Zapper-Transcript-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.pdf`);
-    fs.writeFileSync(file, pdf);
-    return file;
-  } finally {
-    try { win.destroy(); } catch (_) {}
-  }
-}
-
-async function endSessionForSilence() {
-  if (silenceEnding) return;
-  silenceEnding = true;
-  stopSilenceMonitor();
-  const startedAtMs = sessionFinals.length ? sessionFinals[0].at : Date.now();
-  const lines = sessionFinals.slice();
-  if (localCaptionLastText && !localCaptionLastWasFinal) lines.push({ text: localCaptionLastText, at: localCaptionLastAt || Date.now() });
-  let pdfPath = '';
-  try { pdfPath = await writeTranscriptPdf(lines, startedAtMs); } catch (e) { console.error('[Silence] PDF failed:', e.message); }
-  await stopActiveCaptureRuntime('Disconnected after 15 minutes of silence.').catch(() => {});
-  try { leaveHost(); } catch (_) {}
-  const message = 'No speech for 15 minutes, so Zapper disconnected.' + (pdfPath ? ` Transcript saved: ${pdfPath}` : '');
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    try { overlayWindow.showInactive(); } catch (_) {}
-    overlayWindow.webContents.send('session-ended', message);
-  }
-  setTimeout(() => { terminateApplicationCompletely().catch(() => { try { app.exit(0); } catch (_) {} }); }, SILENCE_EXIT_DELAY_MS);
-}
-
-ipcMain.handle('silence-continue', async () => {
-  lastSpeechAt = Date.now();
-  if (silencePromptShown) clearSilencePrompt();
-  return { success: true };
-});
-// SILENCE-GUARD-END
-
 function resetRuntimeFlags() {
   stopSessionStatusPoller();
-  stopSilenceMonitor();
   started = false;
   remoteSttStarted = false;
   audioRelayStarted = false;
@@ -592,7 +470,6 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   if (!started || !payload) return;
   const text = String(payload.text || '').trim();
   if (!text) return;
-  noteSpeechActivity(text, Boolean(payload.isFinal));
   localCaptionReady = true;
   localCaptionLastAt = Number(payload.capturedAt) || Date.now();
   localCaptionLastText = text;
@@ -941,7 +818,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     activeCaptureSessionId = String(sessionId || '');
     activeCaptureSessionToken = String(sessionToken || '');
     activeCaptureGoogleEmail = String(googleEmail || '');
-    startSilenceMonitor();
 
     meetOnlyFallbackNoticeSent = false;
     sendTranscriptionSource('detecting');
@@ -998,7 +874,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       // If this desktop has Meet captions, render those directly and ignore
       // backend relay echoes/other viewers to prevent duplicate lines. Deepgram
       // transcripts are accepted only while fallback is explicitly active.
-      if (payload.text) noteSpeechActivity(payload.text, !localCaptionReady && Boolean(payload.isFinal));
       if (GOOGLE_CAPTIONS_ONLY_TEST && payload.source === 'deepgram') return;
       if (localCaptionReady && payload.source !== 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
@@ -1088,14 +963,9 @@ ipcMain.handle('leave-meet', async () => {
   return { success: true };
 });
 
-ipcMain.handle('close-overlay', async (_, opts) => {
-  // With a live session the X only HIDES the overlay: Meet capture, captions and the host keep
-  // running behind the scenes (Ctrl+Shift+T or starting Zapper again brings the overlay back).
-  if (opts && opts.keepRunning && (started || isHostActive()) && overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.hide();
-    return { success: true, background: true };
-  }
-  // With nothing running the X is a true application exit.
+ipcMain.handle('close-overlay', async () => {
+  // The X button is a true application exit. No tray/background Electron
+  // process is intentionally retained after this action.
   terminateApplicationCompletely().catch(() => {
     try { app.exit(0); } catch (_) { process.exit(0); }
   });
@@ -1153,12 +1023,6 @@ ipcMain.handle('overlay-click-through', (_, enabled) => {
 });
 
 app.whenReady().then(async () => {
-  // Started only by the portal's End Session link (Zapper was not running): nothing to stop, so
-  // exit at once instead of opening the app.
-  const startupUrl = process.argv.find(arg => /^zapper:\/\//i.test(String(arg)));
-  const startupControl = startupUrl && parseHostControlUrl(startupUrl);
-  if (startupControl && startupControl.type === 'leave') { app.exit(0); return; }
-
   // Keep one stable localhost audio relay for the whole desktop process.
   // Individual Leave/Rejoin cycles replace only the audio callback.
   startAudioWSServer();

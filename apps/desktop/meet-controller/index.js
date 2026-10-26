@@ -262,11 +262,6 @@ function createMeetWindow(onStatusUpdate) {
     },
   });
 
-  // Indian English: Meet picks its page/caption language from the browser language.
-  meetWindow.webContents.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-    'en-IN,en;q=0.9'
-  );
   meetWindow.webContents.setAudioMuted(true); // no speaker/system audio leakage
   meetWindow.setIgnoreMouseEvents(true, { forward: true });
   meetWindow.setContentProtection(true);
@@ -864,40 +859,13 @@ async function sendMeetChatToMeeting(message) {
     const inserted = insertIntoInput(input, message);
     if (!inserted) return { success: false, error: 'Could not type into Meet chat input' };
 
-    window.__zapperChatInput = input;
     await sendInput(input);
-    await sleep(450);
-    // A sent message empties the box. Text still there means Meet ignored the click.
-    const stillThere = norm(input.value !== undefined ? input.value : (input.innerText || input.textContent)).length > 0;
     try { if (window.__zapperRememberLocalOutgoingChat) window.__zapperRememberLocalOutgoingChat(message); } catch (_) {}
-    return { success: true, pending: stillThere };
+    return { success: true };
   })()`;
 
-  const chatBoxHasText = () => meetWindow.webContents.executeJavaScript(`(() => {
-    const i = window.__zapperChatInput;
-    if (!i || !i.isConnected) return false;
-    const v = i.value !== undefined ? i.value : (i.innerText || i.textContent || '');
-    return String(v).replace(/\\s+/g, ' ').trim().length > 0;
-  })()`, true).catch(() => false);
-
   try {
-    const result = await meetWindow.webContents.executeJavaScript(sendJs, true);
-    if (!result || !result.success || !result.pending) return result;
-
-    // The hidden Meet window ignores synthetic clicks at times. Press Enter with a real
-    // (trusted) key event on the focused chat box; retry once, then report the failure
-    // instead of pretending the message was sent.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        meetWindow.webContents.focus();
-        await sleep(150);
-        meetWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-        meetWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
-      } catch (_) {}
-      await sleep(600);
-      if (!(await chatBoxHasText())) return { success: true };
-    }
-    return { success: false, error: 'Meet did not accept the message. Check that chat is enabled by the host, then send it again.' };
+    return await meetWindow.webContents.executeJavaScript(sendJs, true);
   } catch (err) {
     return { success: false, error: err.message || 'Could not send Meet chat message' };
   }

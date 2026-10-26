@@ -6,9 +6,7 @@
 // This never sends microphone audio to Zapper servers or to Deepgram: the audio goes only to Meet.
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
 
-// The SAME signed-in Google profile the app already uses (Google Sign-In in the overlay), so the host
-// joins with the same Gmail and is not asked to sign in again.
-const HOST_PARTITION = 'persist:gmeet-profile';
+const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -128,6 +126,7 @@ function allowMediaForHostSession() {
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['media', 'microphone', 'camera', 'notifications'].includes(permission));
   });
+  try { ses.setPermissionCheckHandler((_wc, permission) => ['media', 'microphone', 'camera', 'notifications'].includes(permission)); } catch (_) {}
   return ses;
 }
 
@@ -147,13 +146,13 @@ function stopHostTimer() {
   hostTimer = null;
 }
 
-async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {}) {
+async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   if (!MEET_URL.test(String(meetUrl || ''))) throw new Error('Invalid Google Meet link.');
   const say = msg => { try { onStatus(msg); } catch (_) {} };
 
   if (hostWindow && !hostWindow.isDestroyed()) {
     // Already hosting this room? Just bring it forward; otherwise replace it.
-    if (hostWindow.__zapperMeetUrl === meetUrl && !internal.fresh) return true; // already hosting it (stays hidden)
+    if (hostWindow.__zapperMeetUrl === meetUrl) { hostWindow.show(); return true; }
     stopHostTimer();
     try { hostWindow.destroy(); } catch (_) {}
     hostWindow = null;
@@ -170,8 +169,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
     width, height,
     x: display.workArea.x + display.workArea.width - width - 12,
     y: display.workArea.y + display.workArea.height - height - 12,
-    show: false,
-    skipTaskbar: true,
+    show: true,
     title: 'Zapper Host — Google Meet',
     autoHideMenuBar: true,
     backgroundColor: '#202124',
@@ -186,11 +184,6 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
   });
   win.__zapperMeetUrl = meetUrl;
   hostWindow = win;
-  // Joining happens out of sight: rendered but see-through, no taskbar button (Meet needs a rendered
-  // window to finish "Getting ready"). Only a one-time Google sign-in makes it visible.
-  win.setOpacity(0.01);
-  win.__zapperHidden = true;
-  win.showInactive();
   win.on('closed', () => {
     if (hostWindow === win) { hostWindow = null; stopHostTimer(); }
   });
@@ -205,17 +198,6 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
   let lastNavAt = Date.now();
   let lastProgressAt = Date.now();
   let lastState = '';
-  // "You can't join this video call": close this window and start again with a brand-new one.
-  let restarting = false;
-  const restartFresh = () => {
-    if (restarting) return;
-    restarting = true;
-    const attempt = (internal.restarts || 0) + 1;
-    stopHostTimer();
-    if (hostWindow === win) hostWindow = null;
-    try { win.destroy(); } catch (_) {}
-    setTimeout(() => { joinAsHost({ meetUrl, name }, onStatus, { fresh: true, restarts: attempt }).catch(() => {}); }, 400);
-  };
   let reloads = 0;
   const roomCode = meetUrl.split('/').pop();
   const reopenRoom = async () => {
@@ -237,8 +219,6 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
       // Signed in through Google (one-time): return to the room afterwards.
       if (!onGoogleSignIn && !onRoom && /^https:\/\/(myaccount|www)\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
       if (onGoogleSignIn) { lastProgressAt = Date.now(); return; } // let the host sign in undisturbed
-      // Past any sign-in: the rest of the joining happens out of sight.
-      if (!win.__zapperHidden && !win.__zapperUserShown) { win.__zapperHidden = true; win.setOpacity(0.01); win.setSkipTaskbar(true); }
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
@@ -263,9 +243,6 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
           showHostWindow(win);
           say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
           await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
-        } else if (result.state === 'cant_join' && (internal.restarts || 0) < 60) {
-          restartFresh();
-          return;
         } else if (reloads < 8) {
           await reopenRoom();
         }
@@ -320,14 +297,12 @@ function toggleHostWindow() {
   if (!win || win.isDestroyed()) return false;
   if (win.__zapperHidden) {
     win.__zapperHidden = false;
-    win.__zapperUserShown = true;
     win.setIgnoreMouseEvents(false);
     win.setOpacity(1);
     win.setSkipTaskbar(false);
     win.show();
     win.focus();
   } else {
-    win.__zapperUserShown = false;
     hideHostWindow(win);
   }
   return true;
@@ -354,6 +329,4 @@ function leaveHost() {
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-function isHostActive() { return Boolean(hostWindow && !hostWindow.isDestroyed()); }
-
-module.exports = { isHostActive, joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+module.exports = { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };

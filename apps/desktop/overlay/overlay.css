@@ -531,35 +531,6 @@ input::placeholder { color: rgba(255,255,255,.45); }
   font-weight: 900;
   letter-spacing: .2px;
 }
-.transcriptionSource {
-  flex: 0 0 auto;
-  max-width: 48%;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.16);
-  background: rgba(255,255,255,.08);
-  color: rgba(255,255,255,.72);
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 16px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.transcriptionSource.source-meet {
-  border-color: rgba(91, 214, 151, .45);
-  background: rgba(91, 214, 151, .13);
-  color: #baf3d4;
-}
-.transcriptionSource.source-deepgram {
-  border-color: rgba(255, 204, 76, .48);
-  background: rgba(255, 204, 76, .14);
-  color: #ffe08a;
-}
-.transcriptionSource.source-detecting {
-  color: rgba(255,255,255,.68);
-}
-
 .shortcutFooter {
   flex: 0 1 auto;
   color: rgba(233, 230, 232, 0.44);

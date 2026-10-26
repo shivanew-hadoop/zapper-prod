@@ -226,13 +226,6 @@
         <div class="eyebrow">CREATE SESSION</div>
         <h2>Create session</h2>
         <p>Click Create Session to start voice-to-text transcription. If this is your first time, sign in with your Google account. Zapper will create a six-digit PIN to share with participants. Each session lasts up to 3 hours 30 minutes.</p>
-        <div id="hostDesktopPreflight" class="hostDesktopPreflight hidden" role="status" aria-live="polite">
-          <span id="hostDesktopStatus">Checking the Zapper desktop overlay…</span>
-          <div id="hostDesktopInlineActions" class="hostDesktopInlineActions hidden">
-            <button id="hostDesktopOpenInline" class="ghostBtn compact" type="button">Open Zapper</button>
-            <a class="ghostBtn compact" data-download href="#">Download Zapper</a>
-          </div>
-        </div>
         <button id="googleMeetCreateBtn" class="primaryBtn" type="button" disabled>Create Session</button>
         <details class="micPreflight">
           <summary>Want to test your audio?</summary>
@@ -266,7 +259,7 @@
         </div>
         <details class="meetManualOption hidden"><summary>Manual session fallback</summary>
           <p><a id="manualMeetCreateLink" class="hidden" href="https://meet.google.com/new" target="_blank" rel="noopener noreferrer">Open Google Meet</a></p>
-          <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="Meeting link" required/><button id="createSessionBtn" class="primaryBtn" type="submit" disabled>Create session from link</button></form>
+          <form id="sessionForm" class="inlineForm"><input id="meetUrl" placeholder="Meeting link" required/><button id="createSessionBtn" class="primaryBtn" type="submit">Create session from link</button></form>
         </details>
         <div id="sessionError" class="error" aria-live="polite"></div>
         <div id="pinBox" class="hidden" aria-hidden="true"><span id="pinMeet" class="hidden"></span><span id="pinStatus" class="pinStatus visuallyHidden"></span></div>
@@ -275,22 +268,6 @@
     </section>
     <section class="portalCard sectionCard"><div class="sectionHead"><div><h2>Saved transcripts</h2><p>Completed transcript PDFs with their call durations.</p></div><button id="refreshTranscripts" class="ghostBtn" type="button">Refresh</button></div><div id="sessions" class="dataList"></div><div id="transcripts" class="dataList"></div></section>
   </main>
-
-  <!-- Compact non-blocking host alert; shown only when the overlay is not ready. -->
-  <div id="hostDesktopGate" class="hostDesktopGateNotice hidden" role="dialog" aria-modal="false" aria-labelledby="hostDesktopGateTitle" aria-describedby="hostDesktopGateDescription">
-    <section class="hostDesktopGateCard">
-      <div class="hostDesktopGateHeading">
-        <h2 id="hostDesktopGateTitle">Zapper is not open</h2>
-        <button id="hostDesktopGateLater" class="hostDesktopGateClose" type="button" aria-label="Dismiss Zapper setup alert">×</button>
-      </div>
-      <p id="hostDesktopGateDescription">Download and install Zapper, then open the app. Create Session remains disabled until the overlay is ready.</p>
-      <p id="hostDesktopGateStatus" class="hostDesktopGateStatus" role="status" aria-live="polite">Waiting for Zapper overlay…</p>
-      <div class="hostDesktopGateActions">
-        <a class="secondaryBtn" data-download href="#">Download Zapper</a>
-        <button id="hostDesktopGateLaunch" class="primaryBtn" type="button">Open Zapper</button>
-      </div>
-    </section>
-  </div>
 
   <main id="adminPortal" class="portalShell hidden">
     <section class="portalHero adminHero"><div><div class="eyebrow">ADMINISTRATOR</div><h1 id="adminWelcome">Zapper administration</h1><p>Manage accounts, access periods, password support and user activity.</p></div><div class="adminStats"><div><strong id="adminUserCount">0</strong><span>users</span></div><div><strong id="adminActiveCount">0</strong><span>active plans</span></div><div><strong id="adminSessionCount">0</strong><span>sessions</span></div></div></section>

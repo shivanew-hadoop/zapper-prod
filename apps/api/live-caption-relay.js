@@ -19,7 +19,7 @@ module.exports = function createHostCaptionRelay({ openState = 1, maxBufferedByt
     if (!viewers.size) viewersBySession.delete(key);
   }
 
-  function publish(sessionId, caption, { excludeSocket = null, source = 'host' } = {}) {
+  function publish(sessionId, caption) {
     const viewers = viewersBySession.get(String(sessionId || ''));
     if (!viewers?.size) return 0;
     const text = String(caption?.text || '').trim();
@@ -30,11 +30,10 @@ module.exports = function createHostCaptionRelay({ openState = 1, maxBufferedByt
       isFinal: Boolean(caption.isFinal),
       speechFinal: Boolean(caption.speechFinal),
       confidence: Number(caption.confidence || 0),
-      source: String(source || 'host'),
+      source: 'host',
     });
     let sent = 0;
     for (const socket of viewers) {
-      if (socket === excludeSocket) continue;
       // Do not build a queue on slow/offline desktops: a later interim caption
       // is preferable to exhausting the API's memory.
       if (socket.readyState !== openState || Number(socket.bufferedAmount || 0) >= maxBufferedBytes) continue;

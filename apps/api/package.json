@@ -1,6 +1,6 @@
 {
   "name": "@zapper/api",
-  "version": "4.2.2",
+  "version": "4.2.1",
   "private": true,
   "description": "Zapper account, session PIN, transcript and STT API",
   "main": "server.js",

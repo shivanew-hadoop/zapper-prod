@@ -30,3 +30,9 @@ export function selectDeviceSession(sessions, sessionId) {
   return (sessions || []).find(session => session.id === sessionId &&
     session.status === 'active' && session.active !== false) || null;
 }
+
+// Browser-level create-session gate: restored sessions must keep Create Session
+// disabled even before /api/sessions finishes loading after refresh/login.
+export function canCreateHostSession({ hostEligible, overlayReady, creating, currentSessionId, browserSessionId }) {
+  return Boolean(hostEligible && overlayReady && !creating && !currentSessionId && !browserSessionId);
+}

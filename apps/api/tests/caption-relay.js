@@ -23,6 +23,9 @@ class ClientSocket extends EventEmitter {
   assert.equal(a.messages[0].source, 'host');
   assert.equal(b.messages[0].text, 'Host speaking');
   assert.equal(other.messages.length, 0);
+  assert.equal(relay.publish('room1', { text: 'Local caption', isFinal: true }, { excludeSocket: a, source: 'meet-captions' }), 1);
+  assert.equal(a.messages.filter(m => m.text === 'Local caption').length, 0);
+  assert.equal(b.messages.at(-1).source, 'meet-captions');
   b.bufferedAmount = 1024 * 1024;
   assert.equal(relay.publish('room1', { text: 'Interim', isFinal: false }), 1);
   relay.unsubscribe('room1', a);
@@ -91,7 +94,7 @@ class ClientSocket extends EventEmitter {
   serverSocket.emit('connection', foreign, fakeReq('x'));
   serverSocket.emit('connection', host, fakeReq('host'));
   assert.equal(deepgramSockets.length, 0, 'desktop should listen without sending any PCM');
-  host.emit('message', Buffer.alloc(3200));
+  host.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 1, 'host PCM opens the transcription provider');
   const providerPayload = (text, final) => Buffer.from(JSON.stringify({
@@ -104,8 +107,16 @@ class ClientSocket extends EventEmitter {
   assert.deepEqual(desktopB.messages.filter(m => m.type === 'transcript').map(m => m.source), ['host', 'host']);
   assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'another PIN cannot view host captions');
 
+  // Meet DOM caption path: text is persisted/relayed without opening Deepgram.
+  const beforeLocalCaptionProviders = deepgramSockets.length;
+  desktopA.emit('message', Buffer.from(JSON.stringify({ type: 'local_caption', text: 'caption from Meet DOM', isFinal: true, capturedAt: Date.now() })), false);
+  await new Promise(resolve => process.nextTick(resolve));
+  assert.equal(deepgramSockets.length, beforeLocalCaptionProviders, 'local Meet captions must not open Deepgram');
+  assert.equal(desktopA.messages.filter(m => m.text === 'caption from Meet DOM').length, 0, 'sender renders locally and should not receive an echo');
+  assert.equal(desktopB.messages.filter(m => m.text === 'caption from Meet DOM').at(-1)?.source, 'meet-captions');
+
   // Existing desktop -> backend transcription remains local, not rebroadcast.
-  desktopA.emit('message', Buffer.alloc(3200));
+  desktopA.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 2);
   deepgramSockets[1].emit('message', providerPayload('desktop Meet audio', true));

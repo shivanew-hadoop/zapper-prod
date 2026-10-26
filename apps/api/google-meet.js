@@ -91,7 +91,7 @@ if(result.ok && result.session) document.getElementById('details').textContent='
 if(meetUrl){const a=document.getElementById('meet');a.href=meetUrl;a.hidden=false;}
 if(returnUrl){const a=document.getElementById('return');a.href=returnUrl;a.hidden=false;}
 document.getElementById('close').onclick=()=>window.close();
-if(target && window.opener){window.opener.postMessage(result,target);}
+if(target && window.opener){window.opener.postMessage(result,target);if(result.ok)window.setTimeout(()=>window.close(),1200);}
 </script></html>`);
   }
 

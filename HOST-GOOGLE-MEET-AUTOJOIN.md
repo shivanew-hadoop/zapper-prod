@@ -14,18 +14,20 @@ A successful Meet API request created a Google Meet **room URL**, not a joined c
 6. The Electron capture side runs in **Google Meet captions-only** mode, with Deepgram audio upload disabled; the separate host Zapper `/stt` recording path is no longer invoked. Existing transcript storage, PDF, relay and overlay remain in place.
 7. The existing End Session flow closes the browser-extension-owned host Meet tab. Reloading Zapper reuses its Meet tab; it does not create a second host in the room.
 
-## One-time installation (mandatory on the host computer)
+## First Create Session: extension download and one-time installation
 
-**Pure Web UI code cannot auto-join or unmute a different website. This host-side browser extension is REQUIRED.** It is bundled in `apps/host-meet-extension/` inside the project ZIP.
+**The existing Create Session button now checks whether the companion extension responds.** If it is missing, Zapper requests the bundled extension ZIP download from `/downloads/Zapper-Host-Meet-Chrome-Edge-Extension.zip` (served by the updated `apps/web/public/downloads/` directory). No separate download hosting or backend setting is required. If the browser prevents an automatic download, the setup dialog has a **Download extension ZIP** button. Subsequent Create Session clicks do not repeatedly download it within that browser tab.
 
-1. Extract the complete project ZIP on the host computer.
-2. In **Chrome**, open `chrome://extensions` (or `edge://extensions` in Microsoft Edge).
-3. Enable **Developer mode** and choose **Load unpacked**.
-4. Select the extracted `zapper-prod/apps/host-meet-extension` folder (it contains `manifest.json`). Approve the Chrome/Edge extension permissions. The extension's site-microphone permission has a browser warning because it changes permission settings for Google Meet.
-5. Sign in to your Google account in **the same Chrome/Edge profile** used for Zapper. Allow microphone use for `https://meet.google.com`; leave the camera off. Some Google/organization/OS policies block automatic permission configuration; in that case allow it in browser/site/OS settings.
-6. Deploy updated `apps/web` (Vercel or the existing web platform) and `apps/api` (Railway or your existing backend) together; update the participant Electron app from `apps/desktop` if needed. There are no new backend environment variables. For an API-created **open** room, keep the existing `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI` and `WEB_ORIGINS` configured.
-7. Reload Zapper Web UI. Use the original **Create Session** action. Check the existing microphone status line: it should change to **Host joined Google Meet; microphone ON, camera OFF** before asking anyone to enter the PIN.
-8. On another computer, open Zapper Electron, enter the PIN, and verify its Google Meet connection/captions. Speak into the host microphone. Test actual audibility in Meet before evaluating the overlay transcript.
+1. Deploy the updated `apps/web` bundle. Use desktop Chrome or Edge on the host computer and sign into Zapper.
+2. Click **Create Session**. If the companion is absent, a one-time setup dialog appears and the ZIP download is requested.
+3. Extract the ZIP. In Chrome open `chrome://extensions` (Edge: `edge://extensions`), turn on **Developer mode**, choose **Load unpacked**, and select the extracted `zapper-host-meet-extension` folder containing `manifest.json`.
+4. Back in Zapper, choose **I've installed it — Continue**. The page reloads so the newly installed content script can run. If the extension responds, Zapper continues the original Create Session request. If Google login must open a browser popup, click Create Session once more: browsers require a fresh user gesture to open that sign-in popup.
+5. Sign in to Google in that **same Chrome/Edge profile** and grant the needed `meet.google.com` and operating-system microphone permissions. The host extension attempts to join Meet with microphone ON and camera OFF, reporting its status on the existing page.
+6. Future sessions detect the already installed extension and go through the original Create Session flow without the download or setup dialog.
+
+**Security constraints:** A website cannot silently install or enable a browser extension, sign into Google, or bypass Google Meet admission controls. If the user cancels setup, no PIN/session is created by that click. Mobile Chrome/Safari cannot install this extension. The Web UI appearance and the existing backend PIN, desktop overlay and participant flows are unchanged.
+
+Deploy `apps/api` (Railway or existing backend) and the desktop participant Electron app as normally required by the full original project. This new first-click onboarding change itself only modifies `apps/web`. Existing Google Meet API OAuth variables, if configured, remain unchanged.
 
 ## Important limits and transparent failures
 
@@ -33,7 +35,7 @@ A successful Meet API request created a Google Meet **room URL**, not a joined c
 - **Not actually headless.** The extension briefly opens the actual Meet tab to join with a permitted physical microphone, then returns focus to Zapper. Browsers do not expose safe cross-origin, truly headless live microphone injection to ordinary sites. Keep Chrome/Edge open and the host computer online.
 - **Google Meet UI changes.** Meet can change accessible control labels or behavior. The automation attempts to detect/validate the joined state, but live Google Meet verification is required; automated mocked-DOM checks do not prove success on all Google UI versions or account policies.
 - **Open rooms.** The existing Google Meet API flow explicitly requests `OPEN` and checks the response. Rooms created by the `meet.google.com/new` fallback inherit the host account's actual Meet access settings; a guest might still need admission. Google account or Workspace policies take priority.
-- **No duplicate or fake success:** The extension owns only the tabs it created, enforces one tab per session, and reports joined only when the accessible page controls confirm both joined status and microphone/camera states. If no extension is installed, session creation in the API-configured flow can create the PIN, but the Web UI reports that it cannot autojoin; in the browser fallback flow it stops and reports what to install rather than claiming a working microphone.
+- **No duplicate or fake success:** The extension owns only the tabs it created, enforces one tab per session, and reports joined only when the accessible page controls confirm both joined status and microphone/camera states. If the extension is missing, the Web UI stops before creating a new PIN and offers the ZIP download plus one-time installation steps.
 - **No Deepgram audio upload for this host/PIN flow.** The previous Deepgram source files and backend routes remain for future fallback work but aren't selected by the active host or participant flow.
 
 ## Verification performed
@@ -44,8 +46,10 @@ A successful Meet API request created a Google Meet **room URL**, not a joined c
 - Existing Web session-selection/ownership tests, Desktop Meet caption DOM guard and chat-noise tests.
 - **Not tested:** actual Google Meet live audio/caption behavior, Chrome extension installation in a real browser, OS microphone permission, deploy environment or true account sign-in. Do not claim field verification before that is tested on host and participant computers.
 
-## Deployment contents
+## First-run onboarding delta relative to the previous ZIP
 
-- **Changed:** `apps/web/src/main.js`, `apps/api/session-control.js`, `apps/desktop/main.js`.
-- **Added:** `apps/host-meet-extension/{manifest.json,background.js,web-bridge.js,meet-host.js}` and tests.
+- **Modified for this request:** `apps/web/src/main.js` (checks before either creation path, resumes only for the originating host account and handles Google popup rules).
+- **Added:** `apps/web/src/host-extension-setup.js` (ZIP download request, modal instructions, no duplicate download, page reload/continuation), `apps/web/public/downloads/Zapper-Host-Meet-Chrome-Edge-Extension.zip` (bundled static file), and `apps/web/tests/host-extension-setup.mjs`.
+- **Unchanged for this request:** extension host automation, API session/PIN logic, Electron desktop app, UI HTML/CSS and Deepgram behavior of the prior Real-GMeet-Host-AutoJoin ZIP.
+- **Testing:** All web .mjs tests, extension-flow checks, API Meet/host microphone/caption relay tests, desktop caption DOM guard, plus a Chromium dialog-interaction test passed. Deployment, downloaded browser extension installation on an actual host, Google sign-in, live host mic audio and PIN overlay captions have **not** been validated in a real meeting.
 - **Unchanged:** `apps/web/index.html`, `apps/web/src/app.css`, Electron overlay markup/styles, participant PIN redeem shape and existing Google Meet URL/PIN storage. Existing Deepgram sources are preserved but not invoked by this host flow.

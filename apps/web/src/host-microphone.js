@@ -1,3 +1,4 @@
+import { createBrowserSpeechCaptions } from './browser-speech-captions.js';
 // Host-only microphone capture for the web portal. Audio is sent to the
 // EXISTING /stt backend and Deepgram path; no Google Meet tab is required for
 // the host's *own* voice. This does not capture remote Google Meet attendees.
@@ -52,9 +53,45 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
   let attempts = 0;
   let socketGeneration = 0;
   let lastFailure = '';
+  let browserSpeech = null;
+  let browserSpeechMode = false;
+  const queuedCaptions = [];
+  const sendBrowserCaption = caption => {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(caption));
+    else {
+      // Retain final results through a brief network reconnect; never queue
+      // arbitrary microphone audio or unbounded interim text.
+      if (caption.isFinal) queuedCaptions.push(caption);
+      if (queuedCaptions.length > 20) queuedCaptions.shift();
+    }
+  };
+  const activateBrowserSpeech = (reason) => {
+    if (browserSpeechMode || stopped) return;
+    browserSpeechMode = true;
+    browserSpeech = createBrowserSpeechCaptions({
+      sendCaption: sendBrowserCaption,
+      onStatus: status,
+      onCaption: caption => onTranscript?.(caption),
+      onError: message => status(`Host captions stopped: ${message}`),
+    });
+    if (!browserSpeech) {
+      status(`Host microphone is captured but captions cannot run: ${reason}. Browser speech recognition is unsupported. Configure DEEPGRAM_API_KEY on the API.`);
+      return;
+    }
+    try {
+      browserSpeech.start();
+      status(`Deepgram unavailable (${reason}). Using browser speech recognition (system default microphone) for PIN captions.`);
+    } catch (error) {
+      browserSpeech = null;
+      status(`Host captions unavailable: ${error.message}. Check browser speech recognition or backend Deepgram credentials.`);
+    }
+  };
   const apiWs = apiBase.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
   const status = text => { if (!stopped) onStatus?.(text); };
   const cleanup = () => {
+    browserSpeech?.stop();
+    browserSpeech = null;
+    queuedCaptions.length = 0;
     if (reconnect) clearTimeout(reconnect);
     reconnect = null;
     if (socket) { try { socket.close(1000, 'microphone stopped'); } catch (_) {} }
@@ -84,16 +121,28 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
       const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       socket = ws;
-      ws.onopen = () => { if (stopped || socket !== ws) return; attempts = 0; status('Microphone active. Listening to your voice without opening Google Meet.'); };
+      ws.onopen = () => {
+        if (stopped || socket !== ws) return;
+        attempts = 0;
+        lastFailure = '';
+        status('Microphone and API connected. Checking transcription service…');
+        for (const caption of queuedCaptions.splice(0)) ws.send(JSON.stringify(caption));
+      };
       ws.onmessage = event => {
         if (stopped || socket !== ws) return;
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'transcript') onTranscript?.(data);
+          if (data.type === 'transcript') onTranscript?.({ ...data, source: 'deepgram' });
+          else if (data.type === 'host_stt_unavailable') activateBrowserSpeech(data.message || 'Deepgram not configured');
+          else if (data.type === 'caption_delivery') status(`Caption sent to ${Number(data.viewerCount) || 0} connected PIN desktop socket(s).`);
           else if (data.type === 'status') status(data.text || 'Transcription connected.');
           else if (data.type === 'session_ended') stop('Session ended. Host microphone stopped.');
           else if (data.type === 'limit_reached') stop('Session time limit reached. Host microphone stopped.');
-          else if (data.type === 'error') { lastFailure = data.message || 'Transcription could not start.'; status(lastFailure); }
+          else if (data.type === 'error') {
+            lastFailure = data.message || 'Transcription could not start.';
+            if (/deepgram|transcription credentials|transcription provider|provider connection|stt.*not configured/i.test(lastFailure)) activateBrowserSpeech(lastFailure);
+            else status(`Transcription error: ${lastFailure}`);
+          }
         } catch (_) { /* Ignore malformed upstream notifications. */ }
       };
       ws.onclose = event => {
@@ -125,7 +174,12 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
     status('Allow microphone access to transcribe your own voice. Camera stays off.');
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
     // If permission is revoked mid-meeting, immediately release the socket.
-    stream.getAudioTracks().forEach(track => { track.onended = () => stop('Microphone access ended. Click Start microphone to reconnect.'); });
+    stream.getAudioTracks().forEach(track => {
+      track.enabled = true;
+      track.onended = () => stop('Microphone access ended. Click Unmute to reconnect.');
+      track.onmute = () => status('Microphone input is muted by the browser or operating system. Check microphone permissions.');
+      track.onunmute = () => status('Microphone input restored.');
+    });
     context = new AudioContext();
     const blobUrl = URL.createObjectURL(new Blob([processorSource], { type: 'text/javascript' }));
     try { await context.audioWorklet.addModule(blobUrl); }
@@ -138,11 +192,12 @@ export async function startHostMicrophone({ apiBase, sessionId, deviceId = '', f
     source.connect(processor).connect(muteOutput).connect(context.destination);
     processor.port.onmessage = event => {
       if (!stopped && event.data?.type === 'level') { onLevel?.(event.data.value); return; }
-      if (!stopped && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 1024 * 1024 && event.data instanceof ArrayBuffer) {
+      if (!stopped && !browserSpeechMode && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 1024 * 1024 && event.data instanceof ArrayBuffer) {
         socket.send(event.data);
       }
     };
     await context.resume();
+    if (context.state !== 'running') throw new Error('Browser suspended microphone audio. Click Unmute to activate it.');
     await connect();
     return { stop, get stopped() { return stopped; } };
   } catch (error) {

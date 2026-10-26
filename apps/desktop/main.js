@@ -50,8 +50,11 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    handleZapperUrl((argv || []).find(arg => /^zapper:\/\//i.test(String(arg))));
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
+    const zapperUrl = (argv || []).find(arg => /^zapper:\/\//i.test(String(arg)));
+    handleZapperUrl(zapperUrl);
+    // Host commands from the portal (join, mute, end) run silently: they must not pop the overlay up.
+    const silentHostCommand = Boolean(zapperUrl && (parseHostJoinUrl(zapperUrl) || parseHostControlUrl(zapperUrl)));
+    if (!silentHostCommand && overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.show();
       overlayWindow.focus();
       enforceOverlayPrivacyAndTopmost();
@@ -86,7 +89,12 @@ function handleZapperUrl(rawUrl) {
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') { leaveHost(); return; }
+  if (control.type === 'leave') {
+    // End Session in the portal: stop everything this app is running and close Zapper completely.
+    leaveHost();
+    terminateApplicationCompletely().catch(() => { try { app.exit(0); } catch (_) { process.exit(0); } });
+    return;
+  }
   if (control.type === 'mic') {
     setHostMic(control.on).then(ok => { if (ok) sendStatus(control.on ? 'Host microphone unmuted.' : 'Host microphone muted.'); });
   }
@@ -1153,6 +1161,12 @@ ipcMain.handle('overlay-click-through', (_, enabled) => {
 });
 
 app.whenReady().then(async () => {
+  // Started only by the portal's End Session link (Zapper was not running): nothing to stop, so
+  // exit at once instead of opening the app.
+  const startupUrl = process.argv.find(arg => /^zapper:\/\//i.test(String(arg)));
+  const startupControl = startupUrl && parseHostControlUrl(startupUrl);
+  if (startupControl && startupControl.type === 'leave') { app.exit(0); return; }
+
   // Keep one stable localhost audio relay for the whole desktop process.
   // Individual Leave/Rejoin cycles replace only the audio callback.
   startAudioWSServer();

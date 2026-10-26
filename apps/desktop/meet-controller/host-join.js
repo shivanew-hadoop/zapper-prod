@@ -141,6 +141,28 @@ async function nativeClick(win, x, y) {
   wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
 }
 
+// Google's sign-in offers "Choose a passkey" (Windows Hello / security key) and then waits for it
+// forever inside this embedded window. Hide passkey support from the page so Google falls back to
+// the normal email + password sign-in. Host window only.
+function disablePasskeys(win) {
+  const script = `(() => {
+    try { delete window.PublicKeyCredential; } catch (_) {}
+    try { window.PublicKeyCredential = undefined; } catch (_) {}
+    try {
+      const reject = () => Promise.reject(new DOMException('Passkeys are not available here.', 'NotAllowedError'));
+      Object.defineProperty(navigator, 'credentials', { configurable: true, value: { get: reject, create: reject, store: reject, preventSilentAccess: () => Promise.resolve() } });
+    } catch (_) {}
+  })();`;
+  try {
+    const dbg = win.webContents.debugger;
+    dbg.attach('1.3');
+    dbg.sendCommand('Page.enable').catch(() => {});
+    dbg.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: script }).catch(() => {});
+  } catch (_) {
+    win.webContents.on('did-start-navigation', () => { win.webContents.executeJavaScript(script, true).catch(() => {}); });
+  }
+}
+
 function stopHostTimer() {
   if (hostTimer) clearInterval(hostTimer);
   hostTimer = null;
@@ -191,6 +213,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {})
   win.setOpacity(0.01);
   win.setContentProtection(true);
   win.__zapperHidden = true;
+  disablePasskeys(win);
   win.showInactive();
   hostWindow = win;
   win.on('closed', () => {

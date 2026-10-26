@@ -30,4 +30,7 @@ const hostSrc = fs.readFileSync(require('path').join(__dirname, '../meet-control
 assert(hostSrc.includes('concealHostWindow') && hostSrc.includes('setSkipTaskbar(true)') && hostSrc.includes('setOpacity(0.01)') && !hostSrc.includes('win.minimize()'), 'host window must be fully concealed (see-through, no taskbar), not minimized');
 assert(hostSrc.includes('restartFresh') && hostSrc.includes('win.destroy()'), 'cant_join must close the window and start a new one');
 assert(hostSrc.includes('show: false') && hostSrc.includes('showInactive()'), 'host window must never pop up while joining');
+assert(hostSrc.includes('disablePasskeys(win)') && hostSrc.includes('addScriptToEvaluateOnNewDocument'), 'host sign-in must not wait on a passkey prompt');
+const mainSrc2 = fs.readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
+assert(mainSrc2.includes('silentHostCommand') && mainSrc2.includes("startupControl.type === 'leave'"), 'End Session must close Zapper, never open it');
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

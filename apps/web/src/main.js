@@ -1,6 +1,7 @@
 import { mountHowItWorks } from './how-it-works.jsx';
 import { startHostMicrophone, listMicrophones, recordMicrophoneTest } from './host-microphone.js';
 import { createRecordingWakeLock } from './recording-wake-lock.js';
+import { waitForOverlayReady } from './overlay-launch.js';
 import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId } from './host-session-selection.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
@@ -947,6 +948,36 @@ function showCreatedSession(session) {
   applyCreateSessionAvailability();
 }
 
+// Windows external-protocol permission cannot be inspected by a website.
+// The desktop loopback endpoint confirms the exact launch request only after
+// its Electron overlay is displayed. Keep the UI waiting until then (or Cancel).
+let pendingOverlayLaunch = null;
+function requestOverlayBeforeSession() {
+  const nonce = crypto.randomUUID();
+  const controller = new AbortController();
+  const cancelButton = $('cancelOverlayLaunch');
+  pendingOverlayLaunch = controller;
+  cancelButton.classList.remove('hidden');
+  cancelButton.onclick = () => controller.abort();
+  $('sessionError').textContent = 'Waiting for Zapper overlay. Please approve “Open Zapper” in your browser. No session will start until the overlay is open. Click Cancel to stop waiting.';
+  // This is invoked synchronously inside the original user click; the browser
+  // is allowed to show its existing external-application confirmation prompt.
+  window.location.href = `zapper://launch?nonce=${encodeURIComponent(nonce)}`;
+  return { nonce, controller };
+}
+async function confirmOverlayBeforeSession(request) {
+  try {
+    const ready = await waitForOverlayReady(request.nonce, { signal: request.controller.signal });
+    if (ready) $('sessionError').textContent = '';
+    else $('sessionError').textContent = 'Zapper launch cancelled. No session was created.';
+    return ready;
+  } finally {
+    if (pendingOverlayLaunch === request.controller) pendingOverlayLaunch = null;
+    $('cancelOverlayLaunch').classList.add('hidden');
+    $('cancelOverlayLaunch').onclick = null;
+  }
+}
+
 $('googleMeetCreateBtn').onclick = async () => {
   if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating) return;
   $('sessionError').textContent = '';
@@ -959,6 +990,7 @@ $('googleMeetCreateBtn').onclick = async () => {
     window.open('https://meet.google.com/new', '_blank', 'noopener,noreferrer');
     return;
   }
+  const launchRequest = requestOverlayBeforeSession();
   const button = $('googleMeetCreateBtn');
   // Open before fetch only for a first-time Google connection: mobile and
   // desktop browsers may block popups started after an async request.
@@ -967,12 +999,27 @@ $('googleMeetCreateBtn').onclick = async () => {
   const popup = googleMeetConnected ? null : openHostMeetWindow();
   let popupHandled = false;
   if (!googleMeetConnected && !popup) {
+    launchRequest.controller.abort();
+    await confirmOverlayBeforeSession(launchRequest);
     $('sessionError').textContent = 'Please allow the Google sign-in popup from Zapper.';
     return;
   }
-  if (popup) popup.document.body.textContent = 'Connecting to Google…';
+  if (popup) popup.document.body.textContent = 'Waiting for Zapper overlay to open…';
   hostSessionCreating = true;
   applyCreateSessionAvailability();
+  if (!await confirmOverlayBeforeSession(launchRequest)) {
+    try { popup?.close(); } catch (_) {}
+    hostSessionCreating = false;
+    applyCreateSessionAvailability();
+    return; // IMPORTANT: no /api/google/meet/start before desktop acknowledges.
+  }
+  if (!googleMeetConnected && popup?.closed) {
+    hostSessionCreating = false;
+    applyCreateSessionAvailability();
+    $('sessionError').textContent = 'Google sign-in window was closed. Click Create Session again; no session was created.';
+    return;
+  }
+  if (popup) popup.document.body.textContent = 'Connecting to Google…';
   const requestId = crypto.randomUUID();
   const expectedOrigin = new URL(API_BASE).origin;
   button.disabled = true;
@@ -1051,10 +1098,11 @@ $('meetUrl').addEventListener('input', () => rememberMeetUrl($('meetUrl').value)
 $('sessionForm').onsubmit = async event => {
   event.preventDefault();
   if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating) return;
+  const launchRequest = requestOverlayBeforeSession();
   hostSessionCreating = true;
   applyCreateSessionAvailability();
-  $('sessionError').textContent = '';
   try {
+    if (!await confirmOverlayBeforeSession(launchRequest)) return;
     const requestedMeetUrl = $('meetUrl').value.trim();
     rememberMeetUrl(requestedMeetUrl);
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: requestedMeetUrl }) });

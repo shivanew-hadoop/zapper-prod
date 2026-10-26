@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell } = require('
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { createOverlayReadinessServer } = require('./overlay-launch-readiness');
 
 const DEFAULT_BACKEND_URL = 'https://api.zapperapp.in';
 let APP_CONFIG = {};
@@ -79,6 +80,15 @@ const { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl
 // Any other zapper:// link (e.g. zapper://launch) keeps its existing behaviour.
 function handleZapperUrl(rawUrl) {
   if (!rawUrl) return;
+  // A specific browser launch request is acknowledged only after the real
+  // Electron overlay is loaded and visible (see loopback readiness server).
+  if (overlayReadiness.acknowledgeUrl(rawUrl)) {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.show();
+      enforceOverlayPrivacyAndTopmost();
+    }
+    return;
+  }
   const hostJoin = parseHostJoinUrl(rawUrl);
   if (hostJoin) {
     joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
@@ -86,7 +96,7 @@ function handleZapperUrl(rawUrl) {
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') { leaveHost().catch(err => sendStatus('Host close failed: ' + err.message)); return; }
+  if (control.type === 'leave') { leaveHost(); return; }
   if (control.type === 'mic') {
     setHostMic(control.on).then(ok => { if (ok) sendStatus(control.on ? 'Host microphone unmuted.' : 'Host microphone muted.'); });
   }
@@ -105,6 +115,9 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 
 let overlayWindow = null;
+const overlayReadiness = createOverlayReadinessServer(() => Boolean(overlayWindow &&
+  !overlayWindow.isDestroyed() && overlayWindow.isVisible() &&
+  !overlayWindow.webContents.isLoadingMainFrame()));
 let privateCursorWindow = null;
 let started = false;
 let remoteSttStarted = false;
@@ -616,8 +629,6 @@ async function terminateApplicationCompletely() {
     new Promise(resolve => setTimeout(resolve, 300))
   ]);
 
-  // Close Zapper-managed Chrome/Edge before exiting. Do not kill other browser sessions.
-  await Promise.race([leaveHost().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1500))]);
   try { closeGoogleSignInWindow(); } catch (_) {}
   stopRemoteTranscriptStream();
   stopAudioWSServer();
@@ -1025,6 +1036,7 @@ ipcMain.handle('overlay-click-through', (_, enabled) => {
 });
 
 app.whenReady().then(async () => {
+  overlayReadiness.start();
   // Keep one stable localhost audio relay for the whole desktop process.
   // Individual Leave/Rejoin cycles replace only the audio callback.
   startAudioWSServer();
@@ -1058,7 +1070,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => {
-  void leaveHost().catch(() => {});
+  overlayReadiness.stop();
   stopOverlayTopmostGuard();
   stopOverlayPointerGuard();
   destroyPrivateCursorWindow();
@@ -1068,7 +1080,6 @@ app.on('will-quit', () => {
 app.on('window-all-closed', async () => {
   resetRuntimeFlags();
   await leaveMeet().catch(() => {});
-  await leaveHost().catch(() => {});
   stopRemoteTranscriptStream();
   stopAudioWSServer();
   app.quit();

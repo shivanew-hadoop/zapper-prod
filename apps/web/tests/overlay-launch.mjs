@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { waitForOverlayReady } from '../src/overlay-launch.js';
+const nonce = '8be34e97-7419-4d4d-a85c-148de44c5394';
+let polls = 0;
+const fetcher = async () => ({ ok: true, json: async () => ({ ready: ++polls >= 3 }) });
+assert.equal(await waitForOverlayReady(nonce, { fetcher, pollMs: 1 }), true);
+assert.equal(polls, 3, 'keep waiting for real affirmative status, not a fixed delay');
+const controller = new AbortController();
+let pending = 0;
+const pendingFetch = async () => { pending++; if (pending === 2) controller.abort(); return { ok: true, json: async () => ({ ready: false }) }; };
+assert.equal(await waitForOverlayReady(nonce, { fetcher: pendingFetch, pollMs: 1, signal: controller.signal }), false);
+assert.equal(pending, 2, 'cancel prevents session creation');
+console.log('web overlay ready gate: PASS');

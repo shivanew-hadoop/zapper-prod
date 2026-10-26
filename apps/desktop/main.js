@@ -1,5 +1,5 @@
 // main.js — Electron main process
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, shell, Tray, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -116,7 +116,7 @@ function sendHostOverlayTranscript(payload) {
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
 // Any other zapper:// link (e.g. zapper://launch) keeps its existing behaviour.
 function handleZapperUrl(rawUrl) {
-  if (!rawUrl) return;
+  if (!rawUrl || forceExitScheduled) return;
   const hostJoin = parseHostJoinUrl(rawUrl);
   if (hostJoin) {
     // Wait for the protected overlay to initialize before starting Meet on cold launch.
@@ -168,6 +168,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 
 let overlayWindow = null;
+let appTray = null;
 let privateCursorWindow = null;
 let started = false;
 let remoteSttStarted = false;
@@ -701,10 +702,34 @@ function startSessionStatusPoller(sessionToken) {
   sessionStatusPoller.unref?.();
 }
 
+function showOverlayFromTray() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.showInactive();
+    enforceOverlayPrivacyAndTopmost();
+  }
+}
+
+function installTrayMenu() {
+  if (appTray) return;
+  try {
+    appTray = new Tray(path.join(__dirname, 'assets', 'tray.png'));
+    appTray.setToolTip('Zapper — right-click to show or exit completely');
+    appTray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Show Zapper Overlay', click: showOverlayFromTray },
+      { label: 'Hide Zapper Overlay', click: () => { if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide(); } },
+      { type: 'separator' },
+      { label: 'Exit Zapper Completely', click: () => { void terminateApplicationCompletely(); } },
+    ]));
+    appTray.on('double-click', showOverlayFromTray);
+  } catch (error) { console.error('[Tray] Could not initialize exit menu:', error.message); }
+}
+
 async function terminateApplicationCompletely() {
   if (forceExitScheduled) return;
-  stopHostChannel();
   forceExitScheduled = true;
+  stopHostChannel();
+  leaveHost();
 
   resetRuntimeFlags();
   stopSessionStatusPoller();
@@ -724,15 +749,16 @@ async function terminateApplicationCompletely() {
   stopOverlayManualResize();
   destroyPrivateCursorWindow();
   try { globalShortcut.unregisterAll(); } catch (_) {}
+  try { if (appTray) appTray.destroy(); } catch (_) {}
+  appTray = null;
 
   // Close/destroy every Electron window, including hidden Meet/sign-in windows.
   for (const win of BrowserWindow.getAllWindows()) {
     try { if (!win.isDestroyed()) win.destroy(); } catch (_) {}
   }
 
-  // app.exit() is intentional here. The overlay X means "Exit Zapper", not
-  // "hide to background". This guarantees the single-instance lock and all
-  // background resources are released before the user launches Zapper again.
+  // Explicit Exit App or tray Quit uses app.exit() after stopping both Meet
+  // windows. Overlay X remains Hide; it must never terminate a live session.
   setTimeout(() => {
     try { app.exit(0); } catch (_) { process.exit(0); }
   }, 25);
@@ -1065,6 +1091,12 @@ ipcMain.handle('leave-meet', async () => {
   return { success: true };
 });
 
+ipcMain.handle('exit-zapper-completely', async () => {
+  // Explicit user command, unlike X/Hide. Do not retain a background singleton.
+  void terminateApplicationCompletely();
+  return { success: true };
+});
+
 ipcMain.handle('close-overlay', async () => {
   // Hide only the UI. Keep the host Meet, participant capture and relay alive.
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
@@ -1129,6 +1161,7 @@ app.whenReady().then(async () => {
 
   // Renderer owns the startup sequence: Google Sign-In first, then 6-digit session PIN.
   createOverlayWindow();
+  installTrayMenu();
   // App started by the portal's zapper://host-join link (Windows passes it in argv).
   handleZapperUrl(process.argv.find(arg => /^zapper:\/\//i.test(String(arg))));
 
@@ -1155,6 +1188,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => {
+  try { if (appTray) appTray.destroy(); } catch (_) {}
+  appTray = null;
+  leaveHost();
+  stopHostChannel();
   stopOverlayTopmostGuard();
   stopOverlayPointerGuard();
   destroyPrivateCursorWindow();

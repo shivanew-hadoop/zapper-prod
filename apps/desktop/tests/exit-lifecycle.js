@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.join(__dirname, '..');
+const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+const overlay = fs.readFileSync(path.join(root, 'overlay/overlay.js'), 'utf8');
+const installer = fs.readFileSync(path.join(root, 'build/installer.nsh'), 'utf8');
+assert.match(main, /ipcMain\.handle\('close-overlay',[\s\S]*?overlayWindow\.hide\(\)/);
+assert.match(main, /ipcMain\.handle\('exit-zapper-completely',[\s\S]*?terminateApplicationCompletely\(\)/);
+assert.match(main, /function terminateApplicationCompletely\([\s\S]*?leaveHost\(\)/);
+assert.match(main, /new Tray\(/);
+assert.match(main, /Exit Zapper Completely/);
+assert.match(preload, /exitZapperCompletely/);
+assert.match(overlay, /exitAppBtn.*addEventListener/);
+assert.match(installer, /!macro customInit[\s\S]*?taskkill\.exe[\s\S]*?!macroend/);
+assert.match(installer, /!macro customUnInit[\s\S]*?taskkill\.exe[\s\S]*?!macroend/);
+console.log(JSON.stringify({ ok: true, hideAndExitSeparated: true, installerCleanupPresent: true }));

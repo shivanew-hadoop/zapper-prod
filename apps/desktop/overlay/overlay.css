@@ -104,7 +104,7 @@ body:has(.card.collapsed) .resizeHandle { display: none; }
 }
 .title {
   flex: 0 1 auto;
-  min-width: 175px;
+  min-width: 75px;
   max-width: 300px;
   white-space: nowrap;
   overflow: hidden;
@@ -141,6 +141,8 @@ body:has(.card.collapsed) .resizeHandle { display: none; }
   border: 1px solid rgba(120,180,255,.35);
   color: #cfe2ff;
 }
+.exitAppBtn { background: rgba(200,20,30,.20); border-color: rgba(255,80,80,.40); color: #ffb2b2; }
+.exitAppBtn:hover { background: rgba(200,20,30,.36); }
 .leave {
   background: rgba(200,20,30,.22);
   border: 1px solid rgba(255,80,80,.35);
@@ -625,6 +627,7 @@ input::placeholder { color: rgba(255,255,255,.45); }
 .card.collapsed #settingsBtn,
 .card.collapsed #signinBtn,
 .card.collapsed #leaveBtn,
+.card.collapsed #exitAppBtn,
 .card.collapsed .licensePanel,
 .card.collapsed .joinPanel,
 .card.collapsed .loginAlert,
@@ -645,7 +648,7 @@ input::placeholder { color: rgba(255,255,255,.45); }
   .form { grid-template-columns: 1fr 160px; }
 }
 @media (max-width: 620px) {
-  .title { min-width: 110px; max-width: 160px; font-size: 9px; letter-spacing: 1px; }
+  .title { min-width: 75px; max-width: 160px; font-size: 9px; letter-spacing: 1px; }
   .licenseGrid, .form { grid-template-columns: 1fr; }
   #activateBtn, #meetUrl, #joinBtn { grid-column: auto; }
   .smallBtn { padding: 0 6px; font-size: 9px; }

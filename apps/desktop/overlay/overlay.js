@@ -4,6 +4,7 @@ const leaveBtn = document.getElementById('leaveBtn');
 const signinBtn = document.getElementById('signinBtn');
 const backToLiveBtn = document.getElementById('backToLiveBtn');
 const closeBtn = document.getElementById('closeBtn');
+const exitAppBtn = document.getElementById('exitAppBtn');
 const collapseBtn = document.getElementById('collapseBtn');
 const appEl = document.getElementById('app');
 const livePanel = document.getElementById('livePanel');
@@ -333,6 +334,10 @@ collapseBtn.addEventListener('click', async () => {
 });
 setTimeout(() => { applyOverlayCollapsed(); }, 250);
 closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay(); });
+exitAppBtn?.addEventListener('click', async () => {
+  const confirmed = window.confirm('Exit Zapper completely? This will disconnect any Zapper-hosted Google Meet and stop background transcription. The session in the web portal must be ended separately.');
+  if (confirmed) await window.electronAPI.exitZapperCompletely();
+});
 
 function escapeHtml(value) {
   return String(value || '')

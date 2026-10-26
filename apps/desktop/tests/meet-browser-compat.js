@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const desktop = path.join(__dirname, '..');
+const packageJson = require('../package.json');
+const host = fs.readFileSync(path.join(desktop, 'meet-controller/host-join.js'), 'utf8');
+const participant = fs.readFileSync(path.join(desktop, 'meet-controller/index.js'), 'utf8');
+assert.ok(Number(packageJson.devDependencies.electron.split('.')[0]) >= 44, 'Embedded Chromium must be modern');
+assert.doesNotMatch(host + '\n' + participant, /Chrome\/124\.0 Safari/, 'No artificially old browser user-agent');
+const { getMeetUserAgent } = require('../meet-controller/browser-compat');
+assert.match(getMeetUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Electron/30.5.1 Safari/537.36', '156.0.8078.48'), /Chrome\/156\.0\.8078\.48/);
+assert.doesNotMatch(getMeetUserAgent('Mozilla/5.0 Chrome/124.0.0.0 Electron/30.5.1', '156.0.8078.48'), /Electron\/|Chrome\/124/);
+assert.throws(() => getMeetUserAgent('Mozilla/5.0 Chrome/124.0.0.0', '124.0.0.0'), /outdated/);
+assert.match(host, /browser_unsupported/, 'Google unsupported-browser message should have explicit diagnostics');
+assert.ok(fs.existsSync(path.join(desktop, 'build/installer.nsh')));
+assert.ok(fs.existsSync(path.join(desktop, 'assets/tray.png')));
+console.log(JSON.stringify({ ok: true, browserVersionUpdated: true, noOutdatedUserAgent: true }));

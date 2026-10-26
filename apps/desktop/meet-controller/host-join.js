@@ -6,10 +6,10 @@
 // This never sends microphone audio to Zapper servers or to Deepgram: the audio goes only to Meet.
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
 const path = require('path');
+const { getMeetUserAgent } = require('./browser-compat');
 
 const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 let hostWindow = null;
 let hostTimer = null;
@@ -107,6 +107,7 @@ async function hostAutomation(hostName) {
   const text = bodyText();
   // Google refused / bounced an anonymous guest ("You can't join this video call",
   // "Returning to home screen"): the desktop side signs in or reloads the room.
+  if (/this browser version is no longer supported|upgrade to a supported browser|your browser isn.t supported|unsupported browser/.test(text)) return { state: 'browser_unsupported' };
   if (/returning to (the )?home screen|you can.t join this video call|check your meeting code/.test(text)) return { state: 'cant_join' };
   if (/getting ready|you.ll be able to join/.test(text)) return { state: 'getting_ready' };
   if (/asking to be joined|waiting to be admitted|someone will let you in|you.ll join when someone lets you in/.test(text)) return { state: 'waiting' };
@@ -175,7 +176,8 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
   if (process.platform === 'darwin' && systemPreferences?.askForMediaAccess) {
     await systemPreferences.askForMediaAccess('microphone').catch(() => {});
   }
-  allowMediaForHostSession();
+  const hostSession = allowMediaForHostSession();
+  const meetUserAgent = getMeetUserAgent(hostSession.getUserAgent());
   hostJoined = false;
   hostSelectedMicrophone = String(microphone || '').trim();
 
@@ -200,6 +202,14 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
+  win.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) say('Host mode: Meet navigation failed (' + code + '): ' + String(description).slice(0, 120));
+  });
+  win.webContents.on('render-process-gone', () => {
+    say('Host mode: browser process stopped unexpectedly. Reopen the session to retry.');
+    stopHostTimer();
+    showHostWindow(win);
+  });
   win.__zapperMeetUrl = meetUrl;
   hostWindow = win;
   win.on('closed', () => {
@@ -207,7 +217,7 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
   });
 
   say('Host mode: opening your Google Meet…');
-  hostOpening = win.loadURL(meetUrl, { userAgent: USER_AGENT });
+  hostOpening = win.loadURL(meetUrl, { userAgent: meetUserAgent });
   try { await hostOpening; }
   catch (error) {
     // A failed navigation must not leave a phantom host meeting. A later
@@ -227,12 +237,13 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
   let lastState = '';
   let reloads = 0;
   let failedAttempts = 0;
+  let readyReloads = 0;
   const roomCode = meetUrl.split('/').pop();
   const reopenRoom = async () => {
     if (win.isDestroyed() || Date.now() - lastNavAt < 5000) return;
     lastNavAt = Date.now();
     reloads += 1;
-    await win.loadURL(meetUrl, { userAgent: USER_AGENT }).catch(() => {});
+    await win.loadURL(meetUrl, { userAgent: meetUserAgent }).catch(() => {});
   };
   stopHostTimer();
   hostTimer = setInterval(async () => {
@@ -250,6 +261,12 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
+      if (result.state === 'browser_unsupported') {
+        say('Host mode: Google Meet rejected this browser. Rebuild/reinstall Zapper with the updated Electron runtime.');
+        stopHostTimer();
+        showHostWindow(win);
+        return;
+      }
       if (result.state === 'joined') {
         failedAttempts = 0;
         if (!hostJoined) { hostJoined = true; say('Host mode: joined and verified.'); }
@@ -282,8 +299,8 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
           if (!signedIn && !askedSignIn) {
             askedSignIn = true;
             showHostWindow(win);
-            say('Host mode: Google sign-in is required in the visible host Meet window.');
-            await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
+            say('Host mode: Google sign-in required. If Google blocks embedded sign-in, open Meet in a regular Chrome browser; Electron sign-in may be disallowed.');
+            await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl)).catch(() => {});
           } else if (Date.now() - lastNavAt >= 6000) {
             failedAttempts++;
             if (failedAttempts <= 9) {
@@ -296,10 +313,27 @@ async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {
             }
           }
         }
-      } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
-        // Stuck on the pre-join page for 30 s: reload the room and try again.
-        lastProgressAt = Date.now();
-        await reopenRoom();
+      } else if (result.state === 'getting_ready' && Date.now() - lastProgressAt > 18000) {
+        // Explicit cap: a permanently spinning Meet page must not loop forever.
+        if (readyReloads < 3) {
+          readyReloads += 1;
+          say('Host mode: Meet is stuck on Getting ready; reloading (' + readyReloads + '/3)…');
+          lastProgressAt = Date.now();
+          await reopenRoom();
+        } else {
+          say('Host mode: Meet could not finish loading. Check the visible window and Google sign-in; automatic retries stopped.');
+          stopHostTimer();
+          showHostWindow(win);
+        }
+      } else if (Date.now() - lastProgressAt > 30000) {
+        if (reloads >= 6) {
+          say('Host mode: Meet did not complete joining after six reloads. Automatic retries stopped.');
+          stopHostTimer();
+          showHostWindow(win);
+        } else {
+          lastProgressAt = Date.now();
+          await reopenRoom();
+        }
       }
     } catch (error) {
       console.error('[HostJoin]', error.message);

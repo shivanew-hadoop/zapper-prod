@@ -1,5 +1,6 @@
 // meet-controller/index.js — Google Meet inside Electron BrowserWindow with persistent Google profile
 const { BrowserWindow, screen, session } = require('electron');
+const { getMeetUserAgent } = require('./browser-compat');
 const path = require('path');
 
 const GOOGLE_PROFILE_PARTITION = 'persist:gmeet-profile';
@@ -623,9 +624,10 @@ async function joinMeet(meetUrl, guestName, onStatusUpdate) {
     safeStatus(onStatusUpdate, 'Opening Google Meet. Joining as guest...');
   }
 
-  await meetWindow.loadURL(url, {
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-  });
+  // Meet receives a Chromium UA tied to the actual installed runtime.
+  // Do not advertise Chrome 124 irrespective of the packaged Electron version.
+  const meetUserAgent = getMeetUserAgent(getBotSession().getUserAgent());
+  await meetWindow.loadURL(url, { userAgent: meetUserAgent });
   await sleep(1000);
 
   // AUTOMATIC JOIN FLOW:

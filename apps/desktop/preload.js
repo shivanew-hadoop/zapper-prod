@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   leaveMeet: () => ipcRenderer.invoke('leave-meet'),
   detachLiveSession: () => ipcRenderer.invoke('detach-live-session'),
   closeOverlay: () => ipcRenderer.invoke('close-overlay'),
+  exitZapperCompletely: () => ipcRenderer.invoke('exit-zapper-completely'),
   googleSignIn: () => ipcRenderer.invoke('google-signin'),
   clearGoogleProfile: () => ipcRenderer.invoke('clear-google-profile'),
   checkGoogleLogin: () => ipcRenderer.invoke('check-google-login'),

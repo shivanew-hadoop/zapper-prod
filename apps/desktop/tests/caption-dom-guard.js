@@ -22,6 +22,10 @@ assert(source.includes('caption-text-nodes'), 'leaf text-node strategy must exis
 assert(/strongEmpty/.test(source), 'an empty strong container must not shadow strategies that yield captions');
 assert(source.includes('isCaptionContinuation'), 'a new utterance must finalize the previous caption line');
 assert(source.includes('captionKeyToggleAttempts < 3'), 'the c-key caption toggle must be bounded');
+assert(source.includes('CAPTION_STABLE_MS'), 'words must be held until stable so Meet revisions are not shown');
+assert(mainSource.includes('CalculateNativeWinOcclusion'), 'hidden Meet window must not be throttled when covered by other apps');
+assert(/CAPTION_STABLE_MS\s*=\s*(\d+)/.test(source) && Number(source.match(/CAPTION_STABLE_MS\s*=\s*(\d+)/)[1]) <= 400, 'word-stability hold must stay small to keep captions low-latency');
+assert(source.includes('function captionDelta'), 'only new words may be emitted so a growing Meet row is not re-printed');
 
 function extractFunction(name) {
   const marker = `function ${name}(`;
@@ -67,3 +71,16 @@ console.log(JSON.stringify({
   sourceReadyAfterValidatedCaption: true,
   deepgramFallbackRequiresAudibleFailure: true
 }));
+
+// v4.3.5 guards
+{
+  const fsx = require('fs'), px = require('path');
+  const pre = fsx.readFileSync(px.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
+  assert(/CAPTION_STABLE_MS = 0\b/.test(pre), 'captions must show instantly (4.3.1 speed)');
+  assert(pre.includes('scanMessageIdBlocks') && pre.includes('ensureIndianEnglishCaptions'), 'chat must prefer real message nodes; Indian English attempt present');
+  const html = fsx.readFileSync(px.join(__dirname, '../overlay/index.html'), 'utf8');
+  assert(!html.includes('id="transcriptionSource"'), 'Source label must not be displayed');
+  const mainSrc = fsx.readFileSync(px.join(__dirname, '../main.js'), 'utf8');
+  assert(mainSrc.includes('opts.keepRunning') && mainSrc.includes("appendSwitch('lang', 'en-IN')"), 'X hides while running; en-IN locale');
+  console.log(JSON.stringify({ ok: true, v435Guards: true }));
+}

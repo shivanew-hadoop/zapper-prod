@@ -332,7 +332,9 @@ collapseBtn.addEventListener('click', async () => {
   await applyOverlayCollapsed();
 });
 setTimeout(() => { applyOverlayCollapsed(); }, 250);
-closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay(); });
+// While a session is live the X only hides the overlay (capture keeps running behind the scenes;
+// Ctrl+Shift+T shows it again). With no live session it still exits Zapper as before.
+closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay({ keepRunning: Boolean(activeSessionToken) }); });
 
 function escapeHtml(value) {
   return String(value || '')
@@ -436,11 +438,54 @@ function isDuplicateChat(payload) {
   );
 }
 
+// Automatic notices and panel text produced by Google Meet (or by Zapper itself), never typed
+// by the host or a participant. They must not appear as chat messages.
+const MEET_SYSTEM_CHAT_RE = new RegExp([
+  '^messages (?:can only be|are only|will not be|won.t be|you send|sent)\\b',
+  'deleted when (?:the )?(?:call|meeting) ends',
+  '^(?:continuous chat|chat) (?:is|was|has been) (?:turned )?(?:on|off)\\b',
+  '^(?:the )?host (?:has )?(?:turned|disabled|enabled|limited|restricted)\\b',
+  '^(?:everyone|participants) (?:can|cannot|can.t) (?:now )?(?:send|see|use|present|share|unmute|turn)\\b',
+  '^.{1,60} (?:has |have )?(?:joined|left) (?:the |this )?(?:call|meeting)\\.?$',
+  '^.{1,60} (?:was |has been )?(?:admitted|removed from|let in|denied)\\b',
+  '\\bis (?:now )?(?:presenting|pinned)\\b',
+  '^.{1,60} (?:started|stopped) (?:presenting|recording|sharing|the recording)\\b',
+  '^(?:this meeting|the meeting|this call) is (?:now )?being (?:recorded|transcribed)\\b',
+  '^(?:recording|transcript|transcription|live captions?|captions?|notes) (?:has |have |is |are |was )?(?:started|stopped|turned|on|off|ready|available)\\b',
+  '^.{1,60} (?:pinned|unpinned) a message\\b',
+  '^.{1,60} (?:raised|lowered) (?:your|their) hand\\b',
+  '^you (?:can.t|cannot) send messages\\b',
+  '^chat here\\.?$',
+  '^(?:people|everyone) in this (?:call|meeting) (?:can|will)\\b',
+  '^(?:take notes for me|notes for this meeting|gemini)\\b',
+  '^(?:meeting|call) (?:has )?(?:ended|ending)\\b',
+  '^someone wants to join\\b',
+  '\\b[a-z]{3}-[a-z]{4}-[a-z]{3}\\b',
+  'meet\\.google\\.com',
+  '^(?:joining info|copy joining info|meeting details|share this meeting link|add others|attachments?)\\b',
+  '^(?!(?:i|we|he|she|they|you|it)\\b)[^.!?]{1,50} (?:has |have )?(?:joined|left)\\.?$',
+  '\\b(?:you.re|you are) (?:now )?(?:presenting|the only (?:one|person))\\b',
+  '^(?:you|everyone|all) (?:have |has )?(?:been )?(?:admitted|removed|muted)\\b',
+  '^.{1,50} (?:turned|has turned) (?:on|off) (?:chat|captions?|(?:their |the )?(?:camera|microphone))\\b',
+  '^(?:press enter to send|send a message to everyone|no messages yet)\\b',
+  '^(?:chat|messages?) (?:is|are) (?:currently )?(?:disabled|unavailable|turned off)\\b',
+  '^only (?:the )?host(?:s)? (?:can|may)\\b',
+  '^(?:host controls|host management)\\b',
+  '^(?:learn more|got it|dismiss)\\.?$',
+  '^(?:you can.t|you cannot) (?:unmute|turn on)\\b'
+].join('|'), 'i');
+function isMeetSystemChatText(value) {
+  const t = String(value || '').replace(/\s+/g, ' ').trim();
+  return Boolean(t) && t.length < 400 && MEET_SYSTEM_CHAT_RE.test(t);
+}
+
 function isIncomingHostChat(payload) {
   const sender = String(payload?.sender || '').trim();
   const message = String(payload?.message || '').trim();
   if (!message || !sender) return false;
+  if (isMeetSystemChatText(message) || isMeetSystemChatText(sender)) return false;
   if (/^(you|me)$/i.test(sender)) return false;
+  if (/^(?:google )?meet$|^gemini$|^zapper$|^system$|^notification$/i.test(sender)) return false;
   if (isMeetControlText(sender) || isMeetControlText(message)) return false;
   // Only reject panel noise when it is the sender/exact whole message. Do not drop real long messages
   // just because they contain words like joined/loading inside normal text.
@@ -809,3 +854,33 @@ if (window.electronAPI.onCountdownStart) {
 
 renderMeetChat();
 
+
+// Silence guard: after 10 minutes without speech the overlay asks the user to confirm. With no
+// answer by minute 15 the main process saves the PDF and disconnects everything.
+(function setupSilencePrompt() {
+  const live = document.getElementById('livePanel');
+  if (!live || !window.electronAPI.onSilencePrompt) return;
+  const bar = document.createElement('div');
+  bar.className = 'silenceBar hidden';
+  bar.innerHTML = '<span class="silenceText"></span><button type="button" class="smallBtn silenceContinue">Continue</button>';
+  live.insertBefore(bar, live.firstChild);
+  const text = bar.querySelector('.silenceText');
+  let endsAt = 0;
+  let timer = null;
+  const paint = () => {
+    const left = Math.max(0, Math.round((endsAt - Date.now()) / 1000));
+    text.textContent = `No speech for a while. Continue? Disconnecting in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  };
+  const hide = () => { bar.classList.add('hidden'); if (timer) clearInterval(timer); timer = null; };
+  window.electronAPI.onSilencePrompt((data) => {
+    endsAt = Number(data && data.endsAt) || (Date.now() + 5 * 60 * 1000);
+    bar.classList.remove('hidden');
+    paint();
+    if (!timer) timer = setInterval(paint, 1000);
+  });
+  window.electronAPI.onSilenceClear(hide);
+  bar.querySelector('.silenceContinue').addEventListener('click', async () => {
+    hide();
+    await window.electronAPI.silenceContinue().catch(() => null);
+  });
+})();

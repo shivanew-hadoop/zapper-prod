@@ -6,7 +6,9 @@
 // This never sends microphone audio to Zapper servers or to Deepgram: the audio goes only to Meet.
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
 
-const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
+// The SAME signed-in Google profile the app already uses (Google Sign-In in the overlay), so the host
+// never has to sign in again and the meeting starts with the same Gmail.
+const HOST_PARTITION = 'persist:gmeet-profile';
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -126,7 +128,6 @@ function allowMediaForHostSession() {
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['media', 'microphone', 'camera', 'notifications'].includes(permission));
   });
-  try { ses.setPermissionCheckHandler((_wc, permission) => ['media', 'microphone', 'camera', 'notifications'].includes(permission)); } catch (_) {}
   return ses;
 }
 

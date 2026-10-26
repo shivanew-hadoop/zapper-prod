@@ -33,4 +33,5 @@ assert(hostSrc.includes('show: false') && hostSrc.includes('showInactive()'), 'h
 assert(hostSrc.includes('disablePasskeys(win)') && hostSrc.includes('addScriptToEvaluateOnNewDocument'), 'host sign-in must not wait on a passkey prompt');
 const mainSrc2 = fs.readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
 assert(mainSrc2.includes('silentHostCommand') && mainSrc2.includes("startupControl.type === 'leave'"), 'End Session must close Zapper, never open it');
+assert(hostSrc.includes("HOST_PARTITION = 'persist:gmeet-profile'"), 'host must reuse the existing signed-in Google profile');
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

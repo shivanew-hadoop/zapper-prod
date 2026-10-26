@@ -1,6 +1,5 @@
 import { mountHowItWorks } from './how-it-works.jsx';
-import { createHostExtensionSetup, consumeResume, HOST_EXTENSION_PENDING_KEY } from './host-extension-setup.js';
-import { listMicrophones, recordMicrophoneTest } from './host-microphone.js';
+import { startHostMicrophone, listMicrophones, recordMicrophoneTest } from './host-microphone.js';
 import { createRecordingWakeLock } from './recording-wake-lock.js';
 import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId } from './host-session-selection.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
@@ -24,15 +23,82 @@ let currentSessionPin = '';
 let currentSessionOwnerId = '';
 let sessionLoadGeneration = 0;
 let hostMicCapture = null;
-let hostMicOwnership = null;
 let hostMicSessionId = '';
 let hostMicRequestGeneration = 0;
-// Host microphone auto-start: the mic must be live whenever an active Google-created
-// session is shown, not only at the instant of Create Session. It stays off only
-// when the host presses Mute themselves.
-let hostMicUserMuted = false;
-let hostMicStartingFor = '';
-let hostMicRetryCount = 0;
+// The host's voice reaches participants through the Google Meet the host's Zapper desktop
+// app joins automatically (camera off, microphone on); participants' Zapper desktops read
+// Meet's own captions. Sending the host browser microphone to /stt (Deepgram) is therefore
+// OFF; that code is kept only as a future fallback.
+const HOST_MIC_TO_STT = false;
+
+// Small helper window: first-time Google sign-in uses it, and it is the fallback Meet
+// window when the Zapper desktop app is not installed on this computer.
+function openHostMeetWindow() {
+  const w = 520, h = 440;
+  const left = Math.max(0, (window.screen?.availWidth || 1280) - w - 12);
+  const top = Math.max(0, (window.screen?.availHeight || 800) - h - 12);
+  try { return window.open('about:blank', 'zapper-host-meet', `popup=yes,width=${w},height=${h},left=${left},top=${top}`); }
+  catch (_) { return null; }
+}
+
+// Ask the installed Zapper desktop app to join the Meet as host. Resolves true when the
+// browser hands the link to the app (page loses focus / external-protocol prompt shown),
+// false when nothing happened (app not installed), and null when it cannot be detected.
+function launchHostApp(meetUrl) {
+  return new Promise(resolve => {
+    try { window.focus(); } catch (_) {}
+    const hadFocus = document.hasFocus();
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+      resolve(value);
+    };
+    const onBlur = () => finish(true);
+    const onVisibility = () => { if (document.hidden) finish(true); };
+    const timer = setTimeout(() => finish(hadFocus ? false : null), 2800);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    const frame = document.createElement('iframe');
+    frame.style.display = 'none';
+    frame.src = `zapper://host-join?meet=${encodeURIComponent(meetUrl)}&name=${encodeURIComponent(account?.name || 'Host')}`;
+    document.body.appendChild(frame);
+    setTimeout(() => frame.remove(), 4000);
+  });
+}
+
+// The Mute/Unmute button controls the host's microphone INSIDE the Meet window that the
+// desktop app keeps open (zapper://host-mic), and End Session leaves that Meet (host-leave).
+let hostMeetMicOn = true;
+function sendHostAppCommand(command, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = `zapper://${command}${query ? `?${query}` : ''}`;
+  document.body.appendChild(frame);
+  setTimeout(() => frame.remove(), 3000);
+}
+
+// After Create Session: the desktop app joins as host. Without it, fall back to the small
+// Meet window so the host can still join by hand.
+async function joinHostMeet(meetUrl, popup) {
+  try { popup?.close(); } catch (_) {}
+  if (!/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(String(meetUrl || ''))) return;
+  const launched = await launchHostApp(meetUrl);
+  if (launched === true) {
+    hostMeetMicOn = true;
+    updateHostMicButtons(true);
+    $('hostMicStatus').classList.remove('hidden');
+    $('hostMicStatus').textContent = 'Zapper desktop is joining your Google Meet as host (camera off, microphone on).';
+    return;
+  }
+  const fallback = openHostMeetWindow();
+  if (fallback) { try { fallback.location.replace(meetUrl); window.focus(); } catch (_) {} return; }
+  $('sessionError').textContent = `Install/open the Zapper desktop app to join automatically, or join your Meet here: ${meetUrl}`;
+}
 let activeSessionStartedAt = 0;
 let sessionTimerInterval = null;
 let microphoneTestRunning = false;
@@ -50,77 +116,6 @@ const recordingWakeLock = createRecordingWakeLock({ onState: message => {
 
 let googleMeetConnected = false;
 let googleMeetAvailable = false;
-// Chrome/Edge companion directly joins Meet on THIS computer. Zapper's Web UI
-// never forwards the host microphone to Deepgram or another transcription API.
-const HOST_MEET_CHANNEL = 'zapper-meet-host-v1';
-let hostMeetExtensionAvailable = false;
-let hostExtensionCheckInProgress = false;
-const hostExtensionSetup = createHostExtensionSetup();
-let hostMeetSessionId = '';
-let hostMeetMuted = false;
-let hostMeetJoined = false;
-let hostMeetStartSent = '';
-let hostMeetPending = new Map();
-let hostMeetStartGeneration = 0;
-const validHostMeetSession = id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id || ''));
-function hostMeetCommand(action, sessionId, meetUrl = '') {
-  if (!['create', 'ping'].includes(action) && !validHostMeetSession(sessionId)) return Promise.resolve({ ok: false, error: 'Invalid host session.' });
-  const requestId = crypto.randomUUID();
-  return new Promise(resolve => {
-    const timer = setTimeout(() => {
-      hostMeetPending.delete(requestId);
-      resolve({ ok: false, error: 'Host Google Meet extension is not responding. Install or enable the included Zapper Host Meet extension in Chrome/Edge.' });
-    }, action === 'create' ? 28000 : action === 'ping' ? 900 : 2800);
-    hostMeetPending.set(requestId, response => { clearTimeout(timer); resolve(response); });
-    window.postMessage({ channel: HOST_MEET_CHANNEL, type: 'command', requestId, action, sessionId, meetUrl }, location.origin);
-  });
-}
-function hostMeetMessage(message) {
-  if (!currentSessionId || message.sessionId !== currentSessionId) return;
-  if (message.status === 'joined') { hostMeetJoined = true; hostMeetMuted = false; updateHostMicButtons(true); }
-  else if (message.status === 'muted') { hostMeetMuted = true; updateHostMicButtons(false); }
-  else if (message.status === 'stopped' || message.status === 'error') { hostMeetJoined = false; updateHostMicButtons(false); }
-  if (message.message && $('hostMicStatus')) {
-    $('hostMicStatus').classList.remove('hidden');
-    $('hostMicStatus').textContent = message.message;
-  }
-}
-window.addEventListener('message', event => {
-  if (event.source !== window || event.origin !== location.origin || event.data?.channel !== HOST_MEET_CHANNEL) return;
-  const message = event.data;
-  if (message.type === 'extension-ready') { hostMeetExtensionAvailable = true; return; }
-  if (message.type === 'response') {
-    hostMeetExtensionAvailable = true;
-    const complete = hostMeetPending.get(message.requestId);
-    hostMeetPending.delete(message.requestId);
-    complete?.(message);
-  } else if (message.type === 'status') hostMeetMessage(message);
-});
-async function ensureHostMeet(session) {
-  if (!session || session.status !== 'active' || session.active === false) return;
-  if (hostMeetStartSent === session.id) return;
-  hostMeetStartSent = session.id;
-  hostMeetSessionId = session.id;
-  const generation = ++hostMeetStartGeneration;
-  $('hostMicStatus').classList.remove('hidden');
-  $('hostMicStatus').textContent = 'Connecting the host microphone directly in Google Meet…';
-  const result = await hostMeetCommand('start', session.id, session.meetUrl);
-  if (generation !== hostMeetStartGeneration || currentSessionId !== session.id) return;
-  if (!result.ok) {
-    hostMeetStartSent = '';
-    $('hostMicStatus').textContent = result.error || 'Could not start the host Google Meet.';
-    return;
-  }
-  if (!hostMeetJoined) $('hostMicStatus').textContent = 'Google Meet opening; joining as host with microphone ON and camera OFF…';
-}
-function stopHostMeetOnThisBrowser(sessionId) {
-  ++hostMeetStartGeneration;
-  hostMeetStartSent = '';
-  hostMeetJoined = false;
-  hostMeetMuted = false;
-  if (!validHostMeetSession(sessionId)) return;
-  void hostMeetCommand('stop', sessionId);
-}
 let resetToken = new URLSearchParams(window.location.search).get('reset') || '';
 const $ = id => document.getElementById(id);
 function finishAuthRestore() { document.documentElement.classList.remove('auth-restoring'); }
@@ -353,7 +348,6 @@ function showTrialWelcome(user) {
   $('authModal').classList.remove('hidden');
 }
 function logout() {
-  stopHostMeetOnThisBrowser(hostMeetSessionId);
   stopHostMicrophone('Microphone stopped on logout.', true);
   closeExpiredTrialNotice();
   trialExpiredShownForLogin = false;
@@ -616,15 +610,17 @@ async function loadHostPortal() {
   $('sessionError').textContent = !active ? 'Your trial or subscription has ended. Contact the Zapper administrator to renew access.' : '';
   restoreLastMeetUrl();
   await Promise.all([loadSessions(), loadTranscripts()]);
-  if (active) await refreshGoogleMeetAvailability();
+  if (active) void refreshGoogleMeetAvailability();
   showExpiredTrialIfNeeded();
   await checkReturnedPaymentIfPresent();
   window.scrollTo({ top: 0 });
 }
 
-// The same host microphone controls now target the real Google Meet tab.
-// No Web UI microphone audio enters the Zapper backend or Deepgram.
+// A created Google Meet room is only a link: it cannot supply microphone
+// audio by itself. With explicit browser permission, capture the HOST's own
+// microphone and use the existing /stt -> Deepgram -> transcript/PDF pipeline.
 function updateHostMicButtons(recording = false) {
+  if (!HOST_MIC_TO_STT) recording = hostMeetMicOn; // button reflects the Meet microphone
   $('hostMicToggle').disabled = microphoneTestRunning;
   $('hostMicToggle').textContent = recording ? 'Mute' : 'Unmute';
   $('hostMicToggle').setAttribute('aria-pressed', String(recording));
@@ -633,16 +629,12 @@ function updateHostMicButtons(recording = false) {
 
 function stopHostMicrophone(message = '', hide = false) {
   ++hostMicRequestGeneration; // Discard a pending microphone permission request.
-  hostMicStartingFor = '';
   if (hostMicCapture) hostMicCapture.stop();
   hostMicCapture = null;
-  hostMicOwnership?.release();
-  hostMicOwnership = null;
   void recordingWakeLock.stop();
   if (hide) hostMicSessionId = '';
   updateHostMicButtons();
   setMicLevel(0);
-  $('hostMicCaptionPreview').textContent = '';
   if (message) $('hostMicStatus').textContent = message;
   if (hide) {
     $('hostMicStatus').classList.add('hidden'); $('micTestReplay').classList.add('hidden');
@@ -653,7 +645,7 @@ function stopHostMicrophone(message = '', hide = false) {
 }
 
 function showHostMicPanel(session) {
-  if (!session || session.status !== 'active' || session.active === false) {
+  if (!session?.googleCreated || session?.status !== 'active' || session?.active === false) {
     stopHostMicrophone('', true);
     return;
   }
@@ -661,38 +653,95 @@ function showHostMicPanel(session) {
   hostMicSessionId = session.id;
   $('sessionToolbar').classList.remove('hidden');
   updateHostMicButtons(Boolean(hostMicCapture));
-  if (!hostMeetJoined && !$('hostMicStatus').textContent.trim()) {
-    $('hostMicStatus').textContent = 'Google Meet host connection not started.';
+  if (!HOST_MIC_TO_STT) {
+    // The mic level meter and device picker measure the browser mic, which is no longer used.
+    $('hostMicLevel').classList.add('hidden');
+    $('hostMicDevice').closest('.micDeviceSelect')?.classList.add('hidden');
+  }
+  if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
+    $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
   }
 }
 
-// The host's Google Meet tab now owns all live microphone capture. Zapper's
-// separate host /stt -> Deepgram stream is intentionally not started.
-$('hostMicToggle').onclick = async () => {
-  if (hostMeetSessionId && hostMeetSessionId === currentSessionId) {
-    const action = hostMeetMuted ? 'unmute' : 'mute';
-    const result = await hostMeetCommand(action, hostMeetSessionId);
-    if (!result.ok) { $('hostMicStatus').textContent = result.error; return; }
-    hostMeetMuted = action === 'mute';
-    updateHostMicButtons(!hostMeetMuted);
-    $('hostMicStatus').textContent = hostMeetMuted ? 'Microphone muted in Google Meet.' : 'Unmuting the microphone in Google Meet…';
+async function startHostMicForSession(sessionId) {
+  if (!HOST_MIC_TO_STT) {
+    if (sessionId) {
+      $('hostMicStatus').classList.remove('hidden');
+      $('hostMicStatus').textContent = 'Your voice reaches participants through the Google Meet the Zapper desktop app joins for you.';
+    }
     return;
   }
-  if (hostMicCapture) { hostMicUserMuted = true; stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.'); }
-  else if (hostMicSessionId) { $('hostMicStatus').textContent = 'Host audio is controlled by the Google Meet extension.'; }
+  if (!sessionId || hostMicCapture && hostMicSessionId === sessionId) return;
+  // Stop any previous recording, without changing the session/PIN lifecycle.
+  stopHostMicrophone();
+  hostMicSessionId = sessionId;
+  const generation = ++hostMicRequestGeneration;
+  $('sessionToolbar').classList.remove('hidden');
+  $('hostMicToggle').disabled = true;
+  $('hostMicToggle').textContent = 'Connecting…';
+  $('hostMicStatus').classList.remove('hidden');
+  $('hostMicStatus').textContent = 'Waiting for microphone permission. Your camera will not be used.';
+  try {
+    const capture = await startHostMicrophone({
+      apiBase: API_BASE,
+      sessionId,
+      deviceId: $('hostMicDevice').value,
+      onLevel: level => { if (generation === hostMicRequestGeneration) setMicLevel(level); },
+      fetchCaptureToken: async id => (await api(`/api/sessions/${encodeURIComponent(id)}/host-audio-token`, { method: 'POST' })).captureToken,
+      // Live captions continue through the API relay and saved PDF pipeline.
+      // They are intentionally not rendered in the host dashboard.
+      onStatus: text => {
+        if (generation !== hostMicRequestGeneration) return;
+        $('hostMicStatus').textContent = /(?:connected|active|listening)/i.test(text)
+          ? 'Microphone active. Speech is sent to PIN devices and saved for PDF.'
+          : text;
+      },
+      onStopped: reason => {
+        if (generation !== hostMicRequestGeneration) return;
+        hostMicCapture = null;
+        void recordingWakeLock.stop();
+        updateHostMicButtons();
+        if (reason) $('hostMicStatus').textContent = reason;
+      },
+    });
+    if (generation !== hostMicRequestGeneration || hostMicSessionId !== sessionId) {
+      capture.stop();
+      return;
+    }
+    hostMicCapture = capture;
+    void recordingWakeLock.start();
+    void refreshMicrophoneChoices();
+    updateHostMicButtons(true);
+  } catch (error) {
+    if (generation !== hostMicRequestGeneration) return;
+    hostMicCapture = null;
+    updateHostMicButtons();
+    $('hostMicStatus').textContent = error.name === 'NotAllowedError'
+      ? 'Microphone permission was denied. Allow the microphone for zapperapp.in in your browser, then click Unmute.'
+      : `Microphone could not start: ${error.message}`;
+  }
+}
+
+$('hostMicToggle').onclick = () => {
+  if (!HOST_MIC_TO_STT) {
+    hostMeetMicOn = !hostMeetMicOn;
+    sendHostAppCommand('host-mic', { state: hostMeetMicOn ? 'on' : 'off' });
+    updateHostMicButtons(hostMeetMicOn);
+    $('hostMicStatus').classList.remove('hidden');
+    $('hostMicStatus').textContent = hostMeetMicOn ? 'Microphone on in your Google Meet.' : 'Microphone muted in your Google Meet. Click Unmute to speak.';
+    return;
+  }
+  if (hostMicCapture) stopHostMicrophone('Microphone muted. Your speech is not transmitted. The session PIN remains active.');
+  else if (hostMicSessionId) void startHostMicForSession(hostMicSessionId);
 };
 
 function selectMicrophoneForThisBrowser(deviceId) {
-  if (hostMeetSessionId && currentSessionId === hostMeetSessionId) {
-    $('hostMicStatus').textContent = 'Change the microphone device using Google Meet audio settings. Zapper does not capture or transmit host audio.';
-    return;
-  }
   $('hostMicDevice').value = deviceId;
   $('hostMicTestDevice').value = deviceId;
   if (microphoneTestRunning || !hostMicSessionId || !hostMicCapture) return;
   const selectedSession = hostMicSessionId;
   stopHostMicrophone('Switching microphone…');
-  $('hostMicStatus').textContent = 'Select the microphone from Google Meet audio settings.';
+  void startHostMicForSession(selectedSession);
 }
 $('hostMicDevice').addEventListener('change', () => selectMicrophoneForThisBrowser($('hostMicDevice').value));
 $('hostMicTestDevice').addEventListener('change', () => selectMicrophoneForThisBrowser($('hostMicTestDevice').value));
@@ -735,7 +784,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
   if (button) button.disabled = true;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
-    if (hostMeetSessionId === sessionId) { stopHostMeetOnThisBrowser(sessionId); hostMeetSessionId = ''; }
+    if (currentSessionId === sessionId) sendHostAppCommand('host-leave');
     if (hostMicSessionId === sessionId) stopHostMicrophone('Session ended. Microphone stopped.', true);
     if (currentSessionId === sessionId) {
       $('pinStatus').textContent = 'Session ended. This PIN is no longer valid.';
@@ -756,7 +805,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
 }
 
 function focusDeviceSession(session, startMicrophone = false) {
-  if (currentSessionId && currentSessionId !== session.id) { stopHostMeetOnThisBrowser(currentSessionId); stopHostMicrophone('', true); hostMicUserMuted = false; hostMicRetryCount = 0; }
+  if (currentSessionId && currentSessionId !== session.id) stopHostMicrophone('', true);
   currentSessionId = session.id;
   currentSessionPin = session.pin;
   saveDeviceSessionId(localStorage, account?.id, session.id);
@@ -767,11 +816,7 @@ function focusDeviceSession(session, startMicrophone = false) {
   $('pinMeet').textContent = session.meetUrl;
   showAutoMeetUrl(session);
   showHostMicPanel(session);
-  // The host's actual Google Meet tab, NOT the Zapper/Deepgram microphone
-  // socket, now owns microphone capture. Do not start a second audio stream.
-  if (session.status === 'active' && session.active !== false) {
-    void ensureHostMeet(session);
-  }
+  if (startMicrophone && session.googleCreated) void startHostMicForSession(session.id);
   $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');
@@ -903,46 +948,24 @@ function showCreatedSession(session) {
 }
 
 $('googleMeetCreateBtn').onclick = async () => {
-  if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating || hostExtensionCheckInProgress) return;
+  if (currentSessionId || getDeviceSessionId(localStorage, account?.id) || hostSessionCreating) return;
   $('sessionError').textContent = '';
-  // Verify the real extension handshake before either the backend OAuth path or
-  // the signed-in local browser fallback. No Google Meet can autojoin without it.
-  hostExtensionCheckInProgress = true;
-  let companion;
-  try { companion = await hostMeetCommand('ping', ''); }
-  finally { hostExtensionCheckInProgress = false; }
-  if (!companion.ok) {
-    hostExtensionSetup.open({ ownerId: account.id });
-    return;
-  }
-  sessionStorage.removeItem(HOST_EXTENSION_PENDING_KEY);
   if (!googleMeetAvailable) {
-    // Same-machine Chrome/Edge companion creates the Meet room from Google's
-    // /new page when backend Meet API OAuth is not configured. The existing
-    // /api/sessions endpoint remains authoritative for the PIN/link pairing.
-    hostSessionCreating = true;
-    applyCreateSessionAvailability();
-    try {
-      const result = await hostMeetCommand('create', '');
-      if (!result.ok || !/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(result.meetUrl || '')) {
-        throw new Error(result.error || 'Google Meet did not return a valid room link.');
-      }
-      const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ meetUrl: result.meetUrl, googleCreated: true }) });
-      showCreatedSession(created.session);
-      await loadSessions();
-    } catch (error) {
-      $('sessionError').textContent = error.message;
-      // Existing manual link workflow remains available without the extension.
-    } finally {
-      hostSessionCreating = false;
-      applyCreateSessionAvailability();
-    }
+    // A signed-in Google browser session cannot authorize cross-origin Meet API
+    // access. This is a transparent assisted/manual path, never fake automation.
+    const manual = document.querySelector('.meetManualOption');
+    if (manual) manual.open = true;
+    $('googleMeetStatus').textContent = 'Google Meet is opening in another tab. Sign in with your own Google account, create a meeting, then copy its link into the field below to generate your Zapper PIN. The link cannot be copied automatically without Google OAuth setup.';
+    window.open('https://meet.google.com/new', '_blank', 'noopener,noreferrer');
     return;
   }
   const button = $('googleMeetCreateBtn');
   // Open before fetch only for a first-time Google connection: mobile and
   // desktop browsers may block popups started after an async request.
-  const popup = googleMeetConnected ? null : window.open('about:blank', '_blank');
+  // Opened synchronously (popup blockers) in both cases: first-time Google sign-in uses it,
+  // and joinHostMeet() closes it before handing the Meet to the desktop app.
+  const popup = googleMeetConnected ? null : openHostMeetWindow();
+  let popupHandled = false;
   if (!googleMeetConnected && !popup) {
     $('sessionError').textContent = 'Please allow the Google sign-in popup from Zapper.';
     return;
@@ -968,6 +991,8 @@ $('googleMeetCreateBtn').onclick = async () => {
       return;
     }
     showCreatedSession({ ...event.data.session, googleCreated: true });
+    popupHandled = true;
+    void joinHostMeet(event.data.session?.meetUrl, popup);
     googleMeetConnected = false; // status will reflect whether Google returned a reusable refresh token
     await refreshGoogleMeetAvailability();
     await loadSessions().catch(error => { $('sessionError').textContent = error.message; });
@@ -990,6 +1015,8 @@ $('googleMeetCreateBtn').onclick = async () => {
       hostSessionCreating = false;
       window.removeEventListener('message', onResult);
       showCreatedSession({ ...result.session, googleCreated: true });
+      popupHandled = true;
+      void joinHostMeet(result.session.meetUrl, popup);
       await loadSessions();
       return;
     }
@@ -1015,7 +1042,7 @@ $('googleMeetCreateBtn').onclick = async () => {
     $('sessionError').textContent = error.message;
     if (error.code === 'SUBSCRIPTION_INACTIVE') await loadAccount().then(loadHostPortal).catch(() => {});
   } finally {
-    if (popup && finished) popup.close();
+    if (popup && finished && !popupHandled) popup.close();
     applyCreateSessionAvailability();
   }
 };
@@ -1177,19 +1204,7 @@ async function loadPortal() {
     await loadAccount();
     hideAuth();
     if (account.role === 'admin') await loadAdminPortal();
-    else {
-      await loadHostPortal();
-      // Continue the original Create Session request once, after the browser
-      // reload required for a newly installed extension content script.
-      if (consumeResume(sessionStorage, account.id) && !currentSessionId && account?.subscriptionStatus === 'active') {
-        const ping = await hostMeetCommand('ping', '');
-        if (ping.ok && googleMeetAvailable && !googleMeetConnected) {
-          // A sign-in popup must be opened by a fresh user gesture.
-          $('sessionError').textContent = 'Host extension ready. Click Create Session to connect your Google account.';
-        } else if (ping.ok) $('googleMeetCreateBtn').click();
-        else hostExtensionSetup.open({ autoDownload: false, ownerId: account.id });
-      }
-    }
+    else await loadHostPortal();
     finishAuthRestore();
   } catch (error) {
     token = '';

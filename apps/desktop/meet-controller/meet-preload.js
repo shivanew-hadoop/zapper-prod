@@ -582,13 +582,90 @@
     return strongEmpty;
   }
 
+  // Meet keeps ONE row per utterance and grows it while the speaker talks on, even after
+  // a pause. Sending the whole row every time re-printed the same words again and again
+  // ("Thank you" / "Thank you for joining" / ...). Only the words not yet committed as a
+  // final line are emitted.
+  let captionCommitted = []; // normalized words of the row text already sent as final
+  let lastEmittedFinalKey = '';
+  let lastEmittedFinalAt = 0;
+
+  function captionWordsOf(value) {
+    const words = normalizeText(value).split(/\s+/).filter(Boolean);
+    return { words, norm: words.map(w => w.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')) };
+  }
+
+  function captionDelta(text) {
+    if (!captionCommitted.length) return text;
+    const { words, norm } = captionWordsOf(text);
+    const done = captionCommitted;
+    let lead = 0;
+    while (lead < done.length && lead < norm.length && norm[lead] === done[lead]) lead += 1;
+    // Same row, grown (tolerates a few words Meet corrected inside the committed part).
+    if (lead >= Math.max(1, Math.ceil(done.length * 0.7)) && norm.length >= done.length) {
+      return words.slice(done.length).join(' ');
+    }
+    if (norm.length < done.length && lead >= Math.max(1, Math.ceil(norm.length * 0.7))) return '';
+    // Row trimmed at the front by Meet: committed tail == new head.
+    for (let m = Math.min(done.length, norm.length); m >= 2; m -= 1) {
+      let same = true;
+      for (let i = 0; i < m; i += 1) { if (done[done.length - m + i] !== norm[i]) { same = false; break; } }
+      if (same) return words.slice(m).join(' ');
+    }
+    captionCommitted = []; // a different utterance
+    return text;
+  }
+
   function emitMeetCaption(text, isFinal) {
     const clean = cleanCaptionText(text);
     if (!clean || !ipcRenderer) return;
     const key = keyText(clean);
-    if (isFinal && key === lastCaptionFinalKey) return;
-    if (isFinal) lastCaptionFinalKey = key;
-    ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: Date.now() });
+    const now = Date.now();
+    // Only an immediate identical repeat is dropped; the same phrase said again later is real.
+    if (isFinal && key === lastEmittedFinalKey && now - lastEmittedFinalAt < 4000) return;
+    if (isFinal) { lastEmittedFinalKey = key; lastEmittedFinalAt = now; }
+    ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: now });
+  }
+
+  // Meet's recognizer keeps revising the newest words for a second or two ("wurld" ->
+  // "world"). A word is shown only once it (and everything before it) has stayed unchanged
+  // for CAPTION_STABLE_MS, so corrections happen before display instead of on screen. The
+  // whole line is still shown when the speaker pauses (final). Lower = faster, higher = steadier.
+  const CAPTION_STABLE_MS = 0; // 0 = show words the instant Meet shows them (4.3.1 speed)
+  let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
+  let lastShownInterim = '';
+
+  function stampCaptionWords(text) {
+    const { norm } = captionWordsOf(text);
+    const now = Date.now();
+    captionWordStamps = norm.map((word, i) =>
+      (captionWordStamps[i] && captionWordStamps[i].norm === word) ? captionWordStamps[i] : { norm: word, since: now });
+  }
+
+  function stableCaptionText(text) {
+    const { words } = captionWordsOf(text);
+    const now = Date.now();
+    let count = 0;
+    while (count < words.length && captionWordStamps[count] && now - captionWordStamps[count].since >= CAPTION_STABLE_MS) count += 1;
+    return words.slice(0, count).join(' ');
+  }
+
+  function flushStableInterim() {
+    if (!lastCaptionText) return;
+    const shown = captionDelta(stableCaptionText(lastCaptionText));
+    if (shown && shown !== lastShownInterim) {
+      lastShownInterim = shown;
+      emitMeetCaption(shown, false);
+    }
+  }
+
+  function commitCaptionFinal() {
+    if (!lastCaptionText) return;
+    const delta = captionDelta(lastCaptionText);
+    if (delta) emitMeetCaption(delta, true);
+    captionCommitted = captionWordsOf(lastCaptionText).norm;
+    lastCaptionFinalKey = lastCaptionKey;
+    lastShownInterim = '';
   }
 
   function scheduleCaptionFinal(text) {
@@ -597,7 +674,7 @@
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
       if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2100) {
-        emitMeetCaption(lastCaptionText, true);
+        commitCaptionFinal();
       }
     }, 2250);
   }
@@ -617,12 +694,25 @@
   // must be committed as a final line before it is replaced.
   function isCaptionContinuation(prevKey, nextKey, prevSpeaker, nextSpeaker) {
     if (prevSpeaker && nextSpeaker && prevSpeaker.toLowerCase() !== nextSpeaker.toLowerCase()) return false;
-    const a = captionSquash(prevKey);
-    const b = captionSquash(nextKey);
-    const head = Math.min(16, a.length, b.length);
-    if (head < 4) return true;
-    return b.startsWith(a.slice(0, head)) || a.startsWith(b.slice(0, head)) ||
-      b.includes(a.slice(-head)) || a.includes(b.slice(0, head));
+    const a = captionWordsOf(prevKey).norm;
+    const b = captionWordsOf(nextKey).norm;
+    const shorter = Math.min(a.length, b.length);
+    if (!shorter) return true;
+    // Same row edited in place: most leading words are unchanged (a revised word or two is fine).
+    let lead = 0;
+    while (lead < shorter && a[lead] === b[lead]) lead += 1;
+    if (lead / shorter >= 0.6) return true;
+    // Row trimmed at the front by Meet: the old tail is the new head (or vice versa).
+    for (let m = Math.min(a.length, b.length); m >= 2; m -= 1) {
+      let tail = true, head = true;
+      for (let i = 0; i < m; i += 1) {
+        if (a[a.length - m + i] !== b[i]) tail = false;
+        if (b[b.length - m + i] !== a[i]) head = false;
+        if (!tail && !head) break;
+      }
+      if (tail || head) return true;
+    }
+    return false;
   }
 
   function processCaptionEntries(entries, strategyName) {
@@ -636,13 +726,15 @@
       const speaker = cleanCaptionSpeaker(latest.speaker);
       if (lastCaptionKey && lastCaptionKey !== lastCaptionFinalKey &&
           !isCaptionContinuation(lastCaptionKey, key, lastCaptionSpeaker, speaker)) {
-        emitMeetCaption(lastCaptionText, true);
+        commitCaptionFinal();
+        captionCommitted = []; // next row is a new utterance
       }
       lastCaptionSpeaker = speaker;
       lastCaptionKey = key;
       lastCaptionText = text;
       lastCaptionChangedAt = Date.now();
-      emitMeetCaption(text, false);
+      stampCaptionWords(text);
+      flushStableInterim();
       scheduleCaptionFinal(text);
     }
     return true;
@@ -738,6 +830,44 @@
     return false;
   }
 
+  // Ask Meet to recognise speech as English (India). Best effort: Meet's settings UI varies, so it
+  // tries a few times and then leaves the default language alone.
+  let captionLangDone = false, captionLangBusy = false, captionLangAttempts = 0, captionLangLastAt = 0;
+  async function ensureIndianEnglishCaptions() {
+    if (captionLangDone || captionLangBusy || captionLangAttempts >= 3 || !captionObservedRoot) return;
+    const now = Date.now();
+    if (now - captionLangLastAt < 8000) return;
+    captionLangLastAt = now; captionLangAttempts += 1; captionLangBusy = true;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const labelOf = el => normalizeText([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.innerText].filter(Boolean).join(' ')).toLowerCase();
+    try {
+      const gear = [...document.querySelectorAll('button, div[role="button"]')]
+        .find(b => /caption(s)?.{0,12}settings|settings.{0,12}caption/.test(labelOf(b)));
+      if (!gear) return;
+      gear.click();
+      await wait(700);
+      const combos = [...document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"], select')].filter(visible);
+      const combo = combos.find(c => /english|language/.test(labelOf(c) + ' ' + normalizeText(c.textContent).toLowerCase()));
+      if (combo) {
+        if (/india/i.test(combo.innerText || combo.textContent || combo.value || '')) { captionLangDone = true; }
+        else {
+          combo.click();
+          await wait(500);
+          const option = [...document.querySelectorAll('[role="option"], li[data-value], [data-value]')]
+            .filter(visible).find(o => /^english\s*\(india\)/i.test(normalizeText(o.innerText || o.textContent)));
+          if (option) { option.click(); captionLangDone = true; await wait(300); }
+        }
+      }
+      // Close the settings dialog.
+      const close = [...document.querySelectorAll('button, div[role="button"]')].filter(visible)
+        .find(b => /^(close|done|ok)$/.test(labelOf(b)));
+      if (close) close.click();
+      else document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+      if (captionLangDone) log('Caption language set to English (India)');
+    } catch (_) {
+    } finally { captionLangBusy = false; }
+  }
+
   function installMeetCaptionObserver() {
     if (!ipcRenderer) return;
     const bodyObserver = new MutationObserver(() => {
@@ -757,7 +887,10 @@
       }
       attachCaptionObserver();
       scanMeetCaptions();
+      ensureIndianEnglishCaptions();
     }, 750);
+    // Words become "stable" with the passage of time, not only when the DOM changes.
+    setInterval(() => { if (isInMeeting()) flushStableInterim(); }, 80);
     log('Meet local caption observer installed (multi-strategy caption-block path)');
   }
 
@@ -767,9 +900,20 @@
     installMeetCaptionObserver();
   }
 
+  // The chat button is a TOGGLE. If Meet already shows it as pressed/expanded, clicking again
+  // would CLOSE the panel and make chat flap open/closed every few seconds.
+  function chatToggleLooksOpen() {
+    return [...document.querySelectorAll('button, div[role="button"]')].some(b => {
+      const label = normalizeText([b.getAttribute('aria-label'), b.getAttribute('data-tooltip')].filter(Boolean).join(' ')).toLowerCase();
+      return /chat with everyone|in-call messages|open chat|show chat/.test(label) &&
+        (b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-expanded') === 'true');
+    });
+  }
+
   async function ensureChatPanelOpen() {
     if (findMeetChatRoot()) return true;
     if (!isInMeeting()) return false;
+    if (chatToggleLooksOpen()) return false;
     const now = Date.now();
     if (now - lastOpenChatAttemptAt < 2200) return false;
     lastOpenChatAttemptAt = now;
@@ -821,11 +965,54 @@
     return /^[A-Za-z0-9][A-Za-z0-9.'_-]*(\s+[A-Za-z0-9][A-Za-z0-9.'_-]*){0,4}$/.test(t) || /@/.test(t);
   }
 
+  // Automatic notices and panel text produced by Google Meet (or by Zapper itself), never typed
+    // by the host or a participant. They must not appear as chat messages.
+    const MEET_SYSTEM_CHAT_RE = new RegExp([
+    '^messages (?:can only be|are only|will not be|won.t be|you send|sent)\\b',
+    'deleted when (?:the )?(?:call|meeting) ends',
+    '^(?:continuous chat|chat) (?:is|was|has been) (?:turned )?(?:on|off)\\b',
+    '^(?:the )?host (?:has )?(?:turned|disabled|enabled|limited|restricted)\\b',
+    '^(?:everyone|participants) (?:can|cannot|can.t) (?:now )?(?:send|see|use|present|share|unmute|turn)\\b',
+    '^.{1,60} (?:has |have )?(?:joined|left) (?:the |this )?(?:call|meeting)\\.?$',
+    '^.{1,60} (?:was |has been )?(?:admitted|removed from|let in|denied)\\b',
+    '\\bis (?:now )?(?:presenting|pinned)\\b',
+    '^.{1,60} (?:started|stopped) (?:presenting|recording|sharing|the recording)\\b',
+    '^(?:this meeting|the meeting|this call) is (?:now )?being (?:recorded|transcribed)\\b',
+    '^(?:recording|transcript|transcription|live captions?|captions?|notes) (?:has |have |is |are |was )?(?:started|stopped|turned|on|off|ready|available)\\b',
+    '^.{1,60} (?:pinned|unpinned) a message\\b',
+    '^.{1,60} (?:raised|lowered) (?:your|their) hand\\b',
+    '^you (?:can.t|cannot) send messages\\b',
+    '^chat here\\.?$',
+    '^(?:people|everyone) in this (?:call|meeting) (?:can|will)\\b',
+    '^(?:take notes for me|notes for this meeting|gemini)\\b',
+    '^(?:meeting|call) (?:has )?(?:ended|ending)\\b',
+    '^someone wants to join\\b',
+    '\\b[a-z]{3}-[a-z]{4}-[a-z]{3}\\b',
+    'meet\\.google\\.com',
+    '^(?:joining info|copy joining info|meeting details|share this meeting link|add others|attachments?)\\b',
+    '^(?!(?:i|we|he|she|they|you|it)\\b)[^.!?]{1,50} (?:has |have )?(?:joined|left)\\.?$',
+    '\\b(?:you.re|you are) (?:now )?(?:presenting|the only (?:one|person))\\b',
+    '^(?:you|everyone|all) (?:have |has )?(?:been )?(?:admitted|removed|muted)\\b',
+    '^.{1,50} (?:turned|has turned) (?:on|off) (?:chat|captions?|(?:their |the )?(?:camera|microphone))\\b',
+    '^(?:press enter to send|send a message to everyone|no messages yet)\\b',
+    '^(?:chat|messages?) (?:is|are) (?:currently )?(?:disabled|unavailable|turned off)\\b',
+    '^only (?:the )?host(?:s)? (?:can|may)\\b',
+    '^(?:host controls|host management)\\b',
+    '^(?:learn more|got it|dismiss)\\.?$',
+    '^(?:you can.t|you cannot) (?:unmute|turn on)\\b'
+  ].join('|'), 'i');
+    function isMeetSystemChatText(value) {
+    const t = String(value || '').replace(/\s+/g, ' ').trim();
+    return Boolean(t) && t.length < 400 && MEET_SYSTEM_CHAT_RE.test(t);
+  }
+
   function shouldSkipChatMessage(message, sender) {
     const msg = normalizeText(message);
     if (!msg) return true;
+    if (isMeetSystemChatText(msg) || isMeetSystemChatText(sender)) return true;
     if (isMeetNoise(msg) || /^(you|me|sent|sending|message sent|could not send message|keep)$/i.test(msg)) return true;
     if (isSelfText(sender)) return true;
+    if (/^(?:google )?meet$|^gemini$|^zapper$|^system$|^notification$/i.test(normalizeText(sender))) return true;
     if (isRecentLocalOutgoing(msg)) return true;
     return false;
   }
@@ -956,6 +1143,7 @@
 
   function scanChatArea(root) {
     if (!root) return;
+    if (document.querySelector('[data-message-id]')) { scanMessageIdBlocks(); return; }
     const snapshot = cleanChatLines(root.innerText || root.textContent || '').join('\n');
     if (snapshot && snapshot !== lastIncomingSnapshot) lastIncomingSnapshot = snapshot;
 
@@ -966,6 +1154,7 @@
   }
 
   function scanAnyVisibleChatBlocks() {
+    if (document.querySelector('[data-message-id]')) return scanMessageIdBlocks();
     const candidates = [...document.querySelectorAll('[data-message-id], [data-sender-name], [data-author-name], [role="listitem"], [role="article"], li, div')]
       .filter(el => el && visible(el))
       .filter(el => {
@@ -978,7 +1167,8 @@
         if (!/\b\d{1,2}:\d{2}(?:\s?[AP]M)?\b/i.test(txt)) return false;
         if (/ready to join|ask to join|meeting details|people in this call|loading invitees|view everyone in this call/i.test(txt)) return false;
         if (isMeetInactivityPrompt(txt)) return false;
-        if (el.closest('[role="alertdialog"]')) return false;
+        if (isMeetSystemChatText(txt)) return false;
+        if (el.closest('[role="alertdialog"], [role="toolbar"], [role="navigation"]')) return false;
         return txt.length > 4 && txt.length < 12000;
       })
       .filter(el => !isMeetNoise(el.innerText || el.textContent || ''))
@@ -994,7 +1184,21 @@
     for (const row of rows) emitChatRow(row);
   }
 
+  // Real chat messages live in nodes carrying data-message-id. When the page has any, ONLY those
+  // are read, so Meet's automatic notices and other panel text can never be mistaken for chat.
+  function scanMessageIdBlocks() {
+    const blocks = [...document.querySelectorAll('[data-message-id]')].filter(el => {
+      if (!visible(el)) return false;
+      if (el.getAttribute('data-is-user-message') === 'false') return false;
+      return !el.closest('[role="alertdialog"], [role="toolbar"], [role="navigation"]');
+    });
+    if (!blocks.length) return false;
+    for (const block of blocks) for (const row of parseCandidateBlock(block)) emitChatRow(row);
+    return true;
+  }
+
   function scanChatMutation(mutation) {
+    if (scanMessageIdBlocks()) return;
     const root = findMeetChatRoot();
     if (!root) { scanAnyVisibleChatBlocks(); return; }
     if (mutation && mutation.target && !(mutation.target === root || root.contains(mutation.target) || mutation.target.contains(root))) return;
@@ -1015,12 +1219,9 @@
     if (now - inMeetingStableSince < 2500) return;
 
     autoChatHereSent = true;
+    // Zapper must never post a message of its own into the meeting chat (it used to send
+    // "chat here"). It only makes sure the chat panel is open so real messages can be read.
     await ensureChatPanelOpen();
-    const result = await sendChatToMeet('chat here').catch(err => ({ success: false, error: err && err.message || String(err) }));
-    if (!result || !result.success) {
-      autoChatHereSent = false;
-      return;
-    }
   }
 
   function installMeetChatObserver() {

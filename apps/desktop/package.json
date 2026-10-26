@@ -1,6 +1,6 @@
 {
   "name": "@zapper/desktop",
-  "version": "4.3.24",
+  "version": "4.3.25",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis --x64",
-    "check": "node --check main.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/caption-dom-guard.js && node tests/host-join.js",
+    "check": "node --check main.js && node --check overlay-launch-readiness.js && node tests/packaged-runtime.js && node tests/overlay-launch-readiness.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/caption-dom-guard.js && node tests/host-join.js",
     "dist:portable": "electron-builder --win portable --x64",
     "test:chat": "node tests/chat-noise.js"
   },
@@ -38,6 +38,7 @@
     },
     "files": [
       "main.js",
+      "overlay-launch-readiness.js",
       "preload.js",
       "app-config.json",
       "overlay/**/*",

@@ -34,3 +34,14 @@ The handshake uses an HTTP endpoint listening **only** on `127.0.0.1:43791`, acc
 - `cd apps/desktop && npm run check`
 
 The desktop and website must be deployed together and validated on Windows. Offline tests cannot prove native Windows protocol confirmation or Google Meet admission on your machine.
+
+## 2026-10-26 packaging crash correction
+
+The first readiness build had `main.js` requiring `./overlay-launch-readiness` but
+omitted `overlay-launch-readiness.js` from electron-builder's explicit `build.files` list.
+The installer therefore booted with `Cannot find module './overlay-launch-readiness'`.
+This revision **includes that runtime file** in the app.asar and runs
+`tests/packaged-runtime.js` as part of `npm run check` before building the EXE.
+
+**Rebuild the EXE and reinstall it.** Re-deploying the site or running a previous
+installer does not fix an already-packaged `app.asar`.

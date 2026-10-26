@@ -1,12 +1,14 @@
 // transcriber/remoteDeepgram.js — sends PCM audio to your backend; backend owns Deepgram key
 // v126: auto-reconnects backend /stt WebSocket when network/Railway/client socket drops unexpectedly.
 const WebSocket = require('ws');
+const crypto = require('crypto');
 
 let socket = null;
 let transcriptCb = () => {};
 let opened = false;
 let bufferedChunks = [];
 let bufferedLocalCaptions = [];
+let pendingChat = new Map();
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let currentUrl = '';
@@ -115,6 +117,9 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
         if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(caption);
       } catch (_) {}
     }
+    for (const packet of pendingChat.values()) {
+      try { if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(packet); } catch (_) {}
+    }
     for (const chunk of bufferedChunks.splice(0)) {
       try {
         if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(chunk);
@@ -127,6 +132,8 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
 
+    if (msg.type === 'chat_ack') { pendingChat.delete(String(msg.id || '')); return emit({ type: 'chat_ack', id: String(msg.id || '') }); }
+    if (msg.type === 'chat_message') return emit({ ...msg, type: 'chat_message' });
     if (msg.type === 'error') {
       const text = msg.message || 'Backend transcription error';
       if (/license|DEEPGRAM_API_KEY|invalid/i.test(text)) permanentClose = true;
@@ -203,6 +210,7 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken, googleEmail = '
   opened = false;
   bufferedChunks = [];
   bufferedLocalCaptions = [];
+  pendingChat = new Map();
 
   connectSocket(currentUrl, false, generation);
   return true;
@@ -251,6 +259,20 @@ function sendLocalCaption({ text, isFinal = false, capturedAt = Date.now() } = {
   return false;
 }
 
+function isRemoteTranscriptConnected() { return Boolean(socket?.readyState === WebSocket.OPEN); }
+
+function sendRemoteChat(text, sender = 'Participant') {
+  const clean = String(text || '').trim().slice(0, 8000);
+  if (!clean || manuallyStopped || permanentClose) return false;
+  const id = crypto.randomUUID();
+  const packet = JSON.stringify({ type: 'chat_message', id, sender: String(sender).trim().slice(0, 100), message: clean });
+  pendingChat.set(id, packet);
+  if (pendingChat.size > 100) pendingChat.delete(pendingChat.keys().next().value);
+  try { if (socket?.readyState === WebSocket.OPEN) socket.send(packet); } catch (_) {}
+  if (!isSocketActive() && currentUrl && !reconnectTimer) scheduleReconnect(1006, 'chat awaiting reconnect', streamGeneration);
+  return true;
+}
+
 function stopRemoteTranscriptStream() {
   // Invalidate every event handler belonging to the previous stream before
   // asking its socket to close. This prevents a late close/error event from
@@ -260,6 +282,7 @@ function stopRemoteTranscriptStream() {
   permanentClose = false;
   bufferedChunks = [];
   bufferedLocalCaptions = [];
+  pendingChat.clear();
   opened = false;
   currentUrl = '';
   reconnectAttempt = 0;
@@ -280,5 +303,7 @@ module.exports = {
   startRemoteTranscriptStream,
   sendAudioChunk,
   sendLocalCaption,
+  sendRemoteChat,
+  isRemoteTranscriptConnected,
   stopRemoteTranscriptStream,
 };

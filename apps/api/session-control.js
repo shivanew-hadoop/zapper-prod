@@ -414,7 +414,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   function hostAudioTokenState(rawToken) {
     try {
       const payload = verifyToken(rawToken, 'zapper-host-audio', 'zapper-web');
-      if (payload.type !== 'host_audio') return null;
+      if (payload.type !== 'host_audio' && payload.type !== 'host_desktop') return null;
       let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(payload.sessionId, payload.sub);
       const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(payload.sub);
       if (!session || !user || user.status !== 'active' || user.role === 'admin') return null;
@@ -831,9 +831,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (!session) return res.status(404).json({ ok: false, error: 'Session not found.' });
     if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
     if (session.status !== 'active' || !Number(session.active || 0)) return res.status(409).json({ ok: false, error: 'The session has ended.' });
-    const remaining = Math.min(60 * 60 * 1000, Number(session.expires_at_ms || 0) - Date.now());
+    const remaining = Math.min(req.body?.desktop === true ? 210 * 60 * 1000 : 60 * 60 * 1000, Number(session.expires_at_ms || 0) - Date.now());
     if (remaining <= 0) return res.status(409).json({ ok: false, error: 'The session has expired.' });
-    const captureToken = signToken({ sub: Number(req.authUser.id), sessionId: session.id, type: 'host_audio' }, remaining, 'zapper-host-audio', 'zapper-web');
+    const desktop = req.body?.desktop === true;
+    const captureToken = signToken({ sub: Number(req.authUser.id), sessionId: session.id, type: desktop ? 'host_desktop' : 'host_audio' }, remaining, 'zapper-host-audio', 'zapper-web');
     res.set('Cache-Control', 'no-store').json({ ok: true, captureToken });
   });
 

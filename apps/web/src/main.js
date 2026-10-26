@@ -44,7 +44,7 @@ function openHostMeetWindow() {
 // Ask the installed Zapper desktop app to join the Meet as host. Resolves true when the
 // browser hands the link to the app (page loses focus / external-protocol prompt shown),
 // false when nothing happened (app not installed), and null when it cannot be detected.
-function launchHostApp(meetUrl) {
+function launchHostApp(meetUrl, captureToken = '') {
   return new Promise(resolve => {
     try { window.focus(); } catch (_) {}
     const hadFocus = document.hasFocus();
@@ -64,7 +64,9 @@ function launchHostApp(meetUrl) {
     document.addEventListener('visibilitychange', onVisibility);
     const frame = document.createElement('iframe');
     frame.style.display = 'none';
-    frame.src = `zapper://host-join?meet=${encodeURIComponent(meetUrl)}&name=${encodeURIComponent(account?.name || 'Host')}`;
+    const chosen = $('hostMicDevice');
+    const micLabel = chosen?.value ? chosen.selectedOptions?.[0]?.textContent || '' : '';
+    frame.src = `zapper://host-join?meet=${encodeURIComponent(meetUrl)}&name=${encodeURIComponent(account?.name || 'Host')}&captureToken=${encodeURIComponent(captureToken)}&mic=${encodeURIComponent(micLabel)}`;
     document.body.appendChild(frame);
     setTimeout(() => frame.remove(), 4000);
   });
@@ -84,10 +86,16 @@ function sendHostAppCommand(command, params = {}) {
 
 // After Create Session: the desktop app joins as host. Without it, fall back to the small
 // Meet window so the host can still join by hand.
-async function joinHostMeet(meetUrl, popup) {
+async function joinHostMeet(meetUrl, popup, sessionId) {
   try { popup?.close(); } catch (_) {}
   if (!/^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(String(meetUrl || ''))) return;
-  const launched = await launchHostApp(meetUrl);
+  let captureToken = '';
+  try {
+    if (sessionId) captureToken = (await api(`/api/sessions/${encodeURIComponent(sessionId)}/host-audio-token`, { method: 'POST', body: JSON.stringify({ desktop: true }) })).captureToken || '';
+  } catch (error) {
+    $('hostMicStatus').textContent = 'Host caption connection unavailable: ' + error.message;
+  }
+  const launched = await launchHostApp(meetUrl, captureToken);
   if (launched === true) {
     hostMeetMicOn = true;
     updateHostMicButtons(true);
@@ -654,9 +662,9 @@ function showHostMicPanel(session) {
   $('sessionToolbar').classList.remove('hidden');
   updateHostMicButtons(Boolean(hostMicCapture));
   if (!HOST_MIC_TO_STT) {
-    // The mic level meter and device picker measure the browser mic, which is no longer used.
+    // Picker now selects the actual desktop Google Meet microphone by OS label.
     $('hostMicLevel').classList.add('hidden');
-    $('hostMicDevice').closest('.micDeviceSelect')?.classList.add('hidden');
+    $('hostMicDevice').closest('.micDeviceSelect')?.classList.remove('hidden');
   }
   if (!hostMicCapture && !$('hostMicStatus').textContent.trim()) {
     $('hostMicStatus').textContent = 'Unmute to transmit your voice to PIN-connected participants.';
@@ -738,6 +746,13 @@ $('hostMicToggle').onclick = () => {
 function selectMicrophoneForThisBrowser(deviceId) {
   $('hostMicDevice').value = deviceId;
   $('hostMicTestDevice').value = deviceId;
+  if (!HOST_MIC_TO_STT) {
+    const chosen = $('hostMicDevice');
+    const micLabel = chosen.value ? chosen.selectedOptions?.[0]?.textContent || '' : '';
+    sendHostAppCommand('host-device', { mic: micLabel });
+    $('hostMicStatus').textContent = micLabel ? `Switching Google Meet microphone to ${micLabel}…` : 'Using system default Google Meet microphone.';
+    return;
+  }
   if (microphoneTestRunning || !hostMicSessionId || !hostMicCapture) return;
   const selectedSession = hostMicSessionId;
   stopHostMicrophone('Switching microphone…');
@@ -765,6 +780,7 @@ $('hostMicTest').onclick = async () => {
     $('hostMicTestAudio').src = micTestObjectUrl;
     $('hostMicReplay').disabled = false;
     $('micTestStatus').textContent = 'Recorded locally. Click Replay test to check microphone clarity.';
+    void refreshMicrophoneChoices();
     await refreshMicrophoneChoices();
   } catch (error) {
     $('micTestStatus').textContent = `Microphone test failed: ${error.message}`;
@@ -992,7 +1008,7 @@ $('googleMeetCreateBtn').onclick = async () => {
     }
     showCreatedSession({ ...event.data.session, googleCreated: true });
     popupHandled = true;
-    void joinHostMeet(event.data.session?.meetUrl, popup);
+    void joinHostMeet(event.data.session?.meetUrl, popup, event.data.session?.id);
     googleMeetConnected = false; // status will reflect whether Google returned a reusable refresh token
     await refreshGoogleMeetAvailability();
     await loadSessions().catch(error => { $('sessionError').textContent = error.message; });
@@ -1016,7 +1032,7 @@ $('googleMeetCreateBtn').onclick = async () => {
       window.removeEventListener('message', onResult);
       showCreatedSession({ ...result.session, googleCreated: true });
       popupHandled = true;
-      void joinHostMeet(result.session.meetUrl, popup);
+      void joinHostMeet(result.session.meetUrl, popup, result.session.id);
       await loadSessions();
       return;
     }

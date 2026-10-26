@@ -28,6 +28,14 @@ class ClientSocket extends EventEmitter {
   assert.equal(b.messages.at(-1).source, 'meet-captions');
   b.bufferedAmount = 1024 * 1024;
   assert.equal(relay.publish('room1', { text: 'Interim', isFinal: false }), 1);
+  b.bufferedAmount = 0;
+  const chatMessage = { id: 'chat-host-1234', sender: 'Host', message: 'Welcome to this room' };
+  assert.deepEqual(relay.publishChat('room1', chatMessage, { excludeSocket: a }).delivered, 1);
+  assert.equal(b.messages.at(-1).type, 'chat_message');
+  assert.equal(other.messages.filter(m => m.type === 'chat_message').length, 0, 'chat must not leak to another PIN');
+  assert.equal(relay.publishChat('room1', chatMessage).duplicate, true, 'resend must deduplicate');
+  assert.equal(relay.publishChat('room1', { ...chatMessage, id: 'chat-other-1234', message: 'New message' }).delivered, 2);
+  b.bufferedAmount = 1024 * 1024;
   relay.unsubscribe('room1', a);
   assert.equal(relay.publish('room1', { text: 'After leave', isFinal: true }), 0);
 
@@ -58,7 +66,7 @@ class ClientSocket extends EventEmitter {
   const sessionControl = {
     verifyParticipantToken: token => ({ a: 'one', b: 'one', x: 'else' }[token]
       ? { user, session: session(token === 'x' ? 'other-room' : 'shared-room') } : null),
-    verifyHostAudioToken: token => token === 'host' ? { user, session: session('shared-room') } : null,
+    verifyHostAudioToken: token => token === 'host' ? { user, session: session('shared-room'), payload: { type: 'host_audio' } } : token === 'desktop-host' ? { user, session: session('shared-room'), payload: { type: 'host_desktop' } } : null,
     hostAudioSessionState: () => ({ active: true }),
     participantTokenState: () => ({ active: true }),
     registerParticipantGoogleEmail() {},
@@ -88,11 +96,13 @@ class ClientSocket extends EventEmitter {
     setInterval: (...args) => setInterval(...args), clearInterval, setTimeout, clearTimeout, setImmediate,
   }, { filename: apiFile });
 
-  const desktopA = new ClientSocket(), desktopB = new ClientSocket(), foreign = new ClientSocket(), host = new ClientSocket();
+  const desktopA = new ClientSocket(), desktopB = new ClientSocket(), foreign = new ClientSocket(), host = new ClientSocket(), desktopHost = new ClientSocket();
   serverSocket.emit('connection', desktopA, fakeReq('a'));
   serverSocket.emit('connection', desktopB, fakeReq('b'));
   serverSocket.emit('connection', foreign, fakeReq('x'));
   serverSocket.emit('connection', host, fakeReq('host'));
+  serverSocket.emit('connection', desktopHost, { url: '/stt?token=desktop-host', headers: { host: '127.0.0.1' } });
+  assert.equal(desktopHost.readyState, 1, 'signed desktop host may connect without a web origin');
   assert.equal(deepgramSockets.length, 0, 'desktop should listen without sending any PCM');
   host.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
@@ -115,19 +125,33 @@ class ClientSocket extends EventEmitter {
   assert.equal(desktopA.messages.filter(m => m.text === 'caption from Meet DOM').length, 0, 'sender renders locally and should not receive an echo');
   assert.equal(desktopB.messages.filter(m => m.text === 'caption from Meet DOM').at(-1)?.source, 'meet-captions');
 
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat_message', id: 'session-chat-1234', sender: 'Guest', message: 'Question for host'
+  })), false);
+  assert.equal(desktopA.messages.at(-1).type, 'chat_ack', 'API must acknowledge chat for reconnect-safe retry');
+  assert.equal(desktopB.messages.at(-1).message, 'Question for host');
+  assert.equal(host.messages.at(-1).message, 'Question for host');
+  assert.equal(desktopHost.messages.at(-1).message, 'Question for host');
+  assert.equal(foreign.messages.filter(m => m.message === 'Question for host').length, 0, 'cross-session chat isolation');
+  const oldChatCount = desktopB.messages.filter(m => m.message === 'Question for host').length;
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat_message', id: 'session-chat-1234', sender: 'Guest', message: 'Question for host'
+  })), false);
+  assert.equal(desktopB.messages.filter(m => m.message === 'Question for host').length, oldChatCount, 'same message must never duplicate');
+
   // Existing desktop -> backend transcription remains local, not rebroadcast.
   desktopA.emit('message', Buffer.alloc(3200), true);
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 2);
   deepgramSockets[1].emit('message', providerPayload('desktop Meet audio', true));
-  assert.equal(desktopA.messages.at(-1).text, 'desktop Meet audio');
+  assert.equal(desktopA.messages.filter(m => m.text === 'desktop Meet audio').at(-1)?.text, 'desktop Meet audio');
   assert.equal(desktopB.messages.filter(m => m.text === 'desktop Meet audio').length, 0);
 
   desktopB.close();
   deepgramSockets[0].emit('message', providerPayload('after disconnect', true));
   assert.equal(desktopB.messages.filter(m => m.text === 'after disconnect').length, 0);
   assert.equal(desktopA.messages.at(-1).text, 'after disconnect');
-  desktopA.close(); foreign.close(); host.close();
+  desktopA.close(); foreign.close(); host.close(); desktopHost.close();
   console.log(JSON.stringify({ ok: true, hostCaptionForwardedToTwoSilentPINClients: true,
     interimAndFinal: true, crossSessionIsolated: true, desktopCaptureUnchanged: true, disconnectRemoved: true }));
 })().catch(error => { console.error(error); process.exitCode = 1; });

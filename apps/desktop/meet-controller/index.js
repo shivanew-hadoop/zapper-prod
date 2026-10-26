@@ -704,10 +704,10 @@ async function leaveMeet() {
 }
 
 
-async function sendMeetChatToMeeting(message) {
+async function sendChatToWindow(targetWindow, message) {
   const text = String(message || '').trim();
   if (!text) return { success: false, error: 'Empty chat message' };
-  if (!meetWindow || meetWindow.isDestroyed()) return { success: false, error: 'Meet window is not active' };
+  if (!targetWindow || targetWindow.isDestroyed()) return { success: false, error: 'Meet window is not active' };
 
   // Keep the customer message complete. Overlay currently caps at 8000 chars; Meet may still enforce
   // its own product-side limit, but this app should not truncate before sending.
@@ -865,7 +865,7 @@ async function sendMeetChatToMeeting(message) {
   })()`;
 
   try {
-    return await meetWindow.webContents.executeJavaScript(sendJs, true);
+    return await targetWindow.webContents.executeJavaScript(sendJs, true);
   } catch (err) {
     return { success: false, error: err.message || 'Could not send Meet chat message' };
   }
@@ -937,4 +937,6 @@ async function getGoogleAccountEmail() {
   }
 }
 
-module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting };
+async function sendMeetChatToMeeting(message) { return sendChatToWindow(meetWindow, message); }
+
+module.exports = { joinMeet, leaveMeet, toggleMeetDebug, openGoogleSignIn, closeGoogleSignInWindow, clearGoogleProfile, isGoogleLoggedIn, getGoogleAccountEmail, sendMeetChatToMeeting, sendChatToWindow };

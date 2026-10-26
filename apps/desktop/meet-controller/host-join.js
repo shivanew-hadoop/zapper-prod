@@ -5,6 +5,7 @@
 // Participants then join with the PIN and the existing caption pipeline does the rest.
 // This never sends microphone audio to Zapper servers or to Deepgram: the audio goes only to Meet.
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
+const path = require('path');
 
 const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
@@ -12,6 +13,9 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 let hostWindow = null;
 let hostTimer = null;
+let hostSelectedMicrophone = '';
+let hostJoined = false;
+let hostOpening = null;
 
 function sanitizeName(value) {
   const name = String(value || '').replace(/[^\p{L}\p{N} ._'-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 30);
@@ -24,7 +28,11 @@ function parseHostJoinUrl(rawUrl) {
   if (parsed.protocol !== 'zapper:' || parsed.hostname.toLowerCase() !== 'host-join') return null;
   const meetUrl = String(parsed.searchParams.get('meet') || '').trim().toLowerCase();
   if (!MEET_URL.test(meetUrl)) return null; // never open anything but a Meet room link
-  return { meetUrl, name: sanitizeName(parsed.searchParams.get('name')) };
+  const token = String(parsed.searchParams.get('captureToken') || '');
+  const microphone = String(parsed.searchParams.get('mic') || '').trim().slice(0, 250);
+  return { meetUrl, name: sanitizeName(parsed.searchParams.get('name')),
+    ...(token && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token) ? { captureToken: token } : {}),
+    ...(microphone ? { microphone } : {}) };
 }
 
 // zapper://host-mic?state=on|off and zapper://host-leave — the web portal's Mute button and
@@ -35,6 +43,7 @@ function parseHostControlUrl(rawUrl) {
   if (parsed.protocol !== 'zapper:') return null;
   const host = parsed.hostname.toLowerCase();
   if (host === 'host-leave') return { type: 'leave' };
+  if (host === 'host-device') return { type: 'device', microphone: String(parsed.searchParams.get('mic') || '').trim().slice(0, 250) };
   if (host === 'host-mic') {
     const state = String(parsed.searchParams.get('state') || '').toLowerCase();
     if (state === 'on' || state === 'off') return { type: 'mic', on: state === 'on' };
@@ -71,9 +80,8 @@ async function hostAutomation(hostName) {
 
   // In the meeting already?
   if (document.querySelector('[aria-label*="Leave call" i]')) {
-    window.__zapperHostEnforce = (window.__zapperHostEnforce || 0) + 1;
-    if (window.__zapperHostEnforce <= 3) enforceDevices();
-    return { state: 'joined', ticks: window.__zapperHostEnforce };
+    // Once joined, never override the host's manual mute/unmute choice.
+    return { state: 'joined' };
   }
 
   // Dismiss informational dialogs; accept Meet's own "use microphone" prompt (never "without").
@@ -146,13 +154,19 @@ function stopHostTimer() {
   hostTimer = null;
 }
 
-async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
+async function joinAsHost({ meetUrl, name, microphone = '' }, onStatus = () => {}) {
   if (!MEET_URL.test(String(meetUrl || ''))) throw new Error('Invalid Google Meet link.');
   const say = msg => { try { onStatus(msg); } catch (_) {} };
 
   if (hostWindow && !hostWindow.isDestroyed()) {
     // Already hosting this room? Just bring it forward; otherwise replace it.
-    if (hostWindow.__zapperMeetUrl === meetUrl) { hostWindow.show(); return true; }
+    if (hostWindow.__zapperMeetUrl === meetUrl) {
+      if (microphone) await selectHostMicrophone(microphone);
+      if (hostOpening) await hostOpening.catch(() => {});
+      if (hostJoined) say('Host mode: joined and verified.');
+      else showHostWindow(hostWindow); // Do not claim joined while still on prejoin.
+      return true;
+    }
     stopHostTimer();
     try { hostWindow.destroy(); } catch (_) {}
     hostWindow = null;
@@ -162,6 +176,8 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     await systemPreferences.askForMediaAccess('microphone').catch(() => {});
   }
   allowMediaForHostSession();
+  hostJoined = false;
+  hostSelectedMicrophone = String(microphone || '').trim();
 
   const display = screen.getPrimaryDisplay();
   const width = 520, height = 400;
@@ -175,9 +191,11 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     backgroundColor: '#202124',
     webPreferences: {
       partition: HOST_PARTITION,
-      contextIsolation: true,
+      preload: path.join(__dirname, 'host-preload.js'),
+      additionalArguments: ['--zapper-host-mode', '--zapper-host-mic=' + encodeURIComponent(hostSelectedMicrophone)],
+      contextIsolation: false, // Meet preload patches getUserMedia before Meet startup
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       backgroundThrottling: false,
       autoplayPolicy: 'no-user-gesture-required',
     },
@@ -185,14 +203,23 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   win.__zapperMeetUrl = meetUrl;
   hostWindow = win;
   win.on('closed', () => {
-    if (hostWindow === win) { hostWindow = null; stopHostTimer(); }
+    if (hostWindow === win) { hostWindow = null; hostJoined = false; stopHostTimer(); }
   });
 
   say('Host mode: opening your Google Meet…');
-  await win.loadURL(meetUrl, { userAgent: USER_AGENT });
+  hostOpening = win.loadURL(meetUrl, { userAgent: USER_AGENT });
+  try { await hostOpening; }
+  catch (error) {
+    // A failed navigation must not leave a phantom host meeting. A later
+    // Create Session / retry must be allowed to create a fresh window.
+    if (hostWindow === win) { hostWindow = null; hostJoined = false; }
+    try { if (!win.isDestroyed()) win.destroy(); } catch (_) {}
+    throw error;
+  } finally { hostOpening = null; }
 
   let busy = false;
   let lastClickAt = 0;
+  const earliestFirstJoinAt = Date.now() + 2500; // let a newly created Meet room become available
   let joinedTicks = 0;
   let askedSignIn = false;
   let lastNavAt = Date.now();
@@ -223,14 +250,17 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
-      if (result.state === 'joined') failedAttempts = 0;
+      if (result.state === 'joined') {
+        failedAttempts = 0;
+        if (!hostJoined) { hostJoined = true; say('Host mode: joined and verified.'); }
+      }
 
       if (result.state === 'joined') {
         joinedTicks += 1;
-        if (joinedTicks === 1) say('Host mode: you are in the meeting with your microphone on and camera off.');
+        if (joinedTicks === 1) say('Host mode: Google Meet joined successfully.');
         if (joinedTicks > 4) { stopHostTimer(); hideHostWindow(win); }
       } else if (result.state === 'ready') {
-        if (Date.now() - lastClickAt > 4000) {
+        if (Date.now() >= earliestFirstJoinAt && Date.now() - lastClickAt > 4000) {
           lastClickAt = Date.now();
           say('Host mode: joining the meeting…');
           await nativeClick(win, result.x, result.y);
@@ -238,23 +268,32 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       } else if (result.state === 'waiting') {
         say('Host mode: waiting to be admitted to the meeting…');
       } else if (result.state === 'cant_join' || result.state === 'signin_required') {
-        const signedIn = await hostSignedIn();
-        if (!signedIn && !askedSignIn) {
-          // Google will not let an anonymous guest in: sign in ONCE in this window.
-          askedSignIn = true;
-          showHostWindow(win);
-          say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
-          await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
-        } else {
-          // Retry transient Meet rejection, including after the first overlay permission prompt.
-          failedAttempts += 1;
-          if (failedAttempts <= 12) {
-            say('Host mode: Meet did not start; retrying automatically (' + failedAttempts + '/12)…');
+        // A brand-new Google-generated Meet room can briefly reject the first
+        // anonymous request. Never treat that transient bounce as a Google
+        // sign-in failure on the very first attempt.
+        if (result.state === 'cant_join' && failedAttempts < 3) {
+          if (Date.now() - lastNavAt >= 6000) {
+            failedAttempts++;
+            say('Host mode: new Meet room not ready; retrying (' + failedAttempts + '/3 initial attempts)…');
             await reopenRoom();
-          } else {
-            say('Host mode: automatic retries exhausted. Open the host window (Ctrl+Shift+H) to inspect Google Meet.');
-            stopHostTimer();
+          }
+        } else {
+          const signedIn = await hostSignedIn();
+          if (!signedIn && !askedSignIn) {
+            askedSignIn = true;
             showHostWindow(win);
+            say('Host mode: Google sign-in is required in the visible host Meet window.');
+            await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
+          } else if (Date.now() - lastNavAt >= 6000) {
+            failedAttempts++;
+            if (failedAttempts <= 9) {
+              say('Host mode: Meet rejected the join; retrying (' + failedAttempts + '/9)…');
+              await reopenRoom();
+            } else {
+              say('Host mode: Meet still refuses the call. Open the host window (Ctrl+Shift+H) to see the Google Meet message.');
+              stopHostTimer();
+              showHostWindow(win);
+            }
           }
         }
       } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
@@ -333,11 +372,23 @@ async function setHostMic(on) {
   })()`, true).catch(() => false);
 }
 
+async function selectHostMicrophone(label) {
+  hostSelectedMicrophone = String(label || '').trim().slice(0, 250);
+  if (!hostWindow || hostWindow.isDestroyed()) return false;
+  hostWindow.webContents.send('host-mic-device', hostSelectedMicrophone);
+  return true; // confirmation is issued by preload after replacement or on capture
+}
+function isHostWebContents(webContents) {
+  return Boolean(hostWindow && !hostWindow.isDestroyed() && hostWindow.webContents === webContents);
+}
+function getHostWindow() { return hostWindow && !hostWindow.isDestroyed() ? hostWindow : null; }
+function isHostMeetingActive() { return hostJoined && Boolean(hostWindow && !hostWindow.isDestroyed()); }
 function leaveHost() {
   stopHostTimer();
+  hostJoined = false;
   const win = hostWindow;
   hostWindow = null;
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-module.exports = { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+module.exports = { joinAsHost, leaveHost, setHostMic, selectHostMicrophone, isHostWebContents, isHostMeetingActive, getHostWindow, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };

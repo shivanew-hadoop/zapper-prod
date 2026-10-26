@@ -136,9 +136,9 @@ function getCaptureState(sessionId) {
   }
   return state;
 }
-function registerCapture(sessionId, connectionId) {
+function registerCapture(sessionId, connectionId, role = 'participant') {
   const state = getCaptureState(sessionId);
-  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [] });
+  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [], role });
   if (!state.leaderId) state.leaderId = connectionId;
 }
 function isCaptureLeader(sessionId, connectionId) {
@@ -150,9 +150,11 @@ function markLocalCaptionSource(sessionId, connectionId, now = Date.now()) {
   if (!connection) return false;
   connection.localCaptionAt = now;
   const leader = state.connections.get(state.leaderId);
-  // Prefer Meet's built-in captions over paid STT. Keep the first healthy local
-  // caption source as leader, and fail over only when it has gone quiet.
-  if (!leader || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000) {
+  // Prefer the authenticated host Meet observer while it has fresh captions.
+  // A participant remains the failover source if that observer disappears.
+  const isHostDesktop = connection.role === 'host_desktop';
+  const healthyHostLeader = leader?.role === 'host_desktop' && now - Number(leader.localCaptionAt || 0) < 12000;
+  if (isHostDesktop || (!healthyHostLeader && (!leader || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000))) {
     state.leaderId = connectionId;
   }
   return state.leaderId === connectionId;
@@ -170,7 +172,7 @@ function persistCaptureSegment(sessionId, connectionId, segment) {
   // If the leader has been silent while another connected source is producing
   // final captions, promote the active source. During normal speech this picks
   // whichever source completes first and keeps exactly one persistence path.
-  if (state.leaderId !== connectionId && (!leader || Date.now() - Number(leader.lastFinalAt || 0) > 12000)) {
+  if (state.leaderId !== connectionId && !(leader?.role === 'host_desktop' && Date.now() - Number(leader.localCaptionAt || 0) < 12000) && (!leader || Date.now() - Number(leader.lastFinalAt || 0) > 12000)) {
     state.leaderId = connectionId;
     const replayFrom = Math.max(0, Number(state.lastPersistedAt || 0) - 5000);
     const replay = connection.buffer.filter(item => Number(item.at || 0) >= replayFrom);
@@ -232,7 +234,7 @@ wss.on('connection', (clientWs, req) => {
   const participant = sessionControl.verifyParticipantToken(sessionToken);
   const hostAudio = !participant && sessionControl.verifyHostAudioToken(sessionToken);
   const capture = participant || hostAudio;
-  if (hostAudio && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
+  if (hostAudio && hostAudio.payload?.type !== 'host_desktop' && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
     try { clientWs.close(1008, 'origin not allowed'); } catch (_) {}
     return;
   }
@@ -243,10 +245,10 @@ wss.on('connection', (clientWs, req) => {
     return;
   }
   const connectionId = crypto.randomUUID();
-  registerCapture(capture.session.id, connectionId);
+  registerCapture(capture.session.id, connectionId, hostAudio?.payload?.type === 'host_desktop' ? 'host_desktop' : hostAudio ? 'host_web' : 'participant');
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
-  if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
+  hostCaptionRelay.subscribe(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -405,6 +407,11 @@ wss.on('connection', (clientWs, req) => {
     if (!isBinary) {
       let localCaption = null;
       try { localCaption = JSON.parse(incoming.toString()); } catch (_) { return; }
+      if (localCaption?.type === 'chat_message') {
+        const result = hostCaptionRelay.publishChat(capture.session.id, localCaption, { excludeSocket: clientWs });
+        if (result.accepted) sendClient({ type: 'chat_ack', id: String(localCaption.id || '').slice(0, 100) });
+        return;
+      }
       if (localCaption?.type !== 'local_caption') return;
       const text = String(localCaption.text || '').trim().slice(0, 12000);
       if (!text) return;
@@ -451,7 +458,7 @@ wss.on('connection', (clientWs, req) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
-    if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
+    hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
     unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);

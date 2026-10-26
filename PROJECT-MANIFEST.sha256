@@ -26,8 +26,8 @@ d61b012917d36b0183ec76e35d66eab78a13d2db19c0caae7af55554763111b0  ./apps/desktop
 7b968ac6570985a9f3b03e282ae3cdf77620f0a68310fee5901c16e563b3808b  ./apps/desktop/audio-ws/server.js
 d9e3c629b568f64195650e2bf6567ed8fce87f613c9f32ef31b3537329b6a442  ./apps/desktop/build-installer.ps1
 b28e71b6408550e955953e83d0f621783dfcfb2a4c34970052fa00c7199b0b6a  ./apps/desktop/build/installer.nsh
-9280fa1681e7fd1333899de4e324115a7535e68b24d1f2257b0a7a46f8670a7f  ./apps/desktop/main.js
-c1836a7f4b871dc9eafb766d54f54fbee027fec7fed6982410889ac7cb1ecdd9  ./apps/desktop/meet-controller/host-join.js
+41b50befa3059dbc47b9b969cc497fc4b442975ad34127120295cd7857564d71  ./apps/desktop/main.js
+5ead49f18d9443038716a19ac7d7e3cf466950923baba6f973ce7b72ecc08cb2  ./apps/desktop/meet-controller/host-join.js
 2849d2c681299051248edcf07a22693bd4d285a7d6bb004e8680b622983728dc  ./apps/desktop/meet-controller/index.js
 a4af2831dcebdc2c0769eb9efe6b4b5fed0b7c81cd303e2ec16379731010bd7a  ./apps/desktop/meet-controller/meet-preload.js
 cbc26e022767ce7a123bb2667cbc1d524a3696e4dc30d29c51216939a3573569  ./apps/desktop/overlay/index.html
@@ -35,9 +35,9 @@ cbc26e022767ce7a123bb2667cbc1d524a3696e4dc30d29c51216939a3573569  ./apps/desktop
 36b809590fd45eb204c18c8bc1a61b0c552305f35501c210a6aeab6a4ce5d35e  ./apps/desktop/overlay/overlay.js
 5121390b876d5dff91f24dd377c8324ca820ba093299f7214804d60439c4337c  ./apps/desktop/package.json
 8832c6fc16474163573399a9265477c0c540d63f30c7bdd43e7d3decb654e737  ./apps/desktop/preload.js
-065899048b8325e8b4852f38e9d50664b7f3568008072ba69eda84544b1a44f4  ./apps/desktop/tests/caption-dom-guard.js
+13ec04a4bd89ddd4c9b451b1d53b66c276edf4fea306ddcc676fad6dfc98bc0e  ./apps/desktop/tests/caption-dom-guard.js
 e6bba7ec4e58ce55f0f6f6089bec5aefefda63552deb413ea51665250d476658  ./apps/desktop/tests/chat-noise.js
-c3331bab9eaa28e0dd3a3b47312352dad4404291424378c70d4a0de64ee56d2a  ./apps/desktop/tests/host-join.js
+386c024a539adcbb5658d8e34381151fdb78f36697079256985b2589121ae8df  ./apps/desktop/tests/host-join.js
 6b7fb3fd9a74aa7e4a77f4c053ed35350b5c622c970f00ab706ad313d449d648  ./apps/desktop/tests/silence-guard.js
 3e269a0742832e5e8b153516e206af089563b7666168eeb134f77cb7c238b25b  ./apps/desktop/transcriber/remoteDeepgram.js
 80c2348ef09e8e9fdf7035327b396ae3a0e58f83d8f4238a07dfabff59fef839  ./apps/web/.env.example

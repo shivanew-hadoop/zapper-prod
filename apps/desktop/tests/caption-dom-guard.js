@@ -23,7 +23,6 @@ assert(/strongEmpty/.test(source), 'an empty strong container must not shadow st
 assert(source.includes('isCaptionContinuation'), 'a new utterance must finalize the previous caption line');
 assert(source.includes('captionKeyToggleAttempts < 3'), 'the c-key caption toggle must be bounded');
 assert(source.includes('CAPTION_STABLE_MS'), 'words must be held until stable so Meet revisions are not shown');
-assert(mainSource.includes('CalculateNativeWinOcclusion'), 'hidden Meet window must not be throttled when covered by other apps');
 assert(/CAPTION_STABLE_MS\s*=\s*(\d+)/.test(source) && Number(source.match(/CAPTION_STABLE_MS\s*=\s*(\d+)/)[1]) <= 400, 'word-stability hold must stay small to keep captions low-latency');
 assert(source.includes('function captionDelta'), 'only new words may be emitted so a growing Meet row is not re-printed');
 
@@ -81,6 +80,6 @@ console.log(JSON.stringify({
   const html = fsx.readFileSync(px.join(__dirname, '../overlay/index.html'), 'utf8');
   assert(!html.includes('id="transcriptionSource"'), 'Source label must not be displayed');
   const mainSrc = fsx.readFileSync(px.join(__dirname, '../main.js'), 'utf8');
-  assert(mainSrc.includes('opts.keepRunning') && mainSrc.includes("appendSwitch('lang', 'en-IN')"), 'X hides while running; en-IN locale');
+  assert(mainSrc.includes('opts.keepRunning'), 'X hides while running');
   console.log(JSON.stringify({ ok: true, v435Guards: true }));
 }

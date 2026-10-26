@@ -146,13 +146,13 @@ function stopHostTimer() {
   hostTimer = null;
 }
 
-async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
+async function joinAsHost({ meetUrl, name }, onStatus = () => {}, internal = {}) {
   if (!MEET_URL.test(String(meetUrl || ''))) throw new Error('Invalid Google Meet link.');
   const say = msg => { try { onStatus(msg); } catch (_) {} };
 
   if (hostWindow && !hostWindow.isDestroyed()) {
     // Already hosting this room? Just bring it forward; otherwise replace it.
-    if (hostWindow.__zapperMeetUrl === meetUrl) { hostWindow.show(); return true; }
+    if (hostWindow.__zapperMeetUrl === meetUrl && !internal.fresh) return true; // already hosting it (stays hidden)
     stopHostTimer();
     try { hostWindow.destroy(); } catch (_) {}
     hostWindow = null;
@@ -169,7 +169,8 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     width, height,
     x: display.workArea.x + display.workArea.width - width - 12,
     y: display.workArea.y + display.workArea.height - height - 12,
-    show: true,
+    show: false,
+    skipTaskbar: true,
     title: 'Zapper Host — Google Meet',
     autoHideMenuBar: true,
     backgroundColor: '#202124',
@@ -182,8 +183,15 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
-  win.webContents.setUserAgent(USER_AGENT);
+  win.webContents.setUserAgent(USER_AGENT, 'en-IN,en;q=0.9');
   win.__zapperMeetUrl = meetUrl;
+  // Joining happens out of sight: the window is rendered but see-through, with no taskbar button.
+  // (Meet needs a rendered window to finish "Getting ready".) Only the one-time Google sign-in
+  // makes it visible.
+  win.setOpacity(0.01);
+  win.setContentProtection(true);
+  win.__zapperHidden = true;
+  win.showInactive();
   hostWindow = win;
   win.on('closed', () => {
     if (hostWindow === win) { hostWindow = null; stopHostTimer(); stopHostChatWatcher(); }
@@ -212,6 +220,19 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   let lastState = '';
   let reloads = 0;
   const roomCode = meetUrl.split('/').pop();
+  // "You can't join this video call": close this window and start again with a brand-new one.
+  let restarting = false;
+  const restartFresh = () => {
+    if (restarting) return;
+    restarting = true;
+    const attempt = (internal.restarts || 0) + 1;
+    stopHostTimer();
+    if (hostWindow === win) hostWindow = null;
+    try { win.destroy(); } catch (_) {}
+    setTimeout(() => {
+      joinAsHost({ meetUrl, name }, onStatus, { fresh: true, restarts: attempt }).catch(() => {});
+    }, 400);
+  };
   const reopenRoom = async () => {
     if (win.isDestroyed() || Date.now() - lastNavAt < 1500) return; // retry almost immediately
     lastNavAt = Date.now();
@@ -231,6 +252,8 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       // Signed in through Google (one-time): return to the room afterwards.
       if (!onGoogleSignIn && !onRoom && /^https:\/\/(myaccount|www)\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
       if (onGoogleSignIn) { lastProgressAt = Date.now(); return; } // let the host sign in undisturbed
+      // Signed in (or never needed sign-in): everything after this happens out of sight.
+      if (!win.__zapperHidden && !win.__zapperUserShown) concealHostWindow(win);
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
@@ -258,8 +281,11 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
             say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
             await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
           }
+        } else if (result.state === 'cant_join' && (internal.restarts || 0) < 60) {
+          // Signed in but Meet still bounced us: throw this window away and try again with a new one.
+          restartFresh();
+          return;
         } else if (reloads < 80) {
-          // Signed in but Meet still bounced us: drop the error page and try again right away.
           await reopenRoom();
         }
       } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
@@ -272,17 +298,27 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     } finally {
       busy = false;
     }
-  }, 1500);
+  }, 1000);
   return true;
 }
 
-// The host stays in the meeting while the window is minimized to the taskbar (click it, or
-// press Ctrl+Shift+H, to read and send chat). The taskbar button flashes on a new chat message.
-function hideHostWindow(win) {
+// The host stays in the meeting with the window completely out of sight (see-through, click-through,
+// no taskbar button). Press Ctrl+Shift+H to bring it up, for example to read or send chat.
+function concealHostWindow(win) {
   try {
     if (!win || win.isDestroyed()) return;
     win.__zapperHidden = true;
-    win.minimize();
+    win.setContentProtection(true);
+    win.setSkipTaskbar(true);
+    win.setOpacity(0.01);
+  } catch (_) {}
+}
+
+function hideHostWindow(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    concealHostWindow(win);
+    win.setIgnoreMouseEvents(true, { forward: true });
   } catch (_) {}
 }
 
@@ -291,6 +327,7 @@ function showHostWindow(win) {
     if (!win || win.isDestroyed()) return;
     win.__zapperHidden = false;
     win.setIgnoreMouseEvents(false);
+    win.setContentProtection(false);
     win.setOpacity(1);
     win.setSkipTaskbar(false);
     if (win.isMinimized()) win.restore();
@@ -313,8 +350,8 @@ async function hostSignedIn() {
 function toggleHostWindow() {
   const win = hostWindow;
   if (!win || win.isDestroyed()) return false;
-  if (win.__zapperHidden || win.isMinimized()) showHostWindow(win);
-  else hideHostWindow(win);
+  if (win.__zapperHidden) { win.__zapperUserShown = true; showHostWindow(win); }
+  else { win.__zapperUserShown = false; hideHostWindow(win); }
   return true;
 }
 
@@ -361,9 +398,8 @@ function startHostChatWatcher(win, say) {
           if (b) b.click();
         })()`, true).catch(() => {});
       }
-      if (lastCount >= 0 && info.count > lastCount && win.isMinimized()) {
-        win.flashFrame(true);
-        say('Host mode: new chat message in your Meet window (click it on the taskbar, or press Ctrl+Shift+H).');
+      if (lastCount >= 0 && info.count > lastCount && win.__zapperHidden) {
+        say('Host mode: new chat message in your Meet window (press Ctrl+Shift+H to read and reply).');
       }
       lastCount = info.count;
     } catch (_) {}
@@ -378,4 +414,6 @@ function leaveHost() {
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-module.exports = { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+function isHostActive() { return Boolean(hostWindow && !hostWindow.isDestroyed()); }
+
+module.exports = { isHostActive, joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };

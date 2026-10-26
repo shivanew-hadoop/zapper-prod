@@ -332,7 +332,9 @@ collapseBtn.addEventListener('click', async () => {
   await applyOverlayCollapsed();
 });
 setTimeout(() => { applyOverlayCollapsed(); }, 250);
-closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay(); });
+// While a session is live the X only hides the overlay (capture keeps running behind the scenes;
+// Ctrl+Shift+T shows it again). With no live session it still exits Zapper as before.
+closeBtn.addEventListener('click', async () => { await window.electronAPI.closeOverlay({ keepRunning: Boolean(activeSessionToken) }); });
 
 function escapeHtml(value) {
   return String(value || '')
@@ -483,6 +485,7 @@ function isIncomingHostChat(payload) {
   if (!message || !sender) return false;
   if (isMeetSystemChatText(message) || isMeetSystemChatText(sender)) return false;
   if (/^(you|me)$/i.test(sender)) return false;
+  if (/^(?:google )?meet$|^gemini$|^zapper$|^system$|^notification$/i.test(sender)) return false;
   if (isMeetControlText(sender) || isMeetControlText(message)) return false;
   // Only reject panel noise when it is the sender/exact whole message. Do not drop real long messages
   // just because they contain words like joined/loading inside normal text.
@@ -851,3 +854,33 @@ if (window.electronAPI.onCountdownStart) {
 
 renderMeetChat();
 
+
+// Silence guard: after 10 minutes without speech the overlay asks the user to confirm. With no
+// answer by minute 15 the main process saves the PDF and disconnects everything.
+(function setupSilencePrompt() {
+  const live = document.getElementById('livePanel');
+  if (!live || !window.electronAPI.onSilencePrompt) return;
+  const bar = document.createElement('div');
+  bar.className = 'silenceBar hidden';
+  bar.innerHTML = '<span class="silenceText"></span><button type="button" class="smallBtn silenceContinue">Continue</button>';
+  live.insertBefore(bar, live.firstChild);
+  const text = bar.querySelector('.silenceText');
+  let endsAt = 0;
+  let timer = null;
+  const paint = () => {
+    const left = Math.max(0, Math.round((endsAt - Date.now()) / 1000));
+    text.textContent = `No speech for a while. Continue? Disconnecting in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  };
+  const hide = () => { bar.classList.add('hidden'); if (timer) clearInterval(timer); timer = null; };
+  window.electronAPI.onSilencePrompt((data) => {
+    endsAt = Number(data && data.endsAt) || (Date.now() + 5 * 60 * 1000);
+    bar.classList.remove('hidden');
+    paint();
+    if (!timer) timer = setInterval(paint, 1000);
+  });
+  window.electronAPI.onSilenceClear(hide);
+  bar.querySelector('.silenceContinue').addEventListener('click', async () => {
+    hide();
+    await window.electronAPI.silenceContinue().catch(() => null);
+  });
+})();

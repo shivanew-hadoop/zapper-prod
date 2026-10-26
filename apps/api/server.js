@@ -216,7 +216,7 @@ function unregisterCapture(sessionId, connectionId) {
 
 function buildDeepgramUrl() {
   const params = new URLSearchParams({
-    model: 'nova-2', language: 'en-US', encoding: 'linear16', sample_rate: '16000', channels: '1',
+    model: 'nova-2', language: process.env.DEEPGRAM_LANGUAGE || 'en-IN', encoding: 'linear16', sample_rate: '16000', channels: '1',
     interim_results: 'true', punctuate: 'true', smart_format: 'true', endpointing: '300',
     utterance_end_ms: '1000', vad_events: 'true',
   });

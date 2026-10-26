@@ -71,3 +71,16 @@ console.log(JSON.stringify({
   sourceReadyAfterValidatedCaption: true,
   deepgramFallbackRequiresAudibleFailure: true
 }));
+
+// v4.3.5 guards
+{
+  const fsx = require('fs'), px = require('path');
+  const pre = fsx.readFileSync(px.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
+  assert(/CAPTION_STABLE_MS = 0\b/.test(pre), 'captions must show instantly (4.3.1 speed)');
+  assert(pre.includes('scanMessageIdBlocks') && pre.includes('ensureIndianEnglishCaptions'), 'chat must prefer real message nodes; Indian English attempt present');
+  const html = fsx.readFileSync(px.join(__dirname, '../overlay/index.html'), 'utf8');
+  assert(!html.includes('id="transcriptionSource"'), 'Source label must not be displayed');
+  const mainSrc = fsx.readFileSync(px.join(__dirname, '../main.js'), 'utf8');
+  assert(mainSrc.includes('opts.keepRunning') && mainSrc.includes("appendSwitch('lang', 'en-IN')"), 'X hides while running; en-IN locale');
+  console.log(JSON.stringify({ ok: true, v435Guards: true }));
+}

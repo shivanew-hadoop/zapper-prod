@@ -631,7 +631,7 @@
   // "world"). A word is shown only once it (and everything before it) has stayed unchanged
   // for CAPTION_STABLE_MS, so corrections happen before display instead of on screen. The
   // whole line is still shown when the speaker pauses (final). Lower = faster, higher = steadier.
-  const CAPTION_STABLE_MS = 300;
+  const CAPTION_STABLE_MS = 0; // 0 = show words the instant Meet shows them (4.3.1 speed)
   let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
   let lastShownInterim = '';
 
@@ -830,6 +830,44 @@
     return false;
   }
 
+  // Ask Meet to recognise speech as English (India). Best effort: Meet's settings UI varies, so it
+  // tries a few times and then leaves the default language alone.
+  let captionLangDone = false, captionLangBusy = false, captionLangAttempts = 0, captionLangLastAt = 0;
+  async function ensureIndianEnglishCaptions() {
+    if (captionLangDone || captionLangBusy || captionLangAttempts >= 3 || !captionObservedRoot) return;
+    const now = Date.now();
+    if (now - captionLangLastAt < 8000) return;
+    captionLangLastAt = now; captionLangAttempts += 1; captionLangBusy = true;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const labelOf = el => normalizeText([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.innerText].filter(Boolean).join(' ')).toLowerCase();
+    try {
+      const gear = [...document.querySelectorAll('button, div[role="button"]')]
+        .find(b => /caption(s)?.{0,12}settings|settings.{0,12}caption/.test(labelOf(b)));
+      if (!gear) return;
+      gear.click();
+      await wait(700);
+      const combos = [...document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"], select')].filter(visible);
+      const combo = combos.find(c => /english|language/.test(labelOf(c) + ' ' + normalizeText(c.textContent).toLowerCase()));
+      if (combo) {
+        if (/india/i.test(combo.innerText || combo.textContent || combo.value || '')) { captionLangDone = true; }
+        else {
+          combo.click();
+          await wait(500);
+          const option = [...document.querySelectorAll('[role="option"], li[data-value], [data-value]')]
+            .filter(visible).find(o => /^english\s*\(india\)/i.test(normalizeText(o.innerText || o.textContent)));
+          if (option) { option.click(); captionLangDone = true; await wait(300); }
+        }
+      }
+      // Close the settings dialog.
+      const close = [...document.querySelectorAll('button, div[role="button"]')].filter(visible)
+        .find(b => /^(close|done|ok)$/.test(labelOf(b)));
+      if (close) close.click();
+      else document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+      if (captionLangDone) log('Caption language set to English (India)');
+    } catch (_) {
+    } finally { captionLangBusy = false; }
+  }
+
   function installMeetCaptionObserver() {
     if (!ipcRenderer) return;
     const bodyObserver = new MutationObserver(() => {
@@ -849,6 +887,7 @@
       }
       attachCaptionObserver();
       scanMeetCaptions();
+      ensureIndianEnglishCaptions();
     }, 750);
     // Words become "stable" with the passage of time, not only when the DOM changes.
     setInterval(() => { if (isInMeeting()) flushStableInterim(); }, 80);
@@ -973,6 +1012,7 @@
     if (isMeetSystemChatText(msg) || isMeetSystemChatText(sender)) return true;
     if (isMeetNoise(msg) || /^(you|me|sent|sending|message sent|could not send message|keep)$/i.test(msg)) return true;
     if (isSelfText(sender)) return true;
+    if (/^(?:google )?meet$|^gemini$|^zapper$|^system$|^notification$/i.test(normalizeText(sender))) return true;
     if (isRecentLocalOutgoing(msg)) return true;
     return false;
   }
@@ -1103,6 +1143,7 @@
 
   function scanChatArea(root) {
     if (!root) return;
+    if (document.querySelector('[data-message-id]')) { scanMessageIdBlocks(); return; }
     const snapshot = cleanChatLines(root.innerText || root.textContent || '').join('\n');
     if (snapshot && snapshot !== lastIncomingSnapshot) lastIncomingSnapshot = snapshot;
 
@@ -1113,6 +1154,7 @@
   }
 
   function scanAnyVisibleChatBlocks() {
+    if (document.querySelector('[data-message-id]')) return scanMessageIdBlocks();
     const candidates = [...document.querySelectorAll('[data-message-id], [data-sender-name], [data-author-name], [role="listitem"], [role="article"], li, div')]
       .filter(el => el && visible(el))
       .filter(el => {
@@ -1142,7 +1184,21 @@
     for (const row of rows) emitChatRow(row);
   }
 
+  // Real chat messages live in nodes carrying data-message-id. When the page has any, ONLY those
+  // are read, so Meet's automatic notices and other panel text can never be mistaken for chat.
+  function scanMessageIdBlocks() {
+    const blocks = [...document.querySelectorAll('[data-message-id]')].filter(el => {
+      if (!visible(el)) return false;
+      if (el.getAttribute('data-is-user-message') === 'false') return false;
+      return !el.closest('[role="alertdialog"], [role="toolbar"], [role="navigation"]');
+    });
+    if (!blocks.length) return false;
+    for (const block of blocks) for (const row of parseCandidateBlock(block)) emitChatRow(row);
+    return true;
+  }
+
   function scanChatMutation(mutation) {
+    if (scanMessageIdBlocks()) return;
     const root = findMeetChatRoot();
     if (!root) { scanAnyVisibleChatBlocks(); return; }
     if (mutation && mutation.target && !(mutation.target === root || root.contains(mutation.target) || mutation.target.contains(root))) return;

@@ -81,7 +81,19 @@ function handleZapperUrl(rawUrl) {
   if (!rawUrl) return;
   const hostJoin = parseHostJoinUrl(rawUrl);
   if (hostJoin) {
-    joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
+    // Wait for the protected overlay to initialize before starting Meet on cold launch.
+    (async () => {
+      await app.whenReady();
+      if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
+      if (overlayWindow.webContents.isLoadingMainFrame()) {
+        await new Promise(resolve => {
+          const timeout = setTimeout(resolve, 8000);
+          overlayWindow.webContents.once('did-finish-load', () => { clearTimeout(timeout); resolve(); });
+        });
+      }
+      if (!overlayWindow.isDestroyed()) overlayWindow.showInactive();
+      await joinAsHost(hostJoin, sendStatus);
+    })().catch(error => sendStatus('Host mode could not join: ' + error.message));
     return;
   }
   const control = parseHostControlUrl(rawUrl);
@@ -964,12 +976,9 @@ ipcMain.handle('leave-meet', async () => {
 });
 
 ipcMain.handle('close-overlay', async () => {
-  // The X button is a true application exit. No tray/background Electron
-  // process is intentionally retained after this action.
-  terminateApplicationCompletely().catch(() => {
-    try { app.exit(0); } catch (_) { process.exit(0); }
-  });
-  return { success: true };
+  // Hide only the UI. Keep the host Meet, participant capture and relay alive.
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+  return { success: true, background: true };
 });
 
 ipcMain.handle('close-google-signin-window', async () => {

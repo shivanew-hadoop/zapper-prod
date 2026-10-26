@@ -199,6 +199,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   let lastProgressAt = Date.now();
   let lastState = '';
   let reloads = 0;
+  let failedAttempts = 0;
   const roomCode = meetUrl.split('/').pop();
   const reopenRoom = async () => {
     if (win.isDestroyed() || Date.now() - lastNavAt < 5000) return;
@@ -222,6 +223,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
+      if (result.state === 'joined') failedAttempts = 0;
 
       if (result.state === 'joined') {
         joinedTicks += 1;
@@ -243,8 +245,17 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
           showHostWindow(win);
           say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
           await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
-        } else if (reloads < 8) {
-          await reopenRoom();
+        } else {
+          // Retry transient Meet rejection, including after the first overlay permission prompt.
+          failedAttempts += 1;
+          if (failedAttempts <= 12) {
+            say('Host mode: Meet did not start; retrying automatically (' + failedAttempts + '/12)…');
+            await reopenRoom();
+          } else {
+            say('Host mode: automatic retries exhausted. Open the host window (Ctrl+Shift+H) to inspect Google Meet.');
+            stopHostTimer();
+            showHostWindow(win);
+          }
         }
       } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
         // Stuck on the pre-join page for 30 s: reload the room and try again.

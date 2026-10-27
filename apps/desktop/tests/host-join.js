@@ -21,6 +21,7 @@ assert.equal(sanitizeName(''), 'Host');
 assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=off'), { type: 'mic', on: false });
 assert.deepEqual(parseHostControlUrl('zapper://host-mic?state=on'), { type: 'mic', on: true });
 assert.deepEqual(parseHostControlUrl('zapper://host-leave'), { type: 'leave' });
+assert.deepEqual(parseHostControlUrl('zapper://host-resume'), { type: 'resume' });
 assert.equal(parseHostControlUrl('zapper://host-mic?state=maybe'), null);
 assert.equal(parseHostControlUrl('zapper://launch'), null);
 console.log(JSON.stringify({ ok: true, hostJoinOnlyOpensMeetRooms: true }));

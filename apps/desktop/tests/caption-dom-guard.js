@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
+const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 
@@ -54,16 +55,51 @@ const cleanCaptionText = new Function(
   `return (${extractFunction('cleanCaptionText')});`
 )(normalizeText, isCaptionChrome, () => '', () => false, () => false, () => false);
 
+const renderedCaptionText = new Function('normalizeText', `return (${extractFunction('renderedCaptionText')});`)(normalizeText);
+assert.equal(renderedCaptionText({ textContent: 'I wanted Tu Si', innerText: 'I wanted to see' }), 'I wanted to see',
+  'PIN participant overlays must read the rendered Meet words, not a hidden alternate');
+assert.equal(renderedCaptionText({ textContent: 'I wanted to see' }), 'I wanted to see',
+  'rendered text fallback must work for older Meet elements');
+
+// Simulate the participant's real bounded selector against Google's UK option.
+const ukSnippet = source.slice(source.indexOf('  const UK_LANGUAGE ='), source.indexOf('  function captionsAppearEnabled()'));
+const mockLanguage = { menuOpen: false, selected: false, opens: 0 };
+const ukPicker = {
+  textContent: 'English (India)', innerText: 'English (India)',
+  getAttribute: key => key === 'aria-haspopup' ? 'listbox' : '',
+  hasAttribute: key => key === 'aria-expanded',
+  click() { mockLanguage.menuOpen = true; mockLanguage.opens++; }
+};
+const ukOption = {
+  innerText: 'English (UK)', textContent: 'English (UK)',
+  getAttribute: () => '',
+  click() { mockLanguage.selected = true; mockLanguage.menuOpen = false; }
+};
+const ukContext = vm.createContext({
+  Date: class extends Date { static now() { return 100000; } }, normalizeText,
+  isInDialog: () => false,
+  document: { querySelectorAll: selector => selector.includes('[role="option"]')
+    ? (mockLanguage.menuOpen ? [ukOption] : []) : [ukPicker] },
+});
+vm.runInContext(`${ukSnippet}; this.selectUK = preferUKEnglishCaptions`, ukContext);
+ukContext.selectUK();
+ukContext.selectUK();
+assert.equal(mockLanguage.opens, 1, 'PIN client should open a verified Meet CC-language dropdown only once');
+assert.equal(mockLanguage.selected, true, 'PIN client must prefer English UK over English India');
+ukContext.selectUK();
+assert.equal(mockLanguage.opens, 1, 'successful language selection must not trigger repetitive clicks');
+
 assert.equal(cleanCaptionText('Can can you hear me? arrow_downwardJump to bottom'), 'Can can you hear me?', 'Jump-to-bottom chrome must be removed from a real caption');
 assert.equal(cleanCaptionText('arrow_downwardJump to bottom'), '', 'standalone Jump-to-bottom chrome must never become a caption');
 assert.equal(cleanCaptionText('We should jump to bottom of the document'), 'We should jump to bottom of the document', 'ordinary spoken words must not be over-filtered');
 assert(!mainSource.includes("activateDeepgramFallback('caption DOM not detected')"), 'quiet meetings must not activate Deepgram just because caption DOM is absent');
+assert(mainSource.includes('const DEEPGRAM_FALLBACK_ENABLED = false;'), 'desktop Deepgram fallback must remain OFF by default');
+assert(mainSource.includes('if (!DEEPGRAM_FALLBACK_ENABLED) return;'), 'audio chunks must never reach Deepgram while disabled');
 assert(mainSource.includes('localCaptionAdmitted && !deepgramFallbackActive'), 'fallback must be gated by admitted meeting audio');
 assert(mainSource.includes('>= 4000'), 'fallback must require sustained audible speech without captions');
 
 // Caption stream regressions: stable committed words must not be replayed
 // when Meet revises a single token, nor when it extends the same utterance.
-const vm = require('node:vm');
 const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionDelta', 'isCaptionContinuation'];
 const captionContext = vm.createContext({ normalizeText, captionCommitted: [] });
 for (const name of captionFns) vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, captionContext);
@@ -77,7 +113,9 @@ assert.equal(captionContext.captionMostlySame('Yes', 'Yes'), false, 'short genui
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Thank u for joining the call today', '', ''), true);
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Coming to my roles and responsibilities', '', ''), false);
 assert(source.includes('const CAPTION_STABLE_MS = 240'), 'interim captions should have a short stabilization window');
-assert(source.includes('}, 1300)'), 'final captions should not wait the previous 2.25 seconds');
+assert(source.includes('}, 2400)'), 'final captions should allow later Google Meet recognition corrections');
+assert(source.includes('function renderedCaptionText'), 'caption extraction must prefer visibly rendered text to raw DOM');
+assert(source.includes('preferUKEnglishCaptions()'), 'participant Meet should prefer English UK');
 
 console.log(JSON.stringify({
   ok: true,

@@ -30,6 +30,14 @@
   const inCall = () => Boolean(document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]'));
   const excluded = el => Boolean(el?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="toolbar"], button, [role="button"]'));
 
+  // Meet can keep alternate/hidden caption text in the same DOM node. Prefer
+  // the text actually rendered in the Meet tray over raw DOM textContent.
+  function renderedCaptionText(el) {
+    if (!el) return '';
+    const shown = typeof el.innerText === 'string' ? textOf(el.innerText) : '';
+    return shown || textOf(el.textContent || '');
+  }
+
   function latestCaption() {
     // Same verified Meet caption selectors as the PIN-participant collector.
     const container = document.querySelector('[jsname="tgaKEf"], [jsname="DS9Ooe"], [role="region"][aria-label*="caption" i]');
@@ -39,7 +47,7 @@
       for (const block of blocks.reverse()) {
         const textEl = block.querySelector('[jsname="bVV8Bd"]');
         if (!textEl || excluded(textEl)) continue;
-        const text = clean(textEl.textContent);
+        const text = clean(renderedCaptionText(textEl));
         if (text) return { text, speaker: clean(block.querySelector('[jsname="r4nke"]')?.textContent) };
       }
     }
@@ -47,18 +55,18 @@
     for (const row of rows.reverse()) {
       const textEl = row.querySelector('div.ygicle.VbkSUe, div.ygicle');
       if (!textEl || excluded(textEl)) continue;
-      const text = clean(textEl.textContent);
+      const text = clean(renderedCaptionText(textEl));
       if (text) return { text, speaker: clean(row.querySelector('div.NWpY1d')?.textContent) };
     }
     // Leaf-only fallback; never read an entire Meet panel as spoken text.
     const leaves = [...container.querySelectorAll('[jsname="bVV8Bd"], div.ygicle.VbkSUe, div.ygicle')];
     if (container.matches('[jsname="tgaKEf"]') && !leaves.length && !container.children.length) {
-      const text = clean(container.textContent);
+      const text = clean(renderedCaptionText(container));
       return text ? { text, speaker: '' } : null;
     }
     for (const el of leaves.reverse()) {
       if (excluded(el) || el.querySelector('[jsname="bVV8Bd"], div.ygicle')) continue;
-      const text = clean(el.textContent);
+      const text = clean(renderedCaptionText(el));
       if (text) return { text, speaker: '' };
     }
     return null;
@@ -140,8 +148,8 @@
     changedAt = now;
     if (finalTimer) clearTimeout(finalTimer);
     finalTimer = setTimeout(() => {
-      if (lastText === text && Date.now() - changedAt >= 1200) commit();
-    }, 1300);
+      if (lastText === text && Date.now() - changedAt >= 2300) commit();
+    }, 2400);
   }
   function flushInterim() {
     if (!lastText) return;
@@ -151,34 +159,168 @@
     const next = delta(words.slice(0, stable).join(' '));
     if (next && next !== shownInterim) { shownInterim = next; emit(next, false); }
   }
-  // Use plain English rather than Meet's English (India) beta only when the
-  // existing Meet UI exposes an unmistakable caption-language chooser.
-  let englishSwitchAttempts = 0, englishMenuAt = 0;
-  function preferStandardEnglish() {
-    if (englishSwitchAttempts >= 2) return;
+  // Prefer Google Meet's English (UK), including its long "United Kingdom"
+  // label, only through an identifiable caption-language dropdown.
+  const UK_LANGUAGE = /^English\s*\(\s*(?:UK|United Kingdom)\s*\)(?:\s*(?:selected|check|done|✓))?$/i;
+  const ENGLISH_LANGUAGE = /^English(?:\s*\([^)]{1,35}\))?(?:\s*\(?beta\)?)?(?:\s*(?:arrow_drop_down|expand_more))?$/i;
+  let ukApplied = false, ukMenuOpenedAt = 0, ukAttempts = 0, ukLastAttemptAt = 0;
+  function preferUKEnglishCaptions() {
+    if (ukApplied) return;
     const now = Date.now();
-    if (englishMenuAt && now - englishMenuAt < 2500) {
-      const plainEnglish = [...document.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitem"]')]
-        .find(el => textOf(el.textContent) === 'English' && !el.closest?.('[role="dialog"], [role="alertdialog"]'));
-      if (plainEnglish) {
-        try { plainEnglish.click(); englishSwitchAttempts = 2; } catch (_) {}
+    if (ukMenuOpenedAt && now - ukMenuOpenedAt < 3000) {
+      const option = [...document.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitem"], [role="radio"]')]
+        .find(el => UK_LANGUAGE.test(textOf(el.innerText || el.textContent || el.getAttribute('aria-label') || '')));
+      if (option) {
+        try { option.click(); ukApplied = true; } catch (_) {}
       }
       return;
     }
-    if (englishMenuAt) englishMenuAt = 0;
-    const picker = [...document.querySelectorAll('button, [role="combobox"], [role="button"]')]
-      .find(el => /English\s*\(India\)/i.test(textOf([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.textContent].filter(Boolean).join(' '))) &&
-        (el.getAttribute('aria-haspopup') || el.getAttribute('aria-expanded') !== null || el.getAttribute('role') === 'combobox'));
+    ukMenuOpenedAt = 0;
+    if (ukAttempts >= 4 || now - ukLastAttemptAt < 1800) return;
+    const picker = [...document.querySelectorAll('button, [role="combobox"], [role="button"]')].find(el => {
+      if (el.closest?.('[role="dialog"], [role="alertdialog"]')) return false;
+      const label = textOf([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText || el.textContent]
+        .filter(Boolean).join(' '));
+      const single = textOf(el.innerText || el.textContent || '');
+      const isDropdown = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') || el.hasAttribute?.('aria-expanded');
+      return isDropdown && (ENGLISH_LANGUAGE.test(single) || /caption(?:s)?\s+language|spoken\s+language|language:\s*English/i.test(label));
+    });
     if (!picker) return;
-    englishSwitchAttempts++;
-    englishMenuAt = now;
-    try { picker.click(); } catch (_) {}
+    const selected = textOf(picker.innerText || picker.textContent || '');
+    if (UK_LANGUAGE.test(selected)) { ukApplied = true; return; }
+    ukAttempts++;
+    ukLastAttemptAt = now;
+    ukMenuOpenedAt = now;
+    try { picker.click(); } catch (_) { ukMenuOpenedAt = 0; }
+  }
+
+  // Google Meet may end a one-person meeting after 10+2 minutes even if the
+  // microphone has captured speech. Handle the Google preference automatically
+  // for each fresh host Meet page. Do NOT fabricate audio/captions or alter
+  // session ownership. Only act on uniquely identified Google Meet controls.
+  let emptyCallStage = 'more', emptyCallDone = false, emptyCallAttempts = 0;
+  let emptyCallJoinAt = 0, emptyCallLastAction = 0, emptyCallStartedAt = 0;
+  let emptyCallWaitingForVerification = false, emptyCallLastPromptAt = 0;
+  const emptyCallLabel = el => textOf(
+    el?.getAttribute?.('aria-label') || el?.getAttribute?.('data-tooltip') ||
+    el?.getAttribute?.('title') || el?.innerText || el?.textContent
+  );
+  function emptyCallVisible(el) {
+    if (!el) return false;
+    try {
+      const r = el.getBoundingClientRect();
+      return r.width > 1 && r.height > 1;
+    } catch (_) { return true; }
+  }
+  function emptyCallToggleValue(el) {
+    if (!el) return null;
+    const aria = el.getAttribute?.('aria-checked');
+    if (aria === 'true') return true;
+    if (aria === 'false') return false;
+    const pressed = el.getAttribute?.('aria-pressed');
+    if (pressed === 'true') return true;
+    if (pressed === 'false') return false;
+    const state = el.getAttribute?.('data-state');
+    if (state === 'checked' || state === 'on') return true;
+    if (state === 'unchecked' || state === 'off') return false;
+    if (typeof el.checked === 'boolean') return el.checked;
+    return null; // No observable state: never risk switching an OFF control ON.
+  }
+  function namedEmptyCallToggle() {
+    const toggleSelector = '[role="switch"],[role="checkbox"],input[type="checkbox"]';
+    const toggles = [...document.querySelectorAll(toggleSelector)].filter(emptyCallVisible);
+    const direct = toggles.find(el => /^leave empty calls$/i.test(emptyCallLabel(el)));
+    if (direct) return direct;
+    // Meet commonly puts the text and checkbox in different children of a row.
+    // Require a short, exact label and exactly one switch in the same local row.
+    const labels = [...document.querySelectorAll('label,span,div,p')]
+      .filter(el => emptyCallVisible(el) && /^leave empty calls$/i.test(textOf(el.innerText || el.textContent)));
+    for (const el of labels) {
+      if (el.htmlFor && document.getElementById) {
+        const linked = document.getElementById(el.htmlFor);
+        if (linked && toggles.includes(linked)) return linked;
+      }
+      let row = el;
+      for (let depth = 0; depth < 3 && row; ++depth, row = row.parentElement) {
+        const matches = toggles.filter(t => t === row || row.contains?.(t));
+        if (matches.length === 1) return matches[0];
+      }
+    }
+    return null;
+  }
+  function protectHostFromEmptyCallExit() {
+    if (!inCall()) return;
+    const now = Date.now();
+    const interactive = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="tab"]')]
+      .filter(emptyCallVisible);
+
+    // If Google's own reminder appears before Zapper's 12-minute host choice,
+    // keep this host-initiated session connected until the Zapper host decides.
+    // This is an emergency fallback, not a substitute for the 12+2 minute flow.
+    if (now - emptyCallLastPromptAt > 2500) {
+      const dialog = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')]
+        .find(el => /are you still there/i.test(emptyCallLabel(el)) &&
+          /only one|only participant|you.re the only one|no one else/i.test(emptyCallLabel(el)));
+      if (dialog) {
+        const stay = interactive.find(el => dialog.contains?.(el) &&
+          /^(?:stay in the call|keep waiting|stay)$/i.test(emptyCallLabel(el)));
+        if (stay) {
+          try { stay.click(); emptyCallLastPromptAt = now; } catch (_) {}
+        }
+      }
+    }
+
+    if (emptyCallDone) return;
+    if (!emptyCallStartedAt) emptyCallStartedAt = now;
+    // Several tries over 90 seconds, rather than silently assuming the first
+    // click worked. A new Meet navigation resets all page-local state.
+    if (now - emptyCallStartedAt > 90000 || emptyCallAttempts > 18 || now - emptyCallLastAction < 1200) return;
+    const click = el => {
+      if (!el) return false;
+      try { el.click(); emptyCallLastAction = now; emptyCallAttempts++; return true; }
+      catch (_) { return false; }
+    };
+    const toggle = namedEmptyCallToggle();
+    if (toggle) {
+      const enabled = emptyCallToggleValue(toggle);
+      if (enabled === false) {
+        emptyCallDone = true; // Confirmed OFF by Meet's rendered switch state.
+        emptyCallWaitingForVerification = false;
+        const close = interactive.find(el => /^(?:close settings|close)$/i.test(emptyCallLabel(el)));
+        if (close) try { close.click(); } catch (_) {}
+      } else if (enabled === true && !emptyCallWaitingForVerification) {
+        if (click(toggle)) emptyCallWaitingForVerification = true;
+      } else if (enabled === true && emptyCallWaitingForVerification && now - emptyCallLastAction > 4500) {
+        // The control still reports ON. Retry with a fresh click, then verify.
+        emptyCallWaitingForVerification = false;
+      }
+      return;
+    }
+    if (emptyCallWaitingForVerification && now - emptyCallLastAction > 4500) {
+      // The setting disappeared after clicking; reopen and verify, not assume.
+      emptyCallWaitingForVerification = false;
+      emptyCallStage = 'more';
+    }
+    if (emptyCallStage === 'more') {
+      const more = interactive.find(el => /^(?:more options|more actions)$/i.test(emptyCallLabel(el)));
+      if (click(more)) emptyCallStage = 'settings';
+    } else if (emptyCallStage === 'settings') {
+      const settings = interactive.find(el => /^settings$/i.test(emptyCallLabel(el)));
+      if (click(settings)) emptyCallStage = 'general';
+      else if (now - emptyCallLastAction > 4500) emptyCallStage = 'more';
+    } else if (emptyCallStage === 'general') {
+      const general = interactive.find(el => /^general$/i.test(emptyCallLabel(el)));
+      if (click(general)) emptyCallStage = 'toggle';
+      else if (now - emptyCallLastAction > 4500) emptyCallStage = 'more';
+    } else if (emptyCallStage === 'toggle' && now - emptyCallLastAction > 6000) {
+      emptyCallStage = 'more';
+    }
   }
 
   let lastEnableAt = 0;
   function ensureCaptions() {
     if (!inCall()) return;
-    preferStandardEnglish(); // Check a newly opened language menu without delay.
+    preferUKEnglishCaptions(); // Check a newly opened language menu without delay.
     if (Date.now() - lastEnableAt < 2500) return;
     lastEnableAt = Date.now();
     const buttons = [...document.querySelectorAll('button, [role="button"]')];
@@ -191,6 +333,9 @@
     setInterval(() => {
       if (!inCall()) return;
       ensureCaptions();
+      // Leave UK language selection undisturbed on the first few seconds.
+      if (!emptyCallJoinAt) emptyCallJoinAt = Date.now();
+      if (ukApplied || ukAttempts >= 4 || Date.now() - emptyCallJoinAt > 6000) protectHostFromEmptyCallExit();
       update(latestCaption());
       flushInterim();
     }, 120);

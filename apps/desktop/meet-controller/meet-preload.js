@@ -53,6 +53,15 @@
       .trim();
   }
 
+  // Capture the actual on-screen Meet caption. textContent can include hidden
+  // accessibility/alternate-rendering nodes whose spelling differs from the
+  // words a human can see in the Meet caption tray.
+  function renderedCaptionText(el) {
+    if (!el) return '';
+    const shown = typeof el.innerText === 'string' ? normalizeText(el.innerText) : '';
+    return shown || normalizeText(el.textContent || '');
+  }
+
   function textLines(value) {
     return String(value || '')
       .replace(/\u00a0/g, ' ')
@@ -427,7 +436,7 @@
       const textEl = block.querySelector('[jsname="bVV8Bd"]');
       if (!textEl) continue;
       const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl.textContent || '', speaker);
+      const text = cleanCaptionText(renderedCaptionText(textEl), speaker);
       if (text) entries.push({ speaker, text });
     }
     return entries;
@@ -444,7 +453,7 @@
       if (!textEl) continue;
       const speakerEl = row.querySelector('div.NWpY1d');
       const speaker = cleanCaptionSpeaker(speakerEl?.textContent || '');
-      const text = cleanCaptionText(textEl.textContent || '', speaker);
+      const text = cleanCaptionText(renderedCaptionText(textEl), speaker);
       if (text) entries.push({ speaker, text });
     }
     return entries;
@@ -457,7 +466,7 @@
       if (!block || isExcludedCaptionElement(block)) continue;
       const textKids = [...(block.children || [])]
         .filter(el => !isExcludedCaptionElement(el))
-        .map(el => ({ el, text: normalizeText(el.textContent || '') }))
+        .map(el => ({ el, text: renderedCaptionText(el) }))
         .filter(item => item.text && !isMeetAnnouncement(item.text) && !isCaptionChrome(item.text));
       if (textKids.length < 2) continue;
       const speaker = cleanCaptionSpeaker(textKids[0].text);
@@ -502,7 +511,7 @@
       // A wrapper that contains another text node is a container, not speech.
       if (el.querySelector(CAPTION_TEXT_NODE_SELECTOR)) continue;
       const speaker = findCaptionSpeakerFor(el);
-      const text = cleanCaptionText(el.textContent || '', speaker);
+      const text = cleanCaptionText(renderedCaptionText(el), speaker);
       if (text) entries.push({ speaker, text });
     }
     return entries;
@@ -725,10 +734,10 @@
     const scheduledKey = keyText(text);
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
-      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 1200) {
+      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2300) {
         commitCaptionFinal();
       }
-    }, 1300);
+    }, 2400);
   }
 
   function markCaptionReady(strategyName) {
@@ -834,34 +843,42 @@
     return true;
   }
 
-  // Google Meet stores its own caption language, independent of Deepgram.
-  // Only if the Meet UI explicitly identifies the currently selected beta
-  // "English (India)" option, prefer the plain "English" choice. This is a
-  // bounded best-effort UI action: unfamiliar Meet builds are left untouched.
-  let standardEnglishAttempts = 0;
-  let standardEnglishMenuAt = 0;
-  function preferStandardEnglishCaptions() {
-    if (standardEnglishAttempts >= 2) return;
+  // Native Meet CC language is per-window/per-Google-profile. Prefer British
+  // English when Meet exposes a verified caption-language dropdown; never guess
+  // at unlabeled controls or interact with translation menus.
+  const UK_LANGUAGE = /^English\s*\(\s*(?:UK|United Kingdom)\s*\)(?:\s*(?:selected|check|done|✓))?$/i;
+  const ENGLISH_LANGUAGE = /^English(?:\s*\([^)]{1,35}\))?(?:\s*\(?beta\)?)?(?:\s*(?:arrow_drop_down|expand_more))?$/i;
+  let ukApplied = false, ukMenuOpenedAt = 0, ukAttempts = 0, ukLastAttemptAt = 0;
+  function preferUKEnglishCaptions() {
+    if (ukApplied) return;
     const now = Date.now();
-    if (standardEnglishMenuAt && now - standardEnglishMenuAt <= 2500) {
-      const option = [...document.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitem"]')]
-        .find(el => normalizeText(el.textContent || '') === 'English' && !isInDialog(el));
+    if (ukMenuOpenedAt && now - ukMenuOpenedAt < 3000) {
+      const option = [...document.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitem"], [role="radio"]')]
+        .find(el => UK_LANGUAGE.test(normalizeText(el.innerText || el.textContent || el.getAttribute('aria-label') || '')));
       if (option) {
-        try { option.click(); standardEnglishAttempts = 2; } catch (_) {}
+        try { option.click(); ukApplied = true; } catch (_) {}
       }
       return;
     }
-    if (standardEnglishMenuAt) standardEnglishMenuAt = 0;
+    ukMenuOpenedAt = 0;
+    if (ukAttempts >= 4 || now - ukLastAttemptAt < 1800) return;
     const picker = [...document.querySelectorAll('button, [role="combobox"], [role="button"]')].find(el => {
-      const label = normalizeText([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.textContent]
+      if (isInDialog(el)) return false;
+      const label = normalizeText([el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title'), el.innerText || el.textContent]
         .filter(Boolean).join(' '));
-      return /English\s*\(India\)/i.test(label) &&
-        (el.getAttribute('aria-haspopup') || el.getAttribute('aria-expanded') !== null || el.getAttribute('role') === 'combobox');
+      const single = normalizeText(el.innerText || el.textContent || '');
+      // The language selector is the caption tray's English dropdown. Do not
+      // click ordinary buttons just because a spoken caption mentions English.
+      const isDropdown = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') || el.hasAttribute?.('aria-expanded');
+      return isDropdown && (ENGLISH_LANGUAGE.test(single) || /caption(?:s)?\s+language|spoken\s+language|language:\s*English/i.test(label));
     });
     if (!picker) return;
-    standardEnglishAttempts++;
-    standardEnglishMenuAt = now;
-    try { picker.click(); } catch (_) {}
+    const selected = normalizeText(picker.innerText || picker.textContent || '');
+    if (UK_LANGUAGE.test(selected)) { ukApplied = true; return; }
+    ukAttempts++;
+    ukLastAttemptAt = now;
+    ukMenuOpenedAt = now;
+    try { picker.click(); } catch (_) { ukMenuOpenedAt = 0; }
   }
 
   function captionsAppearEnabled() {
@@ -885,7 +902,7 @@
       emitCaptionState('admitted');
     }
 
-    preferStandardEnglishCaptions();
+    preferUKEnglishCaptions();
     if (attachCaptionObserver()) return true;
     emitCaptionDiag();
     if (captionsAppearEnabled()) return true;

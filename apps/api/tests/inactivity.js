@@ -1,0 +1,14 @@
+const assert = require('node:assert/strict');
+const { inactivityState, SILENCE_WARNING_MS, RESPONSE_GRACE_MS } = require('../session-inactivity');
+const now = Date.now();
+const start = now - 13 * 60000;
+const initial = { active: 1, status: 'active', inactivity_started_at_ms: start, last_caption_at_ms: null, last_confirmed_at_ms: null };
+assert.deepEqual([SILENCE_WARNING_MS, RESPONSE_GRACE_MS], [720000,120000]);
+assert.equal(inactivityState(initial, now).showWarning, true);
+assert.equal(inactivityState(initial, now).shouldEnd, false);
+assert.equal(inactivityState(initial, now + 60001).shouldEnd, true);
+assert.equal(inactivityState({ ...initial, last_caption_at_ms: now - 5000 }, now).showWarning, false, 'participant caption resets silence');
+assert.equal(inactivityState({ ...initial, last_confirmed_at_ms: now }, now).showWarning, false, 'host affirmation postpones warning without fabricating speech');
+assert.equal(inactivityState({ ...initial, inactivity_started_at_ms: null }, now).shouldEnd, false, 'existing sessions must not auto-end upon migration');
+assert.equal(inactivityState({ ...initial, active: 0, status: 'ended' }, now).showWarning, false);
+console.log('PASS: caption-only inactivity, Continue, 12+2 timing, and legacy safety');

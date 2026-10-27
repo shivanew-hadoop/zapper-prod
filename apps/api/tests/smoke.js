@@ -230,6 +230,37 @@ async function invoke(method, route, { body = {}, headers = {}, params = {}, que
   result = await invoke('GET', '/api/admin/users/:id/activity', { headers: { authorization: `Bearer ${adminToken}` }, params: { id: String(hostId) } });
   if (!result.payload?.ok || !result.payload.sessions.some(s => s.id === created[1].id && Number(s.endedAt) > Number(s.createdAt))) throw new Error('admin per-call timestamps missing');
 
+  // New sessions receive 12-minute native-caption inactivity monitoring.
+  // Confirming human presence must resume the original PIN without fake speech.
+  let idleCheck = await invoke('POST', '/api/sessions', { headers: { authorization: `Bearer ${portalToken}` }, body: { meetUrl: 'abc-defg-hij' } });
+  if (!idleCheck.payload?.ok) throw new Error('new inactivity-test session could not be created');
+  const idleId = idleCheck.payload.session.id;
+  const thirteenMinutesAgo = Date.now() - 13 * 60 * 1000;
+  control.db.prepare('UPDATE host_sessions SET inactivity_started_at_ms=?, last_caption_at_ms=?, last_confirmed_at_ms=NULL WHERE id=?')
+    .run(thirteenMinutesAgo, thirteenMinutesAgo, idleId);
+  idleCheck = await invoke('GET', '/api/sessions/:id/inactivity', { headers: { authorization: `Bearer ${portalToken}` }, params: { id: idleId } });
+  if (!idleCheck.payload?.showWarning || !idleCheck.payload.active) throw new Error('missing 12-minute caption warning');
+  let deniedActivity = await invoke('GET', '/api/sessions/:id/inactivity', { headers: { authorization: `Bearer ${adminToken}` }, params: { id: idleId } });
+  if (deniedActivity.statusCode !== 403) throw new Error('admin must not read host-only inactivity');
+  idleCheck = await invoke('POST', '/api/sessions/:id/continue', { headers: { authorization: `Bearer ${portalToken}` }, params: { id: idleId } });
+  if (!idleCheck.payload?.ok) throw new Error('host Continue failed');
+  idleCheck = await invoke('GET', '/api/sessions/:id/inactivity', { headers: { authorization: `Bearer ${portalToken}` }, params: { id: idleId } });
+  if (idleCheck.payload?.showWarning) throw new Error('Continue did not reset the warning');
+  // Native-caption activity, not PIN redemption, extends the session timer.
+  control.touchSessionCaption(idleId, Date.now());
+  const lastCaption = control.db.prepare('SELECT last_caption_at_ms FROM host_sessions WHERE id=?').get(idleId).last_caption_at_ms;
+  if (!lastCaption) throw new Error('native Meet captions did not record activity');
+  control.appendLiveTranscriptSegment(idleId, 'Caption before inactivity timeout.', Date.now() - 1000, 'smoke-inactivity');
+  const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
+  control.db.prepare('UPDATE host_sessions SET inactivity_started_at_ms=?,last_caption_at_ms=?,last_confirmed_at_ms=NULL WHERE id=?')
+    .run(fifteenMinutesAgo, fifteenMinutesAgo, idleId);
+  control.sweepIdleSessions(Date.now());
+  const silentRow = control.db.prepare('SELECT active,end_reason FROM host_sessions WHERE id=?').get(idleId);
+  if (silentRow.active || silentRow.end_reason !== 'speech_inactivity') throw new Error('unanswered inactivity alert did not end PIN');
+  if (!control.db.prepare('SELECT pdf_blob FROM transcripts WHERE host_session_id=?').get(idleId)?.pdf_blob?.length) throw new Error('unanswered inactivity alert failed to finalize PDF');
+  idleCheck = await invoke('POST', '/api/sessions/:id/continue', { headers: { authorization: `Bearer ${portalToken}` }, params: { id: idleId } });
+  if (idleCheck.statusCode !== 409) throw new Error('Continue must not revive ended PIN');
+
   // A process restart must not restart/reissue the 24-hour trial.
   control.db.close();
   const reloadRoutes = new Map();

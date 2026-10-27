@@ -3,6 +3,7 @@ import { startHostMicrophone, listMicrophones, recordMicrophoneTest } from './ho
 import { createRecordingWakeLock } from './recording-wake-lock.js';
 import { getDeviceSessionId, selectDeviceSession, saveDeviceSessionId, clearDeviceSessionId, canCreateHostSession } from './host-session-selection.js';
 import { probeDesktopOverlay } from './desktop-readiness.js';
+import { inactivityAlertState } from './session-inactivity.js';
 const API_BASE = String(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const DEFAULT_RELEASE_URL = 'https://github.com/shivanew-hadoop/zapper-downloads/releases/latest/download/Zapper-Setup-x64.exe';
 const configuredReleaseUrl = String(import.meta.env.VITE_DESKTOP_DOWNLOAD_URL || '').trim();
@@ -109,6 +110,72 @@ async function joinHostMeet(meetUrl, popup, sessionId = '') {
   const fallback = openHostMeetWindow();
   if (fallback) { try { fallback.location.replace(meetUrl); window.focus(); } catch (_) {} return; }
   $('sessionError').textContent = `Install/open the Zapper desktop app to join automatically, or join your Meet here: ${meetUrl}`;
+}
+let inactivityPollTimer = null;
+let inactivityCountdownTimer = null;
+let inactivitySessionId = '';
+let inactivityFetchActive = false;
+let inactivityLatest = null;
+let inactivityEpoch = 0;
+// A host-only warning. Polls actual Google Meet captions recorded by the API.
+function hideInactivityNotice() {
+  const notice = document.getElementById('sessionInactivityNotice');
+  notice?.classList.add('hidden');
+  inactivityLatest = null;
+}
+function stopInactivityWatch() {
+  ++inactivityEpoch;
+  if (inactivityPollTimer) clearInterval(inactivityPollTimer);
+  if (inactivityCountdownTimer) clearInterval(inactivityCountdownTimer);
+  inactivityPollTimer = inactivityCountdownTimer = null;
+  inactivitySessionId = '';
+  inactivityFetchActive = false;
+  hideInactivityNotice();
+}
+function displayInactivityNotice() {
+  const notice = document.getElementById('sessionInactivityNotice');
+  if (!notice) return;
+  const state = inactivityAlertState(inactivityLatest);
+  notice.classList.toggle('hidden', !state.visible);
+  if (state.visible) {
+    const minutes = Math.floor(state.secondsLeft / 60);
+    const seconds = String(state.secondsLeft % 60).padStart(2, '0');
+    document.getElementById('sessionInactivityCountdown').textContent =
+      `Session ends in ${minutes}:${seconds} unless you continue.`;
+  }
+}
+async function pollInactivity(sessionId, epoch) {
+  if (inactivityFetchActive || !token || !account || currentSessionId !== sessionId || inactivityEpoch !== epoch) return;
+  inactivityFetchActive = true;
+  try {
+    const state = await api(`/api/sessions/${encodeURIComponent(sessionId)}/inactivity`);
+    if (inactivityEpoch !== epoch || currentSessionId !== sessionId) return;
+    if (!state.active) {
+      stopInactivityWatch();
+      sendHostAppCommand('host-leave');
+      stopHostMicrophone('Session ended after no captions were received.', true);
+      await loadSessions();
+      await loadTranscripts();
+      $('sessionError').textContent = state.endReason === 'speech_inactivity'
+        ? 'Session ended after 12 minutes without captions and 2 minutes without confirmation. Your PDF is available below.'
+        : 'The session has ended. Your saved transcript is available below.';
+      return;
+    }
+    inactivityLatest = state;
+    displayInactivityNotice();
+  } catch (error) {
+    // Never treat API/network failure as proof of silence; the API alone ends sessions.
+    console.warn('Inactivity check unavailable:', error.message);
+  } finally { if (inactivityEpoch === epoch) inactivityFetchActive = false; }
+}
+function watchInactivity(sessionId) {
+  if (!sessionId || inactivitySessionId === sessionId) return;
+  stopInactivityWatch();
+  inactivitySessionId = sessionId;
+  const epoch = inactivityEpoch;
+  void pollInactivity(sessionId, epoch);
+  inactivityPollTimer = setInterval(() => void pollInactivity(sessionId, epoch), 7500);
+  inactivityCountdownTimer = setInterval(displayInactivityNotice, 1000);
 }
 let activeSessionStartedAt = 0;
 let sessionTimerInterval = null;
@@ -469,6 +536,7 @@ function logout() {
   closeExpiredTrialNotice();
   trialExpiredShownForLogin = false;
   stopSessionClock();
+  stopInactivityWatch();
   stopDesktopPreflight();
   closeMobileNav();
   token = ''; account = null; localStorage.removeItem('zapperToken');
@@ -895,11 +963,11 @@ $('hostMicTest').onclick = async () => {
 };
 $('hostMicReplay').onclick = () => { if (micTestObjectUrl) $('hostMicTestAudio').play().catch(() => { $('micTestStatus').textContent = 'Audio playback was blocked by the browser.'; }); };
 
-async function endHostSession(sessionId, pin = '', button = null) {
+async function endHostSession(sessionId, pin = '', button = null, { skipConfirmation = false } = {}) {
   if (!sessionId) return false;
   const label = pin ? `PIN ${pin}` : 'this session';
   // Cancel must not disable the End Session button or touch the active PIN.
-  if (!window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return false;
+  if (!skipConfirmation && !window.confirm(`End ${label}? The PIN will become invalid immediately.`)) return false;
   if (button) button.disabled = true;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/end`, { method: 'POST' });
@@ -911,6 +979,7 @@ async function endHostSession(sessionId, pin = '', button = null) {
       $('sessionToolbar').classList.add('hidden');
       $('micTestReplay').classList.add('hidden');
       stopSessionClock();
+      stopInactivityWatch();
       currentSessionId = ''; currentSessionPin = '';
       clearDeviceSessionId(localStorage, account?.id);
       clearDeviceSessionId(sessionStorage, account?.id);
@@ -936,7 +1005,8 @@ function focusDeviceSession(session, startMicrophone = false) {
   showAutoMeetUrl(session);
   showHostMicPanel(session);
   if (startMicrophone && session.googleCreated) void startHostMicForSession(session.id);
-  $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session.';
+  $('pinStatus').textContent = 'Active — this PIN stays valid until you click End Session or inactivity expires.';
+  watchInactivity(session.id);
   $('endCurrentSession').disabled = false;
   $('pinBox').classList.remove('hidden');
   applyCreateSessionAvailability();
@@ -977,6 +1047,7 @@ async function loadSessions() {
     $('pinBox').classList.add('hidden');
     $('sessionToolbar').classList.add('hidden');
     stopSessionClock();
+    stopInactivityWatch();
     $('autoMeetDetails').classList.add('hidden');
   }
   showOtherActiveSessions(sessions, selected?.id || '');
@@ -1212,6 +1283,35 @@ $('copyPin').onclick = async () => {
     $('copyPin').title = 'Click to copy PIN to clipboard';
   }, 2600);
 };
+$('sessionInactivityContinue').onclick = async () => {
+  const sessionId = inactivitySessionId;
+  if (!sessionId || sessionId !== currentSessionId) return;
+  const btn = $('sessionInactivityContinue');
+  btn.disabled = true;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/continue`, { method: 'POST' });
+    hideInactivityNotice();
+    // Explicit human approval only; this never synthesizes microphone/caption packets.
+    sendHostAppCommand('host-resume');
+    await pollInactivity(sessionId, inactivityEpoch);
+  } catch (error) {
+    $('sessionInactivityCountdown').textContent = error.message;
+    void loadSessions().catch(() => {});
+  } finally { btn.disabled = false; }
+};
+$('sessionInactivityEnd').onclick = async () => {
+  const sessionId = inactivitySessionId;
+  if (!sessionId || sessionId !== currentSessionId) return;
+  try {
+    const ended = await endHostSession(sessionId, currentSessionPin, $('sessionInactivityEnd'), { skipConfirmation: true });
+    if (ended) await loadTranscripts();
+  } catch (error) {
+    $('sessionInactivityCountdown').textContent = error.message;
+  }
+};
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && inactivitySessionId) void pollInactivity(inactivitySessionId, inactivityEpoch);
+});
 $('endCurrentSession').onclick = async () => {
   if (!currentSessionId) return;
   try { await endHostSession(currentSessionId, currentSessionPin, $('endCurrentSession')); }

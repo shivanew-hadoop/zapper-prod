@@ -40,6 +40,7 @@ function parseHostControlUrl(rawUrl) {
   if (parsed.protocol !== 'zapper:') return null;
   const host = parsed.hostname.toLowerCase();
   if (host === 'host-leave') return { type: 'leave' };
+  if (host === 'host-resume') return { type: 'resume' };
   if (host === 'host-mic') {
     const state = String(parsed.searchParams.get('state') || '').toLowerCase();
     if (state === 'on' || state === 'off') return { type: 'mic', on: state === 'on' };
@@ -189,6 +190,8 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     },
   });
   win.__zapperMeetUrl = meetUrl;
+  win.__zapperHostName = sanitizeName(name);
+  win.__zapperOnStatus = onStatus;
   hostWindow = win;
   win.on('closed', () => {
     if (hostWindow === win) { hostWindow = null; stopHostTimer(); }
@@ -314,6 +317,28 @@ function toggleHostWindow() {
   return true;
 }
 
+// A host clicked YES on Zapper's web inactivity notice.
+// Do not synthesize speech or repeatedly reload an active Meet. Click Google's
+// own Stay prompt only after explicit user confirmation, or rejoin if Meet left.
+async function resumeHost() {
+  const win = hostWindow;
+  if (!win || win.isDestroyed()) return false;
+  const result = await win.webContents.executeJavaScript(`(() => {
+    const labels = element => [element.getAttribute('aria-label'), element.getAttribute('data-tooltip'), element.innerText].filter(Boolean).join(' ').trim().toLowerCase();
+    const buttons = [...document.querySelectorAll('button,[role="button"]')];
+    const stay = buttons.find(b => /stay in (?:the )?call|keep waiting|continue (?:the )?(?:meeting|call)/.test(labels(b)));
+    if (stay) { stay.click(); return 'stayed'; }
+    if (document.querySelector('[aria-label*="Leave call" i]')) return 'connected';
+    return 'rejoin';
+  })()`, true).catch(() => 'rejoin');
+  if (result === 'connected' || result === 'stayed') return true;
+  const meetUrl = win.__zapperMeetUrl;
+  const name = win.__zapperHostName || 'Host';
+  const onStatus = win.__zapperOnStatus || (() => {});
+  leaveHost();
+  return joinAsHost({ meetUrl, name }, onStatus);
+}
+
 // Mute / unmute the host's microphone in the Meet call.
 async function setHostMic(on) {
   const win = hostWindow;
@@ -335,4 +360,4 @@ function leaveHost() {
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-module.exports = { joinAsHost, leaveHost, setHostMic, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+module.exports = { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };

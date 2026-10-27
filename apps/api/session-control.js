@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { inactivityState, SILENCE_WARNING_MS, RESPONSE_GRACE_MS } = require('./session-inactivity');
 const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
@@ -157,6 +158,10 @@ module.exports = function createSessionControl({ app, dataDir }) {
   ensureColumn('host_sessions', 'active', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('host_sessions', 'participant_started_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'last_speech_at_ms', 'INTEGER');
+  // Existing active sessions remain unmonitored after migration; never surprise-end an ongoing legacy call.
+  ensureColumn('host_sessions', 'inactivity_started_at_ms', 'INTEGER');
+  ensureColumn('host_sessions', 'last_caption_at_ms', 'INTEGER');
+  ensureColumn('host_sessions', 'last_confirmed_at_ms', 'INTEGER');
   ensureColumn('host_sessions', 'end_reason', 'TEXT');
   ensureColumn('host_sessions', 'participant_google_email', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('host_sessions', 'google_meet_created', 'INTEGER NOT NULL DEFAULT 0');
@@ -189,7 +194,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   const sessionHours = Math.max(1, Number(process.env.HOST_SESSION_HOURS || 12)); // legacy compatibility only
   const sessionRetention = Math.max(1, Math.min(50, Number(process.env.SESSION_RETENTION || 15)));
   const transcriptRetention = Math.max(1, Math.min(50, Number(process.env.TRANSCRIPT_RETENTION || 15)));
-  // Kept for backwards-compatible config reporting only. Active sessions are host-controlled and are never auto-ended for silence.
+  // Kept for backwards-compatible config reporting only. New sessions use the separate native-caption 12+2-minute inactivity policy.
   const sessionIdleTimeoutMinutes = Math.max(1, Math.min(240, Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES || 20)));
   const pdfPauseTimestampSeconds = Math.max(10, Math.min(300, Number(process.env.PDF_PAUSE_TIMESTAMP_SECONDS || 30)));
   const pdfPauseTimestampMs = pdfPauseTimestampSeconds * 1000;
@@ -390,7 +395,22 @@ module.exports = function createSessionControl({ app, dataDir }) {
     for (const row of rows) if (endSessionAtLimit(row, Number(now))) ended += 1;
     return ended;
   }
-  function sweepIdleSessions(now = Date.now()) { return expireClockSessions(now); }
+  function sweepIdleSessions(now = Date.now()) {
+    let ended = expireClockSessions(now); // Existing 210-minute maximum remains authoritative.
+    const tracked = db.prepare("SELECT * FROM host_sessions WHERE status='active' AND active=1 AND inactivity_started_at_ms IS NOT NULL").all();
+    for (const session of tracked) {
+      const state = inactivityState(session, Number(now));
+      if (!state.shouldEnd) continue;
+      const result = db.prepare("UPDATE host_sessions SET status='ended', active=0, ended_at_ms=?, end_reason='speech_inactivity' WHERE id=? AND active=1 AND status='active' AND COALESCE(last_caption_at_ms,0)<=? AND COALESCE(last_confirmed_at_ms,0)<=?")
+        .run(Number(now), session.id, Number(session.last_caption_at_ms || 0), Number(session.last_confirmed_at_ms || 0));
+      if (result.changes) {
+        ended++;
+        try { finalizeSessionTranscript(session.id, Number(now)); }
+        catch (error) { console.error('[SESSION] Inactivity PDF finalization failed:', error.message); }
+      }
+    }
+    return ended;
+  }
 
   function participantTokenState(rawToken) {
     try {
@@ -428,9 +448,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     return state?.active ? { payload: state.payload, session: state.session, user: state.user } : null;
   }
 
-  // Called only for a previously authenticated host microphone socket. The
-  // one-hour connection token may expire while a 3h30m session is still live;
-  // the backend must nevertheless see End Session and stop audio promptly.
+  // Called only for a previously authenticated host caption socket. Token
+  // validity is bounded by the host session lifetime; End Session invalidates it.
   function hostAudioSessionState(sessionId, userId) {
     let session = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(sessionId, userId);
     const user = session && db.prepare('SELECT * FROM users WHERE id=?').get(userId);
@@ -452,6 +471,13 @@ module.exports = function createSessionControl({ app, dataDir }) {
   function touchSessionSpeech(sessionId, at = Date.now()) {
     const ts = Math.max(1, Number(at) || Date.now());
     return Number(db.prepare(`UPDATE host_sessions SET last_speech_at_ms=?
+      WHERE id=? AND active=1 AND status='active'`).run(ts, String(sessionId || '')).changes || 0);
+  }
+
+  function touchSessionCaption(sessionId, at = Date.now()) {
+    // Only authorized native Meet captions, including interim corrections, count as speech.
+    const ts = Math.max(1, Math.min(Date.now() + 5000, Number(at) || Date.now()));
+    return Number(db.prepare(`UPDATE host_sessions SET last_caption_at_ms=MAX(COALESCE(last_caption_at_ms,0), ?)
       WHERE id=? AND active=1 AND status='active'`).run(ts, String(sessionId || '')).changes || 0);
   }
 
@@ -804,8 +830,8 @@ module.exports = function createSessionControl({ app, dataDir }) {
     const now = Date.now();
     const pin = uniquePin(); const id = crypto.randomUUID();
     const expiresAt = now + hostSessionMaxMs;
-    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms,google_meet_created) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, user.id, pin, meetUrl, 'active', 1, now, expiresAt, options.googleCreated ? 1 : 0);
+    db.prepare('INSERT INTO host_sessions(id,user_id,pin,meet_url,status,active,created_at_ms,expires_at_ms,google_meet_created,inactivity_started_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(id, user.id, pin, meetUrl, 'active', 1, now, expiresAt, options.googleCreated ? 1 : 0, now);
     trimUserSessions(user.id);
     return { id, pin, meetUrl, status: 'active', active: true, createdAt: now, expiresAt, maxMinutes: hostSessionMaxMinutes, googleCreated: Boolean(options.googleCreated) };
   }
@@ -831,7 +857,9 @@ module.exports = function createSessionControl({ app, dataDir }) {
     if (!session) return res.status(404).json({ ok: false, error: 'Session not found.' });
     if (endSessionAtLimit(session, Date.now())) session = db.prepare('SELECT * FROM host_sessions WHERE id=?').get(session.id);
     if (session.status !== 'active' || !Number(session.active || 0)) return res.status(409).json({ ok: false, error: 'The session has ended.' });
-    const remaining = Math.min(60 * 60 * 1000, Number(session.expires_at_ms || 0) - Date.now());
+    // This host-only capture token must cover the full live session; a 1-hour
+    // expiry could silently stop Meet captions and falsely trigger inactivity.
+    const remaining = Math.min(hostSessionMaxMs, Number(session.expires_at_ms || 0) - Date.now());
     if (remaining <= 0) return res.status(409).json({ ok: false, error: 'The session has expired.' });
     const captureToken = signToken({ sub: Number(req.authUser.id), sessionId: session.id, type: 'host_audio' }, remaining, 'zapper-host-audio', 'zapper-web');
     res.set('Cache-Control', 'no-store').json({ ok: true, captureToken });
@@ -850,6 +878,34 @@ module.exports = function createSessionControl({ app, dataDir }) {
       (CASE WHEN active=1 THEN MIN(COALESCE(expires_at_ms, ?), ?) ELSE COALESCE(ended_at_ms, created_at_ms) END) - created_at_ms
     ) ELSE 0 END), 0) duration_ms FROM host_sessions WHERE user_id=?`).get(now, now, req.authUser.id);
     res.json({ ok: true, usage: { sessionCount: Number(usage.count || 0), callDurationMinutes: Math.round(Number(usage.duration_ms || 0) / 6000) / 10 }, sessions: rows.map(r => ({ id: r.id, pin: r.pin, meetUrl: r.meet_url, status: r.status, active: Number(r.active || 0) === 1, createdAt: r.created_at_ms, expiresAt: r.expires_at_ms, endedAt: r.ended_at_ms, endReason: r.end_reason || '', googleCreated: Number(r.google_meet_created || 0) === 1 })) });
+  });
+
+  // The host UI polls this lightweight endpoint; access is restricted to the session owner.
+  app.get('/api/sessions/:id/inactivity', auth, (req, res) => {
+    if (req.authUser.role === 'admin') return res.status(403).json({ ok: false, error: 'Host account required.' });
+    sweepIdleSessions(Date.now());
+    const row = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(String(req.params.id || ''), req.authUser.id);
+    if (!row) return res.status(404).json({ ok: false, error: 'Session not found.' });
+    const state = inactivityState(row);
+    res.set('Cache-Control', 'no-store').json({ ok: true, active: Number(row.active || 0) === 1,
+      endReason: row.end_reason || '', lastCaptionAt: Number(row.last_caption_at_ms || 0),
+      ...state, warningMinutes: SILENCE_WARNING_MS / 60000, responseMinutes: RESPONSE_GRACE_MS / 60000 });
+  });
+
+  // "Continue" means a real user confirmed they are present, not synthetic speech.
+  app.post('/api/sessions/:id/continue', auth, (req, res) => {
+    if (req.authUser.role === 'admin') return res.status(403).json({ ok: false, error: 'Host account required.' });
+    const row = db.prepare('SELECT * FROM host_sessions WHERE id=? AND user_id=?').get(String(req.params.id || ''), req.authUser.id);
+    if (!row) return res.status(404).json({ ok: false, error: 'Session not found.' });
+    if (row.status !== 'active' || !Number(row.active || 0)) return res.status(409).json({ ok: false, error: 'Session already ended.' });
+    // A confirmation received before the cutoff wins. An overdue request cannot revive an expired PIN.
+    if (inactivityState(row).shouldEnd || endSessionAtLimit(row, Date.now())) {
+      sweepIdleSessions(Date.now());
+      return res.status(409).json({ ok: false, error: 'The session already expired. Download the completed PDF.' });
+    }
+    const now = Date.now();
+    db.prepare("UPDATE host_sessions SET last_confirmed_at_ms=? WHERE id=? AND user_id=? AND active=1 AND status='active'").run(now, row.id, req.authUser.id);
+    res.set('Cache-Control', 'no-store').json({ ok: true, continuedAt: now });
   });
 
   app.post('/api/sessions/:id/end', auth, (req, res) => {
@@ -1125,7 +1181,7 @@ module.exports = function createSessionControl({ app, dataDir }) {
   });
 
   return {
-    db, dbPath, expireSubscriptions, verifyParticipantToken, participantTokenState, verifyHostAudioToken, hostAudioTokenState, hostAudioSessionState, touchSessionSpeech, sweepIdleSessions, normalizeMeetUrl,
+    db, dbPath, expireSubscriptions, verifyParticipantToken, participantTokenState, verifyHostAudioToken, hostAudioTokenState, hostAudioSessionState, touchSessionSpeech, touchSessionCaption, sweepIdleSessions, normalizeMeetUrl,
     registerParticipantGoogleEmail, appendLiveTranscriptSegment, appendLiveTranscriptSegments, finalizeSessionTranscript,
     planPriceInr, sessionRetention, transcriptRetention, sessionIdleTimeoutMinutes, hostSessionMaxMinutes
   };

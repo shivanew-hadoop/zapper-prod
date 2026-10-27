@@ -9,8 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check session-control.js && node --check google-meet.js && node --check live-caption-relay.js && node --check transcript-output-dedupe.js && node --check cashfree-payments.js && node --check demo-inquiries.js",
-    "smoke": "node tests/smoke.js && node tests/trial-persistence.js && node tests/google-meet.js && node tests/host-microphone.js && node tests/caption-relay.js && node tests/pdf-duplicates.js && node tests/cashfree-payments.js && node tests/demo-inquiries.js"
+    "check": "node --check server.js && node --check session-control.js && node --check session-inactivity.js && node --check google-meet.js && node --check live-caption-relay.js && node --check transcript-output-dedupe.js && node --check cashfree-payments.js && node --check demo-inquiries.js",
+    "smoke": "node tests/inactivity.js && node tests/smoke.js && node tests/trial-persistence.js && node tests/google-meet.js && node tests/host-microphone.js && node tests/caption-relay.js && node tests/pdf-duplicates.js && node tests/cashfree-payments.js && node tests/demo-inquiries.js"
   },
   "dependencies": {
     "cors": "2.8.5",

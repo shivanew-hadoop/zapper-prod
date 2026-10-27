@@ -20,6 +20,9 @@ function normalizeSecretEnv(name, rawValue) {
   return value;
 }
 const DEEPGRAM_API_KEY = normalizeSecretEnv('DEEPGRAM_API_KEY', process.env.DEEPGRAM_API_KEY);
+// Hard OFF for v1.0.2, even if a legacy key or enable flag remains in Railway.
+// Native Google Meet captions and authorized host/PIN text relay remain active.
+const DEEPGRAM_STT_ENABLED = false;
 const DATA_DIR = String(
   process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data')
 ).trim();
@@ -89,9 +92,10 @@ const sessionIdleSweepTimer = setInterval(() => {
 sessionIdleSweepTimer.unref();
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
+  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY), deepgramEnabled: DEEPGRAM_STT_ENABLED });
 });
 app.get('/health/stt', async (_req, res) => {
+  if (!DEEPGRAM_STT_ENABLED) return res.status(503).json({ ok: false, deepgramEnabled: false, error: 'Deepgram STT is disabled; Google Meet captions remain active.' });
   if (!DEEPGRAM_API_KEY) return res.status(503).json({ ok: false, deepgramAuthValid: false, error: 'DEEPGRAM_API_KEY is not configured.' });
   try {
     const check = await fetch('https://api.deepgram.com/v1/projects', {
@@ -325,7 +329,7 @@ wss.on('connection', (clientWs, req) => {
   }, 5000);
 
   function connectDeepgram() {
-    if (limitReached) return;
+    if (limitReached || !DEEPGRAM_STT_ENABLED) return;
     if (!DEEPGRAM_API_KEY) {
       if (!deepgramUnavailableNotified) {
         deepgramUnavailableNotified = true;
@@ -428,6 +432,13 @@ wss.on('connection', (clientWs, req) => {
       if (dgWs) cleanupDeepgram();
       pendingAudio = [];
       markLocalCaptionSource(capture.session.id, connectionId, Date.now());
+      // Separate caption activity from PIN redemption / legacy Deepgram speech timestamps.
+      // Throttled to avoid SQLite writes on each 120 ms interim caption frame.
+      const nativeNow = Date.now();
+      if (nativeNow - lastSpeechDbTouchAt >= 5000) {
+        lastSpeechDbTouchAt = nativeNow;
+        setImmediate(() => sessionControl.touchSessionCaption(capture.session.id, nativeNow));
+      }
       if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: capturedAt });
       if (isCaptureLeader(capture.session.id, connectionId)) {
         hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions' });
@@ -440,9 +451,9 @@ wss.on('connection', (clientWs, req) => {
       return;
     }
 
-    // Fallback only: audio reaches Deepgram only when the desktop explicitly
-    // decides Meet captions are unavailable. This preserves the existing STT
-    // implementation without paying for it during the normal caption path.
+    // Deepgram is OFF by default. Ignore ALL binary PCM, including packets
+    // from older desktops/host browser code, while preserving caption JSON.
+    if (!DEEPGRAM_STT_ENABLED) return;
     const audioChunk = incoming;
     lastDeepgramAudioAt = Date.now();
     if (!dgWs || [WebSocket.CLOSED, WebSocket.CLOSING].includes(dgWs.readyState)) {
@@ -469,6 +480,12 @@ wss.on('connection', (clientWs, req) => {
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });
 });
+
+const inactivitySweepTimer = setInterval(() => {
+  try { sessionControl.sweepIdleSessions(Date.now()); }
+  catch (error) { console.error('[SESSION] Inactivity sweep error:', error.message); }
+}, 15000);
+inactivitySweepTimer.unref?.();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[BOOT] Zapper API listening on ${PORT}`);

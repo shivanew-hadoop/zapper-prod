@@ -47,7 +47,7 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
         const message = JSON.parse(raw.toString());
         if (message.type === 'session_ended' || message.type === 'limit_reached') {
           stopHostCaptionRelay();
-          onEnded(message.message || message.text || 'Host session ended.');
+          onEnded(message.message || message.text || 'Host session ended.', message.type);
         } else if (message.type === 'error') onStatus(`Host caption relay: ${message.message}`);
       } catch (_) {}
     });

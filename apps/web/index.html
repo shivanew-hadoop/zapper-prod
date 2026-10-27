@@ -253,6 +253,15 @@
           <button id="endCurrentSession" class="dangerBtn toolButton" type="button">End Session</button>
           <span id="pinCopyFeedback" role="status" aria-live="polite" class="pinCopyFeedback hidden">PIN copied to clipboard</span>
         </section>
+        <aside id="sessionInactivityNotice" class="sessionInactivityNotice hidden" role="alertdialog" aria-modal="false" aria-labelledby="sessionInactivityTitle" aria-describedby="sessionInactivityDescription">
+          <strong id="sessionInactivityTitle">No speech detected for 12 minutes</strong>
+          <p id="sessionInactivityDescription">Google Meet captions have been quiet. Would you like to continue this session? If captions are not working, check them in Meet.</p>
+          <span id="sessionInactivityCountdown" role="status" aria-live="polite">Waiting for your choice…</span>
+          <div class="sessionInactivityActions">
+            <button id="sessionInactivityContinue" class="primaryBtn" type="button">Yes, continue</button>
+            <button id="sessionInactivityEnd" class="dangerBtn" type="button">No, end &amp; save PDF</button>
+          </div>
+        </aside>
         <p id="hostMicStatus" class="sessionMicStatus hidden" role="status" aria-live="polite">Microphone ready.</p>
         <p id="mobileRecordingNotice" class="mobileRecordingNotice hidden" role="status" aria-live="polite"></p>
         <!-- Preserve the existing element IDs and PIN/session lifecycle used elsewhere. -->

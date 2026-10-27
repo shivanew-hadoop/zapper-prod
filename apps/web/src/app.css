@@ -184,3 +184,9 @@ body{padding-top:78px}
 .hostDesktopGateActions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .hostDesktopGateActions>*{flex:1;text-align:center;min-width:130px;font-size:12px;padding:10px}
 @media(max-width:580px){.hostDesktopGateNotice{right:12px;bottom:12px}.hostDesktopGateActions>*{min-width:110px}}
+
+/* Host-only caption-inactivity confirmation, kept separate from the setup gate. */
+.sessionInactivityNotice{margin:12px 0;padding:15px;border:1px solid #e4a548;background:#35270e;color:#fff4db;border-radius:14px;box-shadow:0 8px 28px #0003}
+.sessionInactivityNotice strong{font-size:15px}.sessionInactivityNotice p{font-size:13px;line-height:1.5;margin:8px 0;color:#f3e3be}
+#sessionInactivityCountdown{font-size:12px;font-weight:700;display:block;margin:8px 0}
+.sessionInactivityActions{display:flex;gap:8px;flex-wrap:wrap}.sessionInactivityActions .dangerBtn{cursor:pointer;border-radius:12px;padding:11px 16px}

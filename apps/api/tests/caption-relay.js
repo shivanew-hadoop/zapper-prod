@@ -80,6 +80,7 @@ class ClientSocket extends EventEmitter {
     if (moduleName === 'http') return { createServer: () => ({ listen(_p, _host, callback) { callback(); } }) };
     if (moduleName === './session-control') return () => sessionControl;
     if (moduleName === './live-caption-relay') return relayFactory;
+    if (moduleName === './meet-chat-filter') return require('../meet-chat-filter');
     if (moduleName === './demo-inquiries') return { installDemoInquiries() {} };
     return require(moduleName);
   };
@@ -121,6 +122,36 @@ class ClientSocket extends EventEmitter {
     'secondary PIN viewers must not replace the host as the caption relay leader');
   assert.equal(desktopA.messages.find(m => m.text === 'caption from Meet DOM'), undefined, 'no echo to sender');
   assert.equal(deepgramSockets.length, 0, 'transcript relay never invokes Deepgram');
+
+  // Group chat is isolated to the same authorized room (host <-> all PIN clients).
+  host.emit('message', Buffer.from(JSON.stringify({
+    type: 'meet_chat', sender: 'Host', message: 'Please review the agenda', meetTime: '10:31 AM'
+  })), false);
+  assert.equal(desktopA.messages.filter(m => m.type === 'meet_chat' && m.message === 'Please review the agenda').length, 1);
+  assert.equal(desktopB.messages.filter(m => m.type === 'meet_chat' && m.message === 'Please review the agenda').length, 1);
+  assert.equal(foreign.messages.filter(m => m.type === 'meet_chat').length, 0);
+  assert.equal(host.messages.filter(m => m.type === 'meet_chat').length, 0, 'no echo to sending host');
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'meet_chat', sender: 'Alice', message: 'Yes, host', meetTime: '10:32 AM'
+  })), false);
+  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1);
+  assert.equal(desktopB.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1);
+  desktopB.emit('message', Buffer.from(JSON.stringify({
+    type: 'meet_chat', sender: 'Alice', message: 'Yes, host', meetTime: '10:32 AM'
+  })), false);
+  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1,
+    'multiple Meet observers may see the same user message but must relay once');
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'meet_chat', sender: 'Google Meet', message: 'Are you still there?'
+  })), false);
+  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Are you still there?').length, 0,
+    'Meet administrative prompts are not real user chat');
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'meet_chat', sender: 'Alice', message: 'A'.repeat(12000), meetTime: '10:34 AM'
+  })), false);
+  assert.equal(host.messages.find(m => m.type === 'meet_chat' && m.message.length === 12000)?.message.length, 12000,
+    'Zapper must not truncate messages before Google Meet applies its length policy');
+  assert.equal(deepgramSockets.length, 0, 'group chat must never use Deepgram');
 
   desktopB.close();
   host.emit('message', Buffer.from(JSON.stringify({

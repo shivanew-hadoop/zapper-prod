@@ -73,7 +73,7 @@ const {
 } = require('./meet-controller/index');
 
 const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
-const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption } = require('./transcriber/hostCaptionRelay');
+const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -88,6 +88,7 @@ function handleZapperUrl(rawUrl) {
     if (hostJoin.captureToken) {
       startHostCaptionRelay({ backendUrl: BACKEND_URL, captureToken: hostJoin.captureToken,
         onStatus: sendStatus,
+        onChat: sendMeetChat,
         onEnded: (reason, type) => {
           hostCaptionsAuthorized = false;
           // Only a confirmed backend session end disconnects Meet. A temporary
@@ -118,6 +119,7 @@ const {
   startRemoteTranscriptStream,
   sendAudioChunk,
   sendLocalCaption,
+  publishMeetChat,
   stopRemoteTranscriptStream
 } = require('./transcriber/remoteDeepgram');
 
@@ -431,13 +433,15 @@ function sendMeetChat(payload) {
 
 ipcMain.on('meet-chat-message', (_, payload) => {
   if (!payload || !payload.message) return;
-  sendMeetChat({
+  const chat = {
     sender: String(payload.sender || 'Host').trim() || 'Host',
     message: String(payload.message || '').trim(),
     meetTime: String(payload.meetTime || '').trim(),
     chatKey: String(payload.chatKey || '').trim(),
     timestamp: payload.timestamp || Date.now()
-  });
+  };
+  sendMeetChat(chat);
+  if (started && activeCaptureSessionToken) publishMeetChat(chat);
 });
 
 
@@ -466,6 +470,14 @@ function scheduleDeepgramFallbackCheck() {
   if (captionFallbackTimer) clearTimeout(captionFallbackTimer);
   captionFallbackTimer = null;
 }
+
+ipcMain.on('host-meet-chat-message', (_, payload) => {
+  if (!hostCaptionsAuthorized || !payload?.message) return;
+  const chat = { sender: String(payload.sender || 'Host'), message: String(payload.message),
+    meetTime: String(payload.meetTime || ''), chatKey: String(payload.chatKey || ''), timestamp: Date.now() };
+  sendMeetChat(chat);
+  publishHostChat(chat);
+});
 
 ipcMain.on('meet-caption-state', (_, payload) => {
   if (!started || !payload) return;
@@ -529,7 +541,12 @@ ipcMain.on('meet-caption-message', (_, payload) => {
 ipcMain.handle('send-meet-chat-message', async (_, message) => {
   const text = String(message || '').trim();
   if (!text) return { success: false, error: 'Empty chat message' };
-  return await sendMeetChatToMeeting(text);
+  const result = await sendMeetChatToMeeting(text);
+  if (result?.success && started && activeCaptureSessionToken) {
+    publishMeetChat({ sender: activeCaptureGoogleEmail ? activeCaptureGoogleEmail.split('@')[0] : 'Participant',
+      message: text, meetTime: '', chatKey: '' });
+  }
+  return result;
 });
 
 function sendLoginRequired(msg) {
@@ -894,6 +911,10 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
+      if (payload.type === 'meet_chat') {
+        sendMeetChat(payload);
+        return;
+      }
       if (payload.type === 'speech_started') {
         overlayWindow.webContents.send('speech-started');
         return;

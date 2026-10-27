@@ -7,6 +7,7 @@ let token = '';
 let timer = null;
 let generation = 0;
 let bufferedFinals = [];
+let bufferedChats = [];
 const MAX_FINAL_BUFFER = 80;
 const MAX_BUFFERED_BYTES = 512 * 1024;
 const RETRY_MS = 2500;
@@ -17,12 +18,13 @@ function stopHostCaptionRelay() {
   timer = null;
   token = '';
   bufferedFinals = [];
+  bufferedChats = [];
   const old = socket;
   socket = null;
   try { old?.close(1000, 'host left'); } catch (_) {}
 }
 
-function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, onEnded = () => {} }) {
+function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, onEnded = () => {}, onChat = () => {} }) {
   stopHostCaptionRelay();
   token = String(captureToken || '').trim();
   if (!token) return false;
@@ -36,6 +38,10 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
     ws.on('open', () => {
       if (gen !== generation || socket !== ws) return;
       onStatus('Host captions connected. Waiting for Google Meet speech.');
+      for (const chat of bufferedChats.splice(0)) {
+        if (ws.readyState !== WebSocket.OPEN) break;
+        try { ws.send(chat); } catch (_) { bufferedChats.unshift(chat); break; }
+      }
       for (const message of bufferedFinals.splice(0)) {
         if (ws.readyState !== WebSocket.OPEN) break;
         try { ws.send(message); } catch (_) { bufferedFinals.unshift(message); break; }
@@ -48,7 +54,8 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
         if (message.type === 'session_ended' || message.type === 'limit_reached') {
           stopHostCaptionRelay();
           onEnded(message.message || message.text || 'Host session ended.', message.type);
-        } else if (message.type === 'error') onStatus(`Host caption relay: ${message.message}`);
+        } else if (message.type === 'meet_chat') onChat(message);
+        else if (message.type === 'error') onStatus(`Host caption relay: ${message.message}`);
       } catch (_) {}
     });
     ws.on('error', error => { if (gen === generation) console.warn('[HostCaptions]', error.message); });
@@ -81,4 +88,16 @@ function publishHostCaption(payload) {
   return false;
 }
 
-module.exports = { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption };
+function publishHostChat(payload) {
+  const message = String(payload?.message || '').trim();
+  if (!token || !message) return false;
+  const chat = JSON.stringify({ type: 'meet_chat', sender: String(payload.sender || 'Host'),
+    message, meetTime: String(payload.meetTime || ''), chatKey: String(payload.chatKey || '') });
+  if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < MAX_BUFFERED_BYTES) {
+    try { socket.send(chat); return true; } catch (_) {}
+  }
+  bufferedChats.push(chat);
+  if (bufferedChats.length > 200) bufferedChats.shift();
+  return false;
+}
+module.exports = { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat };

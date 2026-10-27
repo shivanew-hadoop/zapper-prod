@@ -39,13 +39,13 @@ function scenario({ initiallyOn = true, clickSucceeds = true } = {}) {
   };
   const MockDate = class extends Date { static now() { return now; } };
   vm.runInNewContext(source, {
-    require: name => { assert.equal(name, 'electron'); return { ipcRenderer: { send: (...args) => events.push(args) } }; },
+    require: name => { if (name === './meet-chat-rows') return require('../meet-controller/meet-chat-rows'); assert.equal(name, 'electron'); return { ipcRenderer: { send: (...args) => events.push(args) } }; },
     document: doc, Date: MockDate, console,
     setInterval: (fn, ms) => intervals.push({ fn, ms }),
     setTimeout: (fn, ms) => { const t = { fn, at: now + ms }; timers.push(t); return t; },
     clearTimeout: t => { t.fn = null; }
   });
-  assert.equal(intervals.length, 1);
+  assert.equal(intervals.length, 2);
   function tick(ms) {
     now += ms;
     intervals[0].fn();

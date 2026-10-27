@@ -7,6 +7,7 @@ let transcriptCb = () => {};
 let opened = false;
 let bufferedChunks = [];
 let bufferedLocalCaptions = [];
+let bufferedMeetChat = [];
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let currentUrl = '';
@@ -110,6 +111,10 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
       }
     }, BACKEND_HEARTBEAT_MS);
 
+    for (const chat of bufferedMeetChat.splice(0)) {
+      if (generation !== streamGeneration || socket !== ws || ws.readyState !== WebSocket.OPEN) break;
+      try { ws.send(chat); } catch (_) { bufferedMeetChat.unshift(chat); break; }
+    }
     for (const caption of bufferedLocalCaptions.splice(0)) {
       try {
         if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(caption);
@@ -147,6 +152,7 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
       return emit({ type: 'session_ended', text: msg.message || 'This Zapper session is no longer active.' });
     }
     if (msg.type === 'speech_started') return emit({ type: 'speech_started' });
+    if (msg.type === 'meet_chat' && msg.message) return emit(msg);
 
     if (msg.type === 'transcript' && msg.text) {
       return emit({
@@ -203,6 +209,7 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken, googleEmail = '
   opened = false;
   bufferedChunks = [];
   bufferedLocalCaptions = [];
+  bufferedMeetChat = [];
 
   connectSocket(currentUrl, false, generation);
   return true;
@@ -251,6 +258,21 @@ function sendLocalCaption({ text, isFinal = false, capturedAt = Date.now() } = {
   return false;
 }
 
+function publishMeetChat(payload) {
+  const message = String(payload?.message || '').trim();
+  if (!message || manuallyStopped || permanentClose) return false;
+  const chat = JSON.stringify({ type: 'meet_chat', sender: String(payload.sender || 'Participant'),
+    message, meetTime: String(payload.meetTime || ''), chatKey: String(payload.chatKey || '') });
+  if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512 * 1024) {
+    try { socket.send(chat); return true; } catch (_) {}
+  }
+  bufferedMeetChat.push(chat);
+  // Only the disconnected-network backlog is bounded. Normal message count
+  // and Google Meet's own content-length rules are not changed by Zapper.
+  if (bufferedMeetChat.length > 200) bufferedMeetChat.shift();
+  return false;
+}
+
 function stopRemoteTranscriptStream() {
   // Invalidate every event handler belonging to the previous stream before
   // asking its socket to close. This prevents a late close/error event from
@@ -260,6 +282,7 @@ function stopRemoteTranscriptStream() {
   permanentClose = false;
   bufferedChunks = [];
   bufferedLocalCaptions = [];
+  bufferedMeetChat = [];
   opened = false;
   currentUrl = '';
   reconnectAttempt = 0;
@@ -280,5 +303,6 @@ module.exports = {
   startRemoteTranscriptStream,
   sendAudioChunk,
   sendLocalCaption,
+  publishMeetChat,
   stopRemoteTranscriptStream,
 };

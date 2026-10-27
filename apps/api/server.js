@@ -8,6 +8,7 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const createSessionControl = require('./session-control');
 const createHostCaptionRelay = require('./live-caption-relay');
+const { normalizeMeetChat } = require('./meet-chat-filter');
 const { installDemoInquiries } = require('./demo-inquiries');
 const API_VERSION = require('./package.json').version;
 
@@ -260,6 +261,7 @@ wss.on('connection', (clientWs, req) => {
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
   if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
+  hostCaptionRelay.subscribeChat(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -421,6 +423,11 @@ wss.on('connection', (clientWs, req) => {
     if (!isBinary) {
       let localCaption = null;
       try { localCaption = JSON.parse(incoming.toString()); } catch (_) { return; }
+      if (localCaption?.type === 'meet_chat') {
+        const chat = normalizeMeetChat(localCaption, Boolean(hostAudio));
+        if (chat) hostCaptionRelay.publishChat(capture.session.id, chat, { excludeSocket: clientWs });
+        return;
+      }
       if (localCaption?.type !== 'local_caption') return;
       const text = String(localCaption.text || '').trim().slice(0, 12000);
       if (!text) return;
@@ -475,6 +482,7 @@ wss.on('connection', (clientWs, req) => {
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
     if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
+    hostCaptionRelay.unsubscribeChat(capture.session.id, clientWs);
     unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);

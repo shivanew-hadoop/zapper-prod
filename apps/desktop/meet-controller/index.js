@@ -711,7 +711,7 @@ async function sendMeetChatToMeeting(message) {
 
   // Keep the customer message complete. Overlay currently caps at 8000 chars; Meet may still enforce
   // its own product-side limit, but this app should not truncate before sending.
-  const safeText = JSON.stringify(text.slice(0, 8000));
+  const safeText = JSON.stringify(text);
 
   const sendJs = `(async () => {
     const message = ${safeText};

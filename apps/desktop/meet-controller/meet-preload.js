@@ -110,7 +110,8 @@
       'close', 'send', 'send message', 'chat_bubble', 'frame_person', 'reframe', 'visual_effects', 'captions controls',
       'backgrounds and effects', 'keep', 'sent', 'sending', 'message sent', 'could not send message', 'online trainings',
       'message everyone', 'send a message', 'messages will not be saved', 'continuous chat is turned off',
-      'loading invitees', 'view everyone in this call', 'show everyone', 'people in this call', 'add people', 'participants'
+      'loading invitees', 'view everyone in this call', 'show everyone', 'people in this call', 'add people', 'participants',
+      'are you still there?', 'stay in the call', 'leave now', 'the call ended because everyone left', 'chat here'
     ]);
     if (exact.has(t)) return true;
     return /^(microphone array.*|turn off microphone.*|turn on microphone.*|turn off camera.*|turn on camera.*|turn on captions.*|turn off captions.*|raise hand.*|loading invitees.*|view everyone in this call|\d+ joined|chat with everyone.*|continuous chat is turned off.*|messages will not be saved.*|reframe.*|backgrounds and effects.*|captions controls.*|someone wants to join.*)$/i.test(t) ||
@@ -1025,7 +1026,7 @@
   }
 
   function pushRow(rows, occurrence, sender, time, message) {
-    const msg = normalizeText(String(message || '').slice(0, 8000));
+    const msg = normalizeText(message);
     let cleanSender = normalizeSender(sender) || 'Host';
     if (shouldSkipChatMessage(msg, cleanSender)) return;
     if (keyText(cleanSender) === keyText(msg)) cleanSender = 'Host';
@@ -1041,10 +1042,10 @@
       el.getAttribute && el.getAttribute('aria-label') || '',
       el.getAttribute && el.getAttribute('title') || ''
     ].filter(Boolean).join('\n') || '');
-    if (!raw || raw.length > 10000) return [];
+    if (!raw) return [];
     const lines = cleanChatLines(raw);
     if (lines.length < 2 || lines.length > 30 || !lines.some(isClockText)) return [];
-    if (lines.some(isSelfText)) return [];
+    // An individual self-authored row must not hide the rest of a group chat block.
 
     const occurrence = new Map();
     const rows = [];
@@ -1056,6 +1057,7 @@
       const nextTi = timeIdxs[t + 1] ?? lines.length;
       const time = lines[ti];
       const prev = lines[ti - 1] || '';
+      if (isSelfText(prev)) continue;
       let sender = attrSender || '';
       let messages = [];
 
@@ -1087,7 +1089,7 @@
         if (el.matches && el.matches('textarea, input, button, [role="button"], [contenteditable="true"], [role="textbox"]')) return false;
         const txt = String(el.innerText || el.textContent || '');
         if (!/\b\d{1,2}:\d{2}(\s?[AP]M)?\b/i.test(txt)) return false;
-        if (txt.length > 10000) return false;
+        // Google Meet, not Zapper, determines the length of chat messages.
         const lines = cleanChatLines(txt);
         if (lines.length < 2) return false;
         const clockCount = lines.filter(isClockText).length;
@@ -1117,6 +1119,7 @@
       const nextTi = timeIdxs[t + 1] ?? lines.length;
       const time = lines[ti];
       const prev = lines[ti - 1] || '';
+      if (isSelfText(prev)) continue;
       let sender = looksLikeName(prev) && ti < lines.length - 1 ? prev : 'Host';
       if (isSelfText(sender)) continue;
       const messages = [];
@@ -1173,7 +1176,7 @@
         if (/ready to join|ask to join|meeting details|people in this call|loading invitees|view everyone in this call/i.test(txt)) return false;
         if (isMeetInactivityPrompt(txt)) return false;
         if (el.closest('[role="alertdialog"]')) return false;
-        return txt.length > 4 && txt.length < 12000;
+        return txt.length > 4;
       })
       .filter(el => !isMeetNoise(el.innerText || el.textContent || ''))
       .sort((a, b) => {
@@ -1231,7 +1234,7 @@
       const root = findMeetChatRoot();
       if (root) scanChatArea(root);
       scanAnyVisibleChatBlocks();
-      await autoSendInitialChatHereOnce();
+      // Never send automated chat: only real people may send group messages.
     }, 700);
 
     log('Meet chat observer installed v1.2.5 auto-chat-here-after-admission from v1.2.3 base');
@@ -1244,7 +1247,7 @@
   }
 
   function plainMessageText(value) {
-    return normalizeText(String(value || '')).slice(0, 8000);
+    return normalizeText(String(value || ''));
   }
 
   function setEditableText(el, text) {

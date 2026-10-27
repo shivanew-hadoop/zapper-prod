@@ -3,6 +3,72 @@
 // host's Meet microphone must remain on. No audio is captured or transmitted.
 (() => {
   const { ipcRenderer } = require('electron');
+  // Sandbox-safe, self-contained Meet chat parser. Electron sandbox preloads
+  // cannot require arbitrary sibling modules; keep this logic in the preload.
+  const SYSTEM = new Set([
+    'are you still there?', 'stay in the call', 'leave now',
+    'the call ended because everyone left', 'loading invitees',
+    'view everyone in this call', 'send a message', 'message everyone',
+    'in-call messages', 'chat with everyone', 'meeting details', 'leave call',
+    'join now', 'someone wants to join', 'messages will not be saved',
+    'continuous chat is turned off', 'turn on captions', 'turn off captions',
+    'message sent', 'could not send message', 'pin message', 'pinned message',
+    'chat here', 'online trainings'
+  ]);
+  function tidy(input) { return String(input || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim(); }
+  function isClock(s) { return /^\d{1,2}:\d{2}(?:\s?(?:AM|PM))?$/i.test(tidy(s)); }
+  function system(s) {
+    const value = tidy(s).toLowerCase();
+    return !value || SYSTEM.has(value) || /^\d+ joined$/.test(value) ||
+      (/are you still there\?/i.test(value) && /stay in the call/i.test(value));
+  }
+  function name(s) {
+    const value = tidy(s);
+    if (!value || value.length > 80 || system(value) || isClock(value)) return false;
+    return /^(you|me)$/i.test(value) || /^[\p{L}\p{N}][\p{L}\p{N}.'@_\-]*(?:\s+[\p{L}\p{N}][\p{L}\p{N}.'@_\-]*){0,5}$/u.test(value);
+  }
+  function splitLines(raw) {
+    const out = [];
+    for (const row of String(raw || '').replace(/\u00a0/g, ' ').split(/\r?\n/)) {
+      const s = tidy(row);
+      if (!s || /^(AM|PM)$/i.test(s)) continue;
+      const match = s.match(/\b\d{1,2}:\d{2}(?:\s?(?:AM|PM))?\b/i);
+      if (!match) { out.push(s); continue; }
+      const before = tidy(s.slice(0, match.index));
+      const after = tidy(s.slice(match.index + match[0].length));
+      if (before) out.push(before);
+      out.push(match[0]);
+      if (after) out.push(after);
+    }
+    return out;
+  }
+  function parseRows(raw, explicitSender = '') {
+    const lines = splitLines(raw);
+    const clockIndices = lines.map((line, i) => isClock(line) ? i : -1).filter(i => i >= 0);
+    const result = [], occurrences = new Map();
+    for (let t = 0; t < clockIndices.length; t++) {
+      const idx = clockIndices[t], next = clockIndices[t + 1] ?? lines.length;
+      const before = lines[idx - 1] || '';
+      const sender = name(explicitSender) ? explicitSender : name(before) ? before : '';
+      if (!sender) continue;
+      const messageLines = [];
+      for (let j = idx + 1; j < next; j++) {
+        const line = lines[j];
+        if (isClock(line)) continue;
+        if (j === next - 1 && next < lines.length && name(line)) continue;
+        if (line === sender || system(line)) continue;
+        messageLines.push(line);
+      }
+      const message = tidy(messageLines.join('\n'));
+      if (!message || system(message)) continue;
+      const label = /^(you|me)$/i.test(sender) ? 'Host' : sender;
+      const key = `${label.toLowerCase()}|${lines[idx].toLowerCase()}|${message.toLowerCase()}`;
+      const ordinal = occurrences.get(key) || 0;
+      occurrences.set(key, ordinal + 1);
+      result.push({ sender: label, meetTime: lines[idx], message, chatKey: key + '|' + ordinal });
+    }
+    return result;
+  }
   const textOf = value => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
   const wordsOf = value => {
     const words = textOf(value).split(' ').filter(Boolean);
@@ -70,6 +136,70 @@
       if (text) return { text, speaker: '' };
     }
     return null;
+  }
+
+  // Observe actual Google Meet chat inside the host's existing Meet window.
+  // This never types/sends a bot message or changes the host microphone.
+  const observedChatKeys = new Map();
+  let lastChatOpenAttempt = 0;
+  function chatVisible(el) {
+    if (!el) return false;
+    const bounds = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  }
+  function chatInput() {
+    const els = [...document.querySelectorAll('textarea, input, [contenteditable="true"], [role="textbox"]')].filter(chatVisible);
+    return els.find(el => /send.*message|message.*everyone|message everyone|chat/i.test([
+      el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('data-tooltip')
+    ].filter(Boolean).join(' ')));
+  }
+  function hostChatRoot(input) {
+    if (!input) return null;
+    let node = input;
+    let best = null, score = -1;
+    for (let i = 0; i < 10 && node && node !== document.body; i++, node = node.parentElement) {
+      const rows = node.querySelectorAll('[data-message-id], [data-sender-name], [role="listitem"], [role="article"]');
+      const label = textOf(node.getAttribute?.('aria-label') || '');
+      const inner = String(node.innerText || '');
+      const points = rows.length * 10 + (/in-call messages|chat with everyone/i.test(label) ? 30 : 0) +
+        (/\b\d{1,2}:\d{2}\b/.test(inner) ? 20 : 0) - (inner.length > 150000 ? 100 : 0);
+      if (points >= score) { best = node; score = points; }
+    }
+    return best && score >= 20 ? best : null;
+  }
+  function openHostChat() {
+    if (chatInput() || Date.now() - lastChatOpenAttempt < 5000) return;
+    // Let Meet's existing UK-caption and empty-call preference flows finish
+    // their first settings pass before opening a different sidebar.
+    if (!emptyCallDone && emptyCallStartedAt && Date.now() - emptyCallStartedAt < 12000) return;
+    lastChatOpenAttempt = Date.now();
+    const control = [...document.querySelectorAll('button, [role="button"]')].find(el =>
+      chatVisible(el) && /chat with everyone|in-call messages|open chat/i.test([
+        el.getAttribute('aria-label'), el.getAttribute('data-tooltip'), el.getAttribute('title')
+      ].filter(Boolean).join(' ')));
+    try { control?.click(); } catch (_) {}
+  }
+  function scanHostChat() {
+    const input = chatInput();
+    if (!input) { openHostChat(); return; }
+    const root = hostChatRoot(input);
+    if (!root) return;
+    const items = [...root.querySelectorAll('[data-message-id], [role="listitem"], [role="article"]')]
+      .filter(chatVisible).filter(el => !el.querySelector('[data-message-id], [role="listitem"], [role="article"]'));
+    const blocks = items.length ? items : [root];
+    const now = Date.now();
+    for (const [id, at] of observedChatKeys) if (now - at > 3 * 60 * 60 * 1000) observedChatKeys.delete(id);
+    for (const block of blocks) {
+      const raw = typeof block.innerText === 'string' ? block.innerText : block.textContent;
+      const sender = block.getAttribute?.('data-sender-name') || block.getAttribute?.('data-author-name') || '';
+      for (const row of parseRows(raw, sender)) {
+        const key = `${row.chatKey}|${block.getAttribute?.('data-message-id') || ''}`;
+        if (observedChatKeys.has(key)) continue;
+        observedChatKeys.set(key, now);
+        ipcRenderer.send('host-meet-chat-message', row);
+      }
+    }
   }
 
   let lastText = '', lastSpeaker = '', changedAt = 0, lastCommittedText = '';
@@ -339,6 +469,7 @@
       update(latestCaption());
       flushInterim();
     }, 120);
+    setInterval(() => { if (inCall()) scanHostChat(); }, 650);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();

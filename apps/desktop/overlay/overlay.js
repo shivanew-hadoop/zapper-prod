@@ -68,7 +68,6 @@ let sessionStartedAt = 0;
 let activeGoogleEmail = '';
 let countdownInterval = null;
 const MAX_LINES = 100;
-const MAX_CHAT_MESSAGES = 60;
 const OUTGOING_ECHO_SUPPRESS_MS = 20000;
 const MIN_FONT = 10;
 const MAX_FONT = 34;
@@ -349,20 +348,27 @@ function formatChatTime(ts, displayTime = '') {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// Append only. Chat history stays intact instead of repainting every message
+// whenever another participant sends to the group.
+let chatRenderedCount = 0;
 function renderMeetChat() {
   if (!chatMessagesEl) return;
   if (!chatMessages.length) {
-    chatMessagesEl.textContent = 'No host chat yet.';
+    chatMessagesEl.textContent = 'No messages yet.';
+    chatRenderedCount = 0;
     return;
   }
-
-  chatMessagesEl.innerHTML = chatMessages.map(item => `
+  if (chatRenderedCount > chatMessages.length) chatRenderedCount = 0;
+  if (!chatRenderedCount) chatMessagesEl.textContent = '';
+  const incoming = chatMessages.slice(chatRenderedCount);
+  if (!incoming.length) return;
+  chatMessagesEl.insertAdjacentHTML('beforeend', incoming.map(item => `
     <div class="chatMsg ${item.outgoing ? 'outgoing' : 'incoming'}">
-      <div class="chatMeta"><span class="chatSender">${escapeHtml(item.outgoing ? 'You' : (item.sender || 'Host'))}</span><span>${escapeHtml(formatChatTime(item.timestamp, item.meetTime))}</span></div>
+      <div class="chatMeta"><span class="chatSender">${escapeHtml(item.outgoing ? 'You' : (item.sender || 'Participant'))}</span><span>${escapeHtml(formatChatTime(item.timestamp, item.meetTime))}</span></div>
       <div class="chatText">${escapeHtml(item.message || '')}</div>
     </div>
-  `).join('');
-
+  `).join(''));
+  chatRenderedCount = chatMessages.length;
   requestAnimationFrame(() => { chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight; });
 }
 
@@ -424,16 +430,18 @@ function isRecentOutgoingEcho(message) {
 
 function isDuplicateChat(payload) {
   const chatKey = String(payload?.chatKey || '').trim();
-  if (chatKey) return chatMessages.some(item => String(item.chatKey || '') === chatKey);
+  if (chatKey && chatMessages.some(item => String(item.chatKey || '') === chatKey)) return true;
 
   const cleanSender = String(payload?.sender || '').trim().toLowerCase();
   const cleanMessage = String(payload?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const cleanTime = String(payload?.meetTime || '').trim().toLowerCase();
-  return chatMessages.some(item =>
-    String(item.sender || '').trim().toLowerCase() === cleanSender &&
-    String(item.message || '').replace(/\s+/g, ' ').trim().toLowerCase() === cleanMessage &&
-    String(item.meetTime || '').trim().toLowerCase() === cleanTime
-  );
+  return chatMessages.some(item => {
+    if (String(item.message || '').replace(/\s+/g, ' ').trim().toLowerCase() !== cleanMessage) return false;
+    const sameSender = String(item.sender || '').trim().toLowerCase() === cleanSender;
+    const sameMeetTime = cleanTime && String(item.meetTime || '').trim().toLowerCase() === cleanTime;
+    const closeArrival = Math.abs((item.timestamp || 0) - (payload?.timestamp || 0)) < 4000;
+    return (sameSender && (sameMeetTime || closeArrival)) || (sameMeetTime && closeArrival);
+  });
 }
 
 function isIncomingHostChat(payload) {
@@ -464,10 +472,9 @@ if (chatSendForm) {
       if (res && res.success) {
         rememberOutgoingChat(message);
         chatMessages.push({ sender: 'You', message, timestamp: Date.now(), outgoing: true });
-        if (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages = chatMessages.slice(-MAX_CHAT_MESSAGES);
         renderMeetChat();
         if (chatInput) chatInput.value = '';
-        statusEl.textContent = 'Chat message sent to Meet host.';
+        statusEl.textContent = 'Chat message sent to Google Meet.';
       } else {
         statusEl.textContent = (res && res.error) || 'Could not send Meet chat message.';
       }
@@ -479,30 +486,35 @@ if (chatSendForm) {
   });
 }
 
+// Keep committed text nodes alive: redrawing the entire transcript each 240ms
+// caused finalized words to flash, even though their content never changed.
+let committedTranscriptNode = null;
+let liveTranscriptNode = null;
 function renderTranscript() {
-  const text = [...finalLines, interimText].filter(Boolean).join('\n');
+  if (!committedTranscriptNode || !transcriptEl.contains(committedTranscriptNode)) {
+    transcriptEl.textContent = '';
+    committedTranscriptNode = document.createTextNode('');
+    liveTranscriptNode = document.createTextNode('');
+    transcriptEl.append(committedTranscriptNode, liveTranscriptNode);
+  }
+  const settled = finalLines.join('\n');
+  const nextCommitted = settled ? settled + (interimText ? '\n' : '') : (interimText ? '' : 'Waiting for host to speak...');
+  const nextLive = interimText || '';
+  if (committedTranscriptNode.nodeValue === nextCommitted && liveTranscriptNode.nodeValue === nextLive) return;
+
   const shouldFollowLive = transcriptAutoScroll;
   const renderVersion = ++transcriptRenderVersion;
-
   transcriptRenderRestoring = true;
-  transcriptEl.textContent = text || 'Waiting for host to speak...';
-
+  if (committedTranscriptNode.nodeValue !== nextCommitted) committedTranscriptNode.nodeValue = nextCommitted;
+  if (liveTranscriptNode.nodeValue !== nextLive) liveTranscriptNode.nodeValue = nextLive;
   const restorePosition = () => {
     if (renderVersion !== transcriptRenderVersion) return;
-
-    if (shouldFollowLive && transcriptAutoScroll) {
-      transcriptEl.scrollTop = transcriptEl.scrollHeight;
-    } else if (!transcriptAutoScroll) {
-      // Use the current global lock, not a stale value captured by an earlier
-      // transcript render. That way a user wheel/drag always wins immediately.
+    if (shouldFollowLive && transcriptAutoScroll) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    else if (!transcriptAutoScroll) {
       const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);
       transcriptEl.scrollTop = Math.min(transcriptScrollTopLock, maxTop);
     }
   };
-
-  // Restore synchronously and after layout. Interim text can reflow as words are
-  // appended; repeated restoration plus overflow-anchor:none makes the reading
-  // position deterministic until the user deliberately returns to the bottom.
   restorePosition();
   requestAnimationFrame(() => {
     restorePosition();
@@ -814,7 +826,6 @@ if (window.electronAPI.onMeetChat) {
       chatKey: payload.chatKey || '',
       timestamp: payload.timestamp || Date.now()
     });
-    if (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages = chatMessages.slice(-MAX_CHAT_MESSAGES);
     renderMeetChat();
   });
 }

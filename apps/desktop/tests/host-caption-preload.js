@@ -41,24 +41,24 @@ const button = {
 const doc = {
   readyState: 'complete',
   querySelector: selector => selector.includes('Leave call') ? {} : captionContainer,
-  querySelectorAll: selector => selector.includes('[role="option"]') ? (languageMenuOpen ? [ukOption] : []) : [button, languagePicker],
+  querySelectorAll: selector => selector.startsWith('textarea, input,') ? [] : selector.includes('[role="option"]') ? (languageMenuOpen ? [ukOption] : []) : [button, languagePicker],
 };
 const MockDate = class extends Date { static now() { return now; } };
 const ctx = {
-  require: name => { assert.equal(name, 'electron'); return { ipcRenderer: { send: (channel, payload) => emitted.push({ channel, ...payload }) } }; },
+  require: name => { if (name === './meet-chat-rows') return require('../meet-controller/meet-chat-rows'); assert.equal(name, 'electron'); return { ipcRenderer: { send: (channel, payload) => emitted.push({ channel, ...payload }) } }; },
   document: doc, Date: MockDate, console,
   setInterval: (fn, delay) => intervals.push({ fn, delay }),
   setTimeout: (fn, delay) => { const t = { fn, at: now + delay }; timers.push(t); return t; },
   clearTimeout: timer => { timer.fn = null; },
 };
 vm.runInNewContext(code, ctx);
-assert.equal(intervals.length, 1);
+assert.equal(intervals.length, 2);
 assert.equal(intervals[0].delay, 120);
 function tick(ms = 0) {
   now += ms;
   textNode.textContent = captionText;
   textNode.innerText = visiblyRenderedCaption || captionText;
-  for (const { fn } of intervals) fn();
+  for (const { fn, delay } of intervals) if (delay === 120) fn();
   for (const timer of timers) if (timer.fn && timer.at <= now) { const cb = timer.fn; timer.fn = null; cb(); }
 }
 captionText = 'Thank you for joining the call';

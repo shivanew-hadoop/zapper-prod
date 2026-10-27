@@ -193,7 +193,21 @@
     for (const block of blocks) {
       const raw = typeof block.innerText === 'string' ? block.innerText : block.textContent;
       const sender = block.getAttribute?.('data-sender-name') || block.getAttribute?.('data-author-name') || '';
-      for (const row of parseRows(raw, sender)) {
+      const rows = parseRows(raw, sender);
+      // On some Meet builds a real message row has an author + message ID but
+      // no visible timestamp. Do not drop it. Never fall back for anonymous
+      // UI containers, so Google admin notices cannot become chat messages.
+      if (!rows.length && block.getAttribute?.('data-message-id') && name(sender)) {
+        const lines = splitLines(raw).filter(line =>
+          !isClock(line) && !system(line) && tidy(line) !== tidy(sender));
+        const message = tidy(lines.join('\n'));
+        if (message && !system(message)) {
+          const author = /^(you|me)$/i.test(sender) ? 'Host' : sender;
+          rows.push({ sender: author, meetTime: '', message,
+            chatKey: `${author.toLowerCase()}|${block.getAttribute('data-message-id')}` });
+        }
+      }
+      for (const row of rows) {
         const key = `${row.chatKey}|${block.getAttribute?.('data-message-id') || ''}`;
         if (observedChatKeys.has(key)) continue;
         observedChatKeys.set(key, now);
@@ -378,27 +392,43 @@
     }
     return null;
   }
+  // This prompt can cover the Meet leave button, so it must be detected
+  // BEFORE the ordinary inCall() check. It is unrelated to microphone speech:
+  // Google counts admitted Meet participants, not Zapper PIN listeners.
+  function dismissMeetAloneReminder() {
+    const now = Date.now();
+    if (now - emptyCallLastPromptAt < 2500) return false;
+    const interactive = [...document.querySelectorAll('button,[role="button"]')].filter(emptyCallVisible);
+    const stayNames = /^(?:stay in (?:the )?call|keep waiting|stay|continue (?:the )?(?:meeting|call))$/i;
+    const dialogs = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')];
+    for (const dialog of dialogs) {
+      const content = textOf(dialog.innerText || dialog.textContent || emptyCallLabel(dialog));
+      const isAlone = /are you still there|you(?:'re| are) (?:the )?only one|you(?:'re| are) alone|no one else|leave empty call/i.test(content);
+      if (!isAlone) continue;
+      const stay = interactive.find(el => dialog.contains?.(el) && stayNames.test(emptyCallLabel(el)));
+      if (stay) {
+        try { stay.click(); emptyCallLastPromptAt = now; return true; } catch (_) {}
+      }
+    }
+    // Some Meet revisions render the notification as a floating panel without
+    // role=dialog. Require both a Stay control and a nearby alone-call warning.
+    const stay = interactive.find(el => stayNames.test(emptyCallLabel(el)));
+    if (stay) {
+      let ancestor = stay.parentElement;
+      for (let depth = 0; ancestor && depth < 5; depth++, ancestor = ancestor.parentElement) {
+        const text = textOf(ancestor.innerText || ancestor.textContent || '');
+        if (/are you still there|you(?:'re| are) (?:the )?only one|you(?:'re| are) alone|no one else/i.test(text)) {
+          try { stay.click(); emptyCallLastPromptAt = now; return true; } catch (_) {}
+        }
+      }
+    }
+    return false;
+  }
   function protectHostFromEmptyCallExit() {
     if (!inCall()) return;
     const now = Date.now();
     const interactive = [...document.querySelectorAll('button,[role="button"],[role="menuitem"],[role="tab"]')]
       .filter(emptyCallVisible);
-
-    // If Google's own reminder appears before Zapper's 12-minute host choice,
-    // keep this host-initiated session connected until the Zapper host decides.
-    // This is an emergency fallback, not a substitute for the 12+2 minute flow.
-    if (now - emptyCallLastPromptAt > 2500) {
-      const dialog = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')]
-        .find(el => /are you still there/i.test(emptyCallLabel(el)) &&
-          /only one|only participant|you.re the only one|no one else/i.test(emptyCallLabel(el)));
-      if (dialog) {
-        const stay = interactive.find(el => dialog.contains?.(el) &&
-          /^(?:stay in the call|keep waiting|stay)$/i.test(emptyCallLabel(el)));
-        if (stay) {
-          try { stay.click(); emptyCallLastPromptAt = now; } catch (_) {}
-        }
-      }
-    }
 
     if (emptyCallDone) return;
     if (!emptyCallStartedAt) emptyCallStartedAt = now;
@@ -461,6 +491,7 @@
   }
   function start() {
     setInterval(() => {
+      dismissMeetAloneReminder(); // also works when the modal hides the leave button
       if (!inCall()) return;
       ensureCaptions();
       // Leave UK language selection undisturbed on the first few seconds.

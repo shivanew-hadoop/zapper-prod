@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../meet-controller/host-caption-preload.js'), 'utf8');
 
-function scenario({ initiallyOn = true, clickSucceeds = true } = {}) {
+function scenario({ initiallyOn = true, clickSucceeds = true, inCall = true, aloneWording = false } = {}) {
   let now = 100_000, stage = 0, switchOn = initiallyOn;
   let moreClicks = 0, settingsClicks = 0, generalClicks = 0, toggleClicks = 0;
   let reminder = false, stayClicks = 0;
@@ -25,10 +25,10 @@ function scenario({ initiallyOn = true, clickSucceeds = true } = {}) {
     if (clickSucceeds) switchOn = !switchOn;
   }, { getAttribute: key => key === 'aria-label' ? 'Leave empty calls' : key === 'aria-checked' ? String(switchOn) : '' });
   const stay = element('Stay in the call', () => { stayClicks++; reminder = false; });
-  const reminderDialog = element("Are you still there? You're the only one here", () => {}, { contains: node => node === stay });
+  const reminderDialog = element(aloneWording ? 'You are alone in this meeting' : "Are you still there? You're the only one here", () => {}, { contains: node => node === stay });
   const doc = {
     readyState: 'complete',
-    querySelector: selector => selector.includes('Leave call') ? {} : null,
+    querySelector: selector => selector.includes('Leave call') && inCall ? {} : null,
     querySelectorAll: selector => {
       if (selector === '[role="switch"],[role="checkbox"],input[type="checkbox"]') return stage === 3 ? [toggle] : [];
       if (selector === 'label,span,div,p') return [];
@@ -85,4 +85,9 @@ rejected.prompt();
 rejected.tick(3000);
 assert.equal(rejected.state.stayClicks, 1, 'host-initiated session stays connected until Zapper inactivity decision');
 assert.equal(rejected.state.reminder, false);
+const hiddenLeaveButton = scenario({ inCall: false, aloneWording: true });
+hiddenLeaveButton.prompt();
+hiddenLeaveButton.tick(100);
+assert.equal(hiddenLeaveButton.state.stayClicks, 1,
+  'Google reminder must be dismissed even when it hides the ordinary Leave call control');
 console.log(JSON.stringify({ ok: true, autoSettingsOpened: true, verifiedOff: true, safeWhenAlreadyOff: true, failedClickRetried: true, earlyGoogleReminderHandled: true }));

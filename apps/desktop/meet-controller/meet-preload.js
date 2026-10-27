@@ -94,6 +94,25 @@
       (/are you still there\?/i.test(text) && /leave now/i.test(text) && /stay in the call/i.test(text));
   }
 
+  // Guard PIN Meet windows as well as the host window. This acts only on an
+  // actual Google Meet lone-participant dialog; it never fabricates speech.
+  let lastAloneReminderAt = 0;
+  function dismissMeetAloneReminder() {
+    if (Date.now() - lastAloneReminderAt < 2500) return false;
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
+    const stayLabel = /^(?:stay in (?:the )?call|keep waiting|stay|continue (?:the )?(?:meeting|call))$/i;
+    for (const dialog of dialogs) {
+      const content = normalizeText(dialog.innerText || dialog.textContent || dialog.getAttribute('aria-label') || '');
+      if (!/are you still there|you(?:'re| are) (?:the )?only one|you(?:'re| are) alone|no one else/i.test(content)) continue;
+      const options = [...dialog.querySelectorAll('button,[role="button"]')];
+      const stay = options.find(el => stayLabel.test(normalizeText(el.getAttribute('aria-label') || el.innerText || el.textContent || '')));
+      if (stay) {
+        try { stay.click(); lastAloneReminderAt = Date.now(); return true; } catch (_) {}
+      }
+    }
+    return false;
+  }
+
   function isMeetNoise(value) {
     const t = keyText(value);
     if (!t) return true;
@@ -940,6 +959,7 @@
     });
     if (document.body) bodyObserver.observe(document.body, { childList: true, subtree: true });
     setInterval(() => {
+      dismissMeetAloneReminder();
       if (!isInMeeting()) return;
       ensureMeetCaptionsEnabled();
       if (!captionObservedRoot?.isConnected) {

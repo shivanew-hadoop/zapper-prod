@@ -3,21 +3,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../overlay/overlay.js'), 'utf8');
-const start = source.indexOf('// Keep committed text nodes alive:');
+const start = source.indexOf('// Completed lines are append-only DOM nodes.');
 const end = source.indexOf('\nfunction showJoinError(', start);
-assert(start > 0 && end > start, 'append-only transcript renderer must exist');
+assert(start > 0 && end > start);
 const nodes = [];
 const transcriptEl = {
-  children: [], scrollHeight: 100, clientHeight: 10, scrollTop: 0,
+  children: [], scrollHeight: 200, clientHeight: 40, scrollTop: 0,
   set textContent(_) { this.children = []; },
-  append(...n) { this.children.push(...n); },
-  contains(n) { return this.children.includes(n); }
+  append(...items) { this.children.push(...items); },
+  contains(item) { return this.children.includes(item); },
+  removeChild(item) { const index = this.children.indexOf(item); if (index >= 0) this.children.splice(index, 1); },
+  insertBefore(item, next) {
+    const index = this.children.indexOf(next);
+    assert(index >= 0);
+    this.children.splice(index, 0, item);
+  },
 };
 const context = {
-  transcriptEl, document: { createTextNode(s) { const node = { nodeValue: s }; nodes.push(node); return node; } },
-  finalLines: [], interimText: '', transcriptAutoScroll: true, transcriptRenderVersion: 0,
-  transcriptRenderRestoring: false, transcriptScrollTopLock: 0,
-  requestAnimationFrame(cb) { cb(); }, Math
+  transcriptEl, document: { createTextNode(value) {
+    const node = { nodeValue: value }; nodes.push(node); return node;
+  } },
+  finalLines: [], interimText: '', transcriptAutoScroll: true,
+  transcriptUserScrollIntent: false, transcriptScrollTopLock: 0, Math,
 };
 vm.createContext(context);
 vm.runInContext(source.slice(start, end), context);
@@ -26,16 +33,26 @@ function render(finals, interim) {
   context.interimText = interim;
   vm.runInContext('renderTranscript()', context);
 }
-render(['Settled words stay'], 'now');
-const first = [...transcriptEl.children];
-assert.equal(first.length, 2);
-assert.equal(first[0].nodeValue, 'Settled words stay\n');
-render(['Settled words stay'], 'now quickly');
-assert.equal(transcriptEl.children[0], first[0], 'final text node identity must remain unchanged');
-assert.equal(transcriptEl.children[0].nodeValue, 'Settled words stay\n');
-assert.equal(transcriptEl.children[1], first[1], 'interim span must also remain mounted');
-render(['Settled words stay', 'now quickly'], '');
-render(['Settled words stay', 'now quickly'], 'more');
-assert.equal(transcriptEl.children[0], first[0], 'no full rewrite on new committed lines');
-assert.equal(nodes.length, 2, 'no flashing caused by recreating final caption nodes');
-console.log(JSON.stringify({ok:true,stableCommittedNode:true,interimNoFullRedraw:true}));
+render(['I wanted to see'], 'coming to my roles');
+const confirmedLine = transcriptEl.children[1];
+assert.equal(confirmedLine.nodeValue, 'I wanted to see');
+render(['I wanted to see'], 'coming to my roles and responsibilities');
+const stableWord = transcriptEl.children.find(node => node.nodeValue === '\ncoming');
+assert(stableWord, 'first settled provisional word is a separate immutable node');
+render(['I wanted to see'], 'coming to my roles and responsibilities today');
+assert.equal(stableWord.nodeValue, '\ncoming', 'locked word text is never changed');
+assert(transcriptEl.contains(stableWord), 'locked word node never gets recreated on interim update');
+assert.equal(transcriptEl.children[1], confirmedLine);
+assert.equal(confirmedLine.nodeValue, 'I wanted to see');
+render(['I wanted to see', 'coming to my roles and responsibilities today'], '');
+const nextConfirmed = transcriptEl.children[2];
+assert.equal(nextConfirmed.nodeValue, '\ncoming to my roles and responsibilities today');
+render(['I wanted to see', 'coming to my roles and responsibilities today'], 'next sentence');
+assert.equal(transcriptEl.children[1], confirmedLine);
+assert.equal(transcriptEl.children[2], nextConfirmed);
+render(['I wanted to see', 'coming to my roles and responsibilities today'], 'next sentence grows');
+assert.equal(transcriptEl.children[1], confirmedLine, 'first finalized node never repainted');
+assert.equal(transcriptEl.children[2], nextConfirmed, 'second finalized node never repainted');
+render([], 'new host session');
+assert(!transcriptEl.contains(confirmedLine), 'only a new session can clear prior final nodes');
+console.log(JSON.stringify({ ok: true, immutableFinalLines: true, provisionalPrefixLocked: true, noRedraw: true, sessionReset: true }));

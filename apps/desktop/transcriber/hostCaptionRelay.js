@@ -44,7 +44,8 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
       }
       for (const message of bufferedFinals.splice(0)) {
         if (ws.readyState !== WebSocket.OPEN) break;
-        try { ws.send(message); } catch (_) { bufferedFinals.unshift(message); break; }
+        try { ws.send(JSON.stringify({ ...JSON.parse(message), catchUpOnly: true })); }
+        catch (_) { bufferedFinals.unshift(message); break; }
       }
     });
     ws.on('message', raw => {
@@ -63,7 +64,8 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
       if (gen !== generation || socket !== ws) return;
       socket = null;
       if (code === 1008) { stopHostCaptionRelay(); onEnded('Host caption authorization ended.'); return; }
-      if (code === 1000) return;
+      // 1000 can be sent by a Railway rollout while the host session is live.
+      // Explicit stopHostCaptionRelay() increments generation instead.
       timer = setTimeout(() => { timer = null; connect(); }, RETRY_MS);
       timer.unref?.();
     });
@@ -98,6 +100,6 @@ function publishHostChat(payload) {
   }
   bufferedChats.push(chat);
   if (bufferedChats.length > 200) bufferedChats.shift();
-  return false;
+  return true; // locally queued; replayed after the authorized socket reconnects
 }
 module.exports = { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat };

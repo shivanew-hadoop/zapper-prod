@@ -141,9 +141,9 @@ function getCaptureState(sessionId) {
   }
   return state;
 }
-function registerCapture(sessionId, connectionId) {
+function registerCapture(sessionId, connectionId, isHost = false) {
   const state = getCaptureState(sessionId);
-  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [] });
+  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [], isHost: Boolean(isHost) });
   if (!state.leaderId) state.leaderId = connectionId;
 }
 function isCaptureLeader(sessionId, connectionId) {
@@ -155,11 +155,11 @@ function markLocalCaptionSource(sessionId, connectionId, now = Date.now()) {
   if (!connection) return false;
   connection.localCaptionAt = now;
   const leader = state.connections.get(state.leaderId);
-  // Prefer Meet's built-in captions over paid STT. Keep the first healthy local
-  // caption source as leader, and fail over only when it has gone quiet.
-  if (!leader || !Number(leader.localCaptionAt || 0) || now - Number(leader.localCaptionAt || 0) > 12000) {
-    state.leaderId = connectionId;
-  }
+  // All PIN viewers should follow the same host Meet feed whenever it is
+  // publishing. A PIN client that connected first must not own the relay while
+  // the host is talking. Fall back to any active Meet source after 3 seconds.
+  const healthyLeader = leader && now - Number(leader.localCaptionAt || 0) <= 3000;
+  if (!healthyLeader || (connection.isHost && !leader.isHost)) state.leaderId = connectionId;
   return state.leaderId === connectionId;
 }
 // Native Meet captions include all meeting speakers. While those captions are
@@ -257,7 +257,7 @@ wss.on('connection', (clientWs, req) => {
     return;
   }
   const connectionId = crypto.randomUUID();
-  registerCapture(capture.session.id, connectionId);
+  registerCapture(capture.session.id, connectionId, Boolean(hostAudio));
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
   if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
@@ -447,8 +447,10 @@ wss.on('connection', (clientWs, req) => {
         setImmediate(() => sessionControl.touchSessionCaption(capture.session.id, nativeNow));
       }
       if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: capturedAt });
-      if (isCaptureLeader(capture.session.id, connectionId)) {
-        hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions' });
+      // Offline finals are replayed solely to complete the PDF ledger. They
+      // must not appear as a sudden batch in every connected PIN overlay.
+      if (!localCaption.catchUpOnly && isCaptureLeader(capture.session.id, connectionId)) {
+        hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions', fromHost: Boolean(hostAudio) });
       }
       const now = Date.now();
       if (now - lastSpeechDbTouchAt >= 15000) {
@@ -483,7 +485,7 @@ wss.on('connection', (clientWs, req) => {
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
     if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
     hostCaptionRelay.unsubscribeChat(capture.session.id, clientWs);
-    unregisterCapture(capture.session.id, connectionId);
+    unregisterCapture(capture.session.id, connectionId, Boolean(hostAudio));
   };
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });

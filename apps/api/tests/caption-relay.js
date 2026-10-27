@@ -103,6 +103,12 @@ class ClientSocket extends EventEmitter {
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(deepgramSockets.length, 0, 'no provider connection even with legacy enable flag');
 
+  // If a PIN client speaks first, the host must still take over as the
+  // authoritative caption source as soon as its own Meet observer publishes.
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'local_caption', text: 'early PIN caption', isFinal: false, capturedAt: Date.now()
+  })), false);
+  assert(desktopB.messages.some(m => m.text === 'early PIN caption'), 'PIN caption can lead while host is silent');
   // The primary caption path stays live: original text from Meet is persisted
   // and relayed only to viewers authorized for the same session.
   host.emit('message', Buffer.from(JSON.stringify({
@@ -111,6 +117,15 @@ class ClientSocket extends EventEmitter {
   await new Promise(resolve => process.nextTick(resolve));
   assert.equal(desktopA.messages.find(m => m.text === 'I wanted to see')?.source, 'meet-captions');
   assert.equal(desktopB.messages.find(m => m.text === 'I wanted to see')?.isFinal, true);
+  assert.equal(desktopB.messages.find(m => m.text === 'I wanted to see')?.fromHost, true,
+    'host preempts an earlier PIN caption leader');
+  const beforeReplay = desktopB.messages.filter(m => m.type === 'transcript').length;
+  host.emit('message', Buffer.from(JSON.stringify({
+    type: 'local_caption', text: 'offline archived phrase', isFinal: true,
+    capturedAt: Date.now() - 5000, catchUpOnly: true
+  })), false);
+  assert.equal(desktopB.messages.filter(m => m.type === 'transcript').length, beforeReplay,
+    'offline finals saved for PDF must not flood the live overlay');
   assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'PIN isolation preserved');
   assert.equal(host.messages.filter(m => m.text === 'I wanted to see').length, 0, 'no local echo');
 

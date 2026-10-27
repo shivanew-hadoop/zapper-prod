@@ -13,6 +13,8 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 let hostWindow = null;
 let hostTimer = null;
+let hostRecoveryTimer = null;
+let recentHostRecoveries = [];
 
 function sanitizeName(value) {
   const name = String(value || '').replace(/[^\p{L}\p{N} ._'-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 30);
@@ -152,6 +154,40 @@ function stopHostTimer() {
   hostTimer = null;
 }
 
+function stopHostRecoveryGuard() {
+  if (hostRecoveryTimer) clearInterval(hostRecoveryTimer);
+  hostRecoveryTimer = null;
+}
+function startHostRecoveryGuard(win) {
+  stopHostRecoveryGuard();
+  hostRecoveryTimer = setInterval(async () => {
+    if (!win || win.isDestroyed() || hostWindow !== win) { stopHostRecoveryGuard(); return; }
+    // Do nothing in a live meeting. Only an actual Google Meet terminal page
+    // can trigger rejoin; silence or an empty participant list never can.
+    const ended = await win.webContents.executeJavaScript(`(() => {
+      if (document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]')) return false;
+      const text = (document.body?.innerText || '').slice(0, 2500).toLowerCase();
+      return /the call ended because everyone left|the meeting has ended because everyone left/.test(text);
+    })()`, true).catch(() => false);
+    if (!ended || hostWindow !== win) return;
+    const now = Date.now();
+    recentHostRecoveries = recentHostRecoveries.filter(at => now - at < 10 * 60 * 1000);
+    if (recentHostRecoveries.length >= 3) {
+      win.__zapperOnStatus?.('Google Meet ended repeatedly. Rejoin manually; Zapper session remains active.');
+      stopHostRecoveryGuard();
+      return;
+    }
+    recentHostRecoveries.push(now);
+    const meetUrl = win.__zapperMeetUrl, name = win.__zapperHostName;
+    const onStatus = win.__zapperOnStatus || (() => {});
+    onStatus('Google Meet ended unexpectedly. Rejoining the same room…');
+    leaveHost({ preserveRecovery: true });
+    await joinAsHost({ meetUrl, name }, onStatus).catch(error =>
+      onStatus('Automatic Meet rejoin failed: ' + error.message));
+  }, 7000);
+  hostRecoveryTimer.unref?.();
+}
+
 async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   if (!MEET_URL.test(String(meetUrl || ''))) throw new Error('Invalid Google Meet link.');
   const say = msg => { try { onStatus(msg); } catch (_) {} };
@@ -160,6 +196,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     // Already hosting this room? Just bring it forward; otherwise replace it.
     if (hostWindow.__zapperMeetUrl === meetUrl) { hostWindow.show(); return true; }
     stopHostTimer();
+    stopHostRecoveryGuard();
     try { hostWindow.destroy(); } catch (_) {}
     hostWindow = null;
   }
@@ -194,7 +231,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   win.__zapperOnStatus = onStatus;
   hostWindow = win;
   win.on('closed', () => {
-    if (hostWindow === win) { hostWindow = null; stopHostTimer(); }
+    if (hostWindow === win) { hostWindow = null; stopHostTimer(); stopHostRecoveryGuard(); }
   });
 
   say('Host mode: opening your Google Meet…');
@@ -235,7 +272,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       if (result.state === 'joined') {
         joinedTicks += 1;
         if (joinedTicks === 1) say('Host mode: you are in the meeting with your microphone on and camera off.');
-        if (joinedTicks > 4) { stopHostTimer(); hideHostWindow(win); }
+        if (joinedTicks > 4) { stopHostTimer(); hideHostWindow(win); startHostRecoveryGuard(win); }
       } else if (result.state === 'ready') {
         if (Date.now() - lastClickAt > 4000) {
           lastClickAt = Date.now();
@@ -353,8 +390,10 @@ async function setHostMic(on) {
   })()`, true).catch(() => false);
 }
 
-function leaveHost() {
+function leaveHost({ preserveRecovery = false } = {}) {
   stopHostTimer();
+  stopHostRecoveryGuard();
+  if (!preserveRecovery) recentHostRecoveries = [];
   const win = hostWindow;
   hostWindow = null;
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}

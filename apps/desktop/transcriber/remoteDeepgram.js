@@ -59,7 +59,9 @@ function isSocketActive() {
 
 function shouldReconnect(code) {
   if (manuallyStopped || permanentClose) return false;
-  if (code === 1000 || code === 1008) return false;
+  // A Railway deploy or orderly transport restart may use 1000. Only an
+  // intentional local stop or explicit authentication failure is permanent.
+  if (code === 1008) return false;
   return Boolean(currentUrl);
 }
 
@@ -117,7 +119,9 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
     }
     for (const caption of bufferedLocalCaptions.splice(0)) {
       try {
-        if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(caption);
+        if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ ...JSON.parse(caption), catchUpOnly: true }));
+        }
       } catch (_) {}
     }
     for (const chunk of bufferedChunks.splice(0)) {
@@ -160,6 +164,7 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
         isFinal: !!msg.isFinal,
         confidence: msg.confidence || 0,
         source: String(msg.source || 'deepgram'),
+        fromHost: Boolean(msg.fromHost),
       });
     }
   });
@@ -270,7 +275,10 @@ function publishMeetChat(payload) {
   // Only the disconnected-network backlog is bounded. Normal message count
   // and Google Meet's own content-length rules are not changed by Zapper.
   if (bufferedMeetChat.length > 200) bufferedMeetChat.shift();
-  return false;
+  if (!isSocketActive() && currentUrl && !reconnectTimer) {
+    scheduleReconnect(1006, 'group message queued while relay disconnected', streamGeneration);
+  }
+  return true; // accepted for delivery after reconnect
 }
 
 function stopRemoteTranscriptStream() {

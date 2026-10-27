@@ -146,6 +146,7 @@ let captureStopInProgress = false;
 let localCaptionReady = false;
 let localCaptionAdmitted = false;
 let localCaptionLastAt = 0;
+let hostRelayLastAt = 0;
 let localCaptionLastText = '';
 let localCaptionLastWasFinal = false;
 let deepgramFallbackActive = false;
@@ -386,6 +387,7 @@ function resetRuntimeFlags() {
   localCaptionReady = false;
   localCaptionAdmitted = false;
   localCaptionLastAt = 0;
+  hostRelayLastAt = 0;
   localCaptionLastText = '';
   localCaptionLastWasFinal = false;
   deepgramFallbackActive = false;
@@ -510,7 +512,7 @@ ipcMain.on('host-caption-message', (_, payload) => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('host-session-active');
     overlayWindow.webContents.send('transcript', {
-      text: String(payload.text).trim(), isFinal: Boolean(payload.isFinal), source: 'meet-captions'
+      text: String(payload.text).trim(), isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'host-meet'
     });
   }
 });
@@ -529,9 +531,10 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   captionFallbackTimer = null;
   sendTranscriptionSource('meet-captions');
 
-  // Local-first render: no backend round-trip before the user sees the caption.
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions' });
+  // Use local Meet captions immediately if the authoritative host relay is
+  // unavailable. Otherwise all PIN viewers display the same host feed.
+  if (Date.now() - hostRelayLastAt > 1800 && overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'local-meet' });
   }
   // Backend receives text only for session-level PDF persistence and other PIN
   // viewers. This does not invoke Deepgram.
@@ -541,12 +544,19 @@ ipcMain.on('meet-caption-message', (_, payload) => {
 ipcMain.handle('send-meet-chat-message', async (_, message) => {
   const text = String(message || '').trim();
   if (!text) return { success: false, error: 'Empty chat message' };
-  const result = await sendMeetChatToMeeting(text);
-  if (result?.success && started && activeCaptureSessionToken) {
-    publishMeetChat({ sender: activeCaptureGoogleEmail ? activeCaptureGoogleEmail.split('@')[0] : 'Participant',
-      message: text, meetTime: '', chatKey: '' });
+  // The Zapper group relay is authoritative. Google's chat panel is not a
+  // prerequisite and can be closed, hidden or disabled for a guest.
+  const chatKey = `zapper-${Date.now()}-${require('node:crypto').randomUUID()}`;
+  if (started && activeCaptureSessionToken) {
+    const accepted = publishMeetChat({ sender: activeCaptureGoogleEmail ? activeCaptureGoogleEmail.split('@')[0] : 'Participant',
+      message: text, meetTime: '', chatKey });
+    return { success: Boolean(accepted), channel: 'zapper', error: accepted ? '' : 'Session group chat is unavailable.' };
   }
-  return result;
+  if (hostCaptionsAuthorized) {
+    const accepted = publishHostChat({ sender: 'Host', message: text, meetTime: '', chatKey });
+    return { success: Boolean(accepted), channel: 'zapper', error: accepted ? '' : 'Host chat connection is unavailable.' };
+  }
+  return { success: false, error: 'Join an active session before sending a group message.' };
 });
 
 function sendLoginRequired(msg) {
@@ -920,16 +930,18 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
-      // If this desktop has Meet captions, render those directly and ignore
-      // backend relay echoes/other viewers to prevent duplicate lines. Deepgram
-      // transcripts are accepted only while fallback is explicitly active.
+      // Never permanently suppress a host relay just because the PIN window
+      // once detected local captions. Prefer the live host feed, with local
+      // Meet as an immediate fallback if that feed stops for 1.8 seconds.
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
-      if (localCaptionReady && payload.source !== 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
+      if (payload.fromHost) hostRelayLastAt = Date.now();
+      else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
         text: payload.text,
         isFinal: payload.isFinal,
-        source: payload.source || 'backend'
+        source: payload.source || 'backend',
+        origin: payload.fromHost ? 'host-relay' : 'peer-relay'
       });
     });
 

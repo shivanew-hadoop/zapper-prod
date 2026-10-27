@@ -62,7 +62,7 @@ module.exports = function createHostCaptionRelay({ openState = 1, maxBufferedByt
     return delivered;
   }
 
-  function publish(sessionId, caption, { excludeSocket = null, source = 'host' } = {}) {
+  function publish(sessionId, caption, { excludeSocket = null, source = 'host', fromHost = false } = {}) {
     const viewers = viewersBySession.get(String(sessionId || ''));
     if (!viewers?.size) return 0;
     const text = String(caption?.text || '').trim();
@@ -74,6 +74,7 @@ module.exports = function createHostCaptionRelay({ openState = 1, maxBufferedByt
       speechFinal: Boolean(caption.speechFinal),
       confidence: Number(caption.confidence || 0),
       source: String(source || 'host'),
+      fromHost: Boolean(fromHost),
     });
     let sent = 0;
     for (const socket of viewers) {

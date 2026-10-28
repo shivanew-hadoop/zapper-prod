@@ -1,5 +1,5 @@
 {
-  "description": "Conservative single-token technology terms for Google Meet captions. Edit this file and rebuild the desktop app to extend vocabulary. Prefer unique spellings; do not add ambiguous or multiword phonetic guesses.",
+  "description": "Exact, low-latency technology vocabulary for Google Meet captions. Includes limited multiword pronunciation variants (e.g. land chain -> LangChain). No fuzzy matching, timers or network calls. Extend carefully to avoid changing normal speech.",
   "terms": [
     {
       "term": "AWS",
@@ -79,7 +79,12 @@
         "kubernates",
         "kubernettis",
         "cubarnetes",
-        "kubernitees"
+        "kubernitees",
+        "kubernet",
+        "kubernett",
+        "kuber netes",
+        "kuber net is",
+        "cuber netes"
       ]
     },
     {
@@ -720,7 +725,12 @@
       "term": "LangChain",
       "variants": [
         "langchain",
-        "lang-chain"
+        "lang-chain",
+        "lang chain",
+        "land chain",
+        "landchain",
+        "land chane",
+        "lang chane"
       ]
     },
     {
@@ -735,6 +745,17 @@
       "variants": [
         "openai",
         "open-ai"
+      ]
+    },
+    {
+      "term": "LangGraph",
+      "variants": [
+        "langgraph",
+        "lang-graph",
+        "lang graph",
+        "land graph",
+        "landgraph",
+        "lang graft"
       ]
     }
   ]

@@ -279,7 +279,8 @@
 
   function findMeetChatRoot() {
     const input = findChatInput();
-    if (knownChatRoot && document.body.contains(knownChatRoot) && (!input || knownChatRoot.contains(input))) return knownChatRoot;
+    if (!input) { knownChatRoot = null; return null; }
+    if (knownChatRoot && document.body.contains(knownChatRoot) && knownChatRoot.contains(input)) return knownChatRoot;
 
     let best = null;
     let bestScore = -999;
@@ -291,13 +292,9 @@
       }
     }
 
-    const panels = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [aria-label], div')].filter(visible);
-    for (const el of panels) {
-      const score = scoreChatRoot(el, input);
-      if (score > bestScore) { best = el; bestScore = score; }
-    }
-
-    knownChatRoot = bestScore >= 25 ? best : null;
+    // Never scan unrelated Meet panels for a likely-looking timestamp.
+    // Only an ancestor of the verified chat input may own message rows.
+    knownChatRoot = bestScore >= 80 ? best : null;
     return knownChatRoot;
   }
 
@@ -1103,7 +1100,7 @@
 
   function findSmallChatBlocks(root) {
     if (!root) return [];
-    const all = [...root.querySelectorAll('[data-message-id], [data-sender-name], [data-author-name], [role="listitem"], [role="article"], li, div')]
+    const all = [...root.querySelectorAll('[data-message-id], [data-sender-name], [data-author-name]')]
       .filter(el => el && visible(el))
       .filter(el => {
         if (el.matches && el.matches('textarea, input, button, [role="button"], [contenteditable="true"], [role="textbox"]')) return false;
@@ -1115,7 +1112,7 @@
         const clockCount = lines.filter(isClockText).length;
         const role = normalizeText(el.getAttribute && el.getAttribute('role') || '').toLowerCase();
         const hasMessageAttr = !!(el.getAttribute && (el.getAttribute('data-message-id') || el.getAttribute('data-sender-name') || el.getAttribute('data-author-name')));
-        return hasMessageAttr || /listitem|article/.test(role) || (lines.length <= 12 && clockCount <= 2);
+        return hasMessageAttr;
       });
 
     return all.filter(el => !all.some(other => other !== el && el.contains(other)))
@@ -1125,35 +1122,6 @@
         return (ra.top - rb.top) || (ra.left - rb.left);
       })
       .slice(-150);
-  }
-
-  function parseRootStream(root) {
-    const lines = cleanChatLines(root && (root.innerText || root.textContent) || '');
-    const rows = [];
-    const occurrence = new Map();
-    if (!lines.length || !lines.some(isClockText)) return rows;
-
-    const timeIdxs = lines.map((v, i) => isClockText(v) ? i : -1).filter(i => i >= 0);
-    for (let t = 0; t < timeIdxs.length; t += 1) {
-      const ti = timeIdxs[t];
-      const nextTi = timeIdxs[t + 1] ?? lines.length;
-      const time = lines[ti];
-      const prev = lines[ti - 1] || '';
-      if (isSelfText(prev)) continue;
-      let sender = looksLikeName(prev) && ti < lines.length - 1 ? prev : 'Host';
-      if (isSelfText(sender)) continue;
-      const messages = [];
-      for (let j = ti + 1; j < nextTi; j += 1) {
-        const line = lines[j];
-        if (!line || isClockText(line)) continue;
-        if (j === nextTi - 1 && isClockText(lines[j + 1]) && looksLikeName(line)) continue;
-        if (sender && keyText(line) === keyText(sender)) continue;
-        messages.push(line);
-      }
-      if (!messages.length && prev && !looksLikeName(prev)) messages.push(prev);
-      for (const msg of messages) pushRow(rows, occurrence, sender, time, msg);
-    }
-    return rows;
   }
 
   function emitChatRow(row) {
@@ -1178,47 +1146,17 @@
 
     const rows = [];
     for (const block of findSmallChatBlocks(root)) rows.push(...parseCandidateBlock(block));
-    if (!rows.length) rows.push(...parseRootStream(root));
-    for (const row of rows) emitChatRow(row);
-  }
-
-  function scanAnyVisibleChatBlocks() {
-    const candidates = [...document.querySelectorAll('[data-message-id], [data-sender-name], [data-author-name], [role="listitem"], [role="article"], li, div')]
-      .filter(el => el && visible(el))
-      .filter(el => {
-        if (el.matches && el.matches('textarea, input, button, [role="button"], [contenteditable="true"], [role="textbox"]')) return false;
-        const txt = normalizeText([
-          el.innerText || el.textContent || '',
-          el.getAttribute && el.getAttribute('aria-label') || '',
-          el.getAttribute && el.getAttribute('title') || ''
-        ].filter(Boolean).join(' '));
-        if (!/\b\d{1,2}:\d{2}(?:\s?[AP]M)?\b/i.test(txt)) return false;
-        if (/ready to join|ask to join|meeting details|people in this call|loading invitees|view everyone in this call/i.test(txt)) return false;
-        if (isMeetInactivityPrompt(txt)) return false;
-        if (el.closest('[role="alertdialog"]')) return false;
-        return txt.length > 4;
-      })
-      .filter(el => !isMeetNoise(el.innerText || el.textContent || ''))
-      .sort((a, b) => {
-        const ra = a.getBoundingClientRect();
-        const rb = b.getBoundingClientRect();
-        return (ra.top - rb.top) || (ra.left - rb.left);
-      })
-      .slice(-120);
-
-    const rows = [];
-    for (const el of candidates) rows.push(...parseCandidateBlock(el));
+    // Do not parse the chat root as one text stream: caption/toolbar text may
+    // be present in the ancestor even while nobody has typed a message.
     for (const row of rows) emitChatRow(row);
   }
 
   function scanChatMutation(mutation) {
     const root = findMeetChatRoot();
-    if (!root) { scanAnyVisibleChatBlocks(); return; }
+    if (!root) return; // Never scan captions or Meet controls across the page.
     if (mutation && mutation.target && !(mutation.target === root || root.contains(mutation.target) || mutation.target.contains(root))) return;
     scanChatArea(root);
-    // Extra fallback handles Meet builds where the visible message node is outside
-    // the selected panel ancestor due to portal/shadow-like rendering.
-    scanAnyVisibleChatBlocks();
+    // Message rows outside the verified chat panel are deliberately ignored.
   }
 
   async function autoSendInitialChatHereOnce() {
@@ -1244,16 +1182,15 @@
     if (chatObserverInstalled || !ipcRenderer || !document.body) return;
     chatObserverInstalled = true;
 
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) scanChatMutation(mutation);
-    });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // Scan at the existing 700ms cadence instead of on every caption DOM
+    // mutation. The old page-wide observer could starve caption rendering.
+    // Explicit chat rows are still discovered by the interval below.
 
     setInterval(async () => {
       if (isInMeeting()) await ensureChatPanelOpen();
       const root = findMeetChatRoot();
       if (root) scanChatArea(root);
-      scanAnyVisibleChatBlocks();
+      // No document-wide scan: only explicit messages inside Meet chat.
       // Never send automated chat: only real people may send group messages.
     }, 700);
 

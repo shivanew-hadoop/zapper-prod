@@ -109,6 +109,8 @@ class ClientSocket extends EventEmitter {
     type: 'local_caption', text: 'early PIN caption', isFinal: false, capturedAt: Date.now()
   })), false);
   assert(desktopB.messages.some(m => m.text === 'early PIN caption'), 'PIN caption can lead while host is silent');
+  assert(host.messages.some(m => m.text === 'early PIN caption'),
+    'host overlay must be able to recover from authorized PIN captions when its Meet observer stalls');
   // The primary caption path stays live: original text from Meet is persisted
   // and relayed only to viewers authorized for the same session.
   host.emit('message', Buffer.from(JSON.stringify({
@@ -136,6 +138,23 @@ class ClientSocket extends EventEmitter {
   assert.equal(desktopB.messages.find(m => m.text === 'caption from Meet DOM'), undefined,
     'secondary PIN viewers must not replace the host as the caption relay leader');
   assert.equal(desktopA.messages.find(m => m.text === 'caption from Meet DOM'), undefined, 'no echo to sender');
+  // A stalled host's Meet observer must no longer leave the host overlay
+  // silent while a PIN desktop is correctly receiving Google captions.
+  await new Promise(resolve => setTimeout(resolve, 3100));
+  desktopA.emit('message', Buffer.from(JSON.stringify({
+    type: 'local_caption', text: 'live PIN fallback after host stalls', isFinal: false, capturedAt: Date.now()
+  })), false);
+  assert(host.messages.some(m => m.text === 'live PIN fallback after host stalls'),
+    'host subscription receives fallback after the silent-source window');
+  assert(desktopB.messages.some(m => m.text === 'live PIN fallback after host stalls'),
+    'other PIN overlay also continues without interruption');
+  host.emit('message', Buffer.from(JSON.stringify({
+    type: 'local_caption', text: 'host caption source resumes', isFinal: false, capturedAt: Date.now()
+  })), false);
+  assert(desktopB.messages.some(m => m.text === 'host caption source resumes'),
+    'live host Meet source immediately takes priority again');
+  assert(!host.messages.some(m => m.text === 'host caption source resumes'),
+    'host never receives its own relay as a duplicate');
   assert.equal(deepgramSockets.length, 0, 'transcript relay never invokes Deepgram');
 
   // Group chat is isolated to the same authorized room (host <-> all PIN clients).

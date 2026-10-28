@@ -89,6 +89,17 @@ function handleZapperUrl(rawUrl) {
       startHostCaptionRelay({ backendUrl: BACKEND_URL, captureToken: hostJoin.captureToken,
         onStatus: sendStatus,
         onChat: sendMeetChat,
+        onCaption: caption => {
+          // The host normally renders its own 120 ms Meet observer directly.
+          // Only use a PIN desktop's caption if that observer has been silent;
+          // never mix two active captions into the same provisional line.
+          if (!hostCaptionsAuthorized || started || !caption?.text || Date.now() - lastHostLocalCaptionAt < 2000) return;
+          if (overlayWindow && !overlayWindow.isDestroyed()) {
+            overlayWindow.webContents.send('host-session-active');
+            overlayWindow.webContents.send('transcript', { text: String(caption.text),
+              isFinal: Boolean(caption.isFinal), source: 'meet-captions', origin: 'peer-relay' });
+          }
+        },
         onEnded: (reason, type) => {
           hostCaptionsAuthorized = false;
           // Only a confirmed backend session end disconnects Meet. A temporary
@@ -160,17 +171,25 @@ let audibleWithoutCaptionSince = 0;
 const DEEPGRAM_FALLBACK_ENABLED = false;
 let meetOnlyFallbackNoticeSent = false;
 let hostCaptionsAuthorized = false;
+let lastHostLocalCaptionAt = 0;
 
 
-// Keep the overlay private from supported OS capture APIs and continuously
-// reinforce its top-most z-order without stealing keyboard focus.
+// Keep capture privacy and topmost protections enabled, but avoid resetting
+// native Windows compositor flags every 250ms while the pointer is hovering.
+let overlayPrivacyInitializedFor = null;
 function enforceOverlayPrivacyAndTopmost() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
-  try { overlayWindow.setContentProtection(true); } catch (_) {}
-  try { overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-  try { overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
-  try { if (overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
+  if (overlayPrivacyInitializedFor !== overlayWindow) {
+    try { overlayWindow.setContentProtection(true); } catch (_) {}
+    try { overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+    overlayPrivacyInitializedFor = overlayWindow;
+  }
+  try { if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
+  // Repeatedly raising the overlay over the protected cursor caused flicker.
+  // Both windows already have permanent topmost levels (1 and 2).
+  const pointerVisible = privateCursorWindow && !privateCursorWindow.isDestroyed() && privateCursorWindow.isVisible();
+  try { if (!pointerVisible && overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
 }
 
 function startOverlayTopmostGuard() {
@@ -227,31 +246,37 @@ function createPrivateCursorWindow() {
   try { privateCursorWindow.setAlwaysOnTop(true, 'screen-saver', 2); } catch (_) {}
   try { privateCursorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
 
-  privateCursorWindow.on('closed', () => { privateCursorWindow = null; });
+  privateCursorWindow.on('closed', () => { privateCursorWindow = null; lastCursorPoint = null; });
   return privateCursorWindow;
 }
 
+let lastCursorPoint = null;
 function showPrivateCursorAt(point) {
   const win = createPrivateCursorWindow();
   if (!win || win.isDestroyed()) return;
-  // Keep the arrow hotspot at the true OS pointer while allowing the rest of
-  // the protected cursor to extend outside the overlay without clipping.
-  try { win.setBounds({ x: Math.round(point.x - 2), y: Math.round(point.y - 2), width: 30, height: 40 }, false); } catch (_) {}
-  try { win.setContentProtection(true); } catch (_) {}
-  try { win.setAlwaysOnTop(true, 'screen-saver', 2); } catch (_) {}
-  try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
-  try { if (!win.isVisible()) win.showInactive(); } catch (_) {}
+  const x = Math.round(point.x - 2), y = Math.round(point.y - 2);
+  // No repeated protection / Z-order / native bounds calls at 60fps when the
+  // OS cursor has not moved. Those calls cause the transparent window to flash.
+  if (!lastCursorPoint || lastCursorPoint.x !== x || lastCursorPoint.y !== y) {
+    try { win.setBounds({ x, y, width: 30, height: 40 }, false); } catch (_) {}
+    lastCursorPoint = { x, y };
+  }
+  try { if (!win.isVisible()) { win.showInactive(); win.moveTop(); } } catch (_) {}
 }
 
 function hidePrivateCursorWindow() {
   if (!privateCursorWindow || privateCursorWindow.isDestroyed()) return;
-  try { privateCursorWindow.hide(); } catch (_) {}
+  if (privateCursorWindow.isVisible()) {
+    try { privateCursorWindow.hide(); } catch (_) {}
+  }
+  lastCursorPoint = null;
 }
 
 function destroyPrivateCursorWindow() {
   if (!privateCursorWindow || privateCursorWindow.isDestroyed()) { privateCursorWindow = null; return; }
   try { privateCursorWindow.destroy(); } catch (_) {}
   privateCursorWindow = null;
+  lastCursorPoint = null;
 }
 
 function startOverlayPointerGuard() {
@@ -276,12 +301,8 @@ function startOverlayPointerGuard() {
       if (inside) showPrivateCursorAt(point);
       else hidePrivateCursorWindow();
 
-      // Keep the renderer notification for compatibility with older overlay code.
-      overlayWindow.webContents.send('private-pointer-position', {
-        inside,
-        x: Math.max(0, Math.min(bounds.width - 1, point.x - bounds.x)),
-        y: Math.max(0, Math.min(bounds.height - 1, point.y - bounds.y))
-      });
+      // The renderer cursor is disabled; avoid sending 60 unused IPC messages
+      // per second into the same renderer that must paint live captions.
     } catch (_) {}
   }, 16);
 }
@@ -507,6 +528,7 @@ ipcMain.on('meet-caption-state', (_, payload) => {
 // joining the room as a second participant and without Google overlay sign-in.
 ipcMain.on('host-caption-message', (_, payload) => {
   if (!hostCaptionsAuthorized || !payload?.text) return;
+  lastHostLocalCaptionAt = Date.now();
   publishHostCaption(payload); // authorized API relay to PIN participants + PDF
   if (started) return; // participant session, if present, owns this local view
   if (overlayWindow && !overlayWindow.isDestroyed()) {

@@ -13,7 +13,8 @@ function element({ text = '', id = '', sender = '', children = [], role = '' } =
     getAttribute: k => k === 'data-message-id' ? id : k === 'data-sender-name' ? sender : k === 'role' ? role : '',
     getBoundingClientRect: () => ({ width: 200, height: 30 }),
     querySelector: () => null,
-    querySelectorAll: () => children,
+    querySelectorAll: selector => selector === '[data-message-id]'
+      ? children.filter(child => !!child.getAttribute('data-message-id')) : children,
     click: () => {},
     closest: () => null,
   };
@@ -24,7 +25,8 @@ const rowHost = element({ text: 'You\n10:31 AM\nMessage from the host', id: 'm1'
 const rowPerson = element({ text: 'Alice Kumar\n10:32 AM\nMessage from participant', id: 'm2' });
 const rowSystem = element({ text: 'Google Meet\n10:33 AM\nAre you still there?', id: 'm3' });
 const rowNoClock = element({ text: 'Host\nMessage without timestamp', id: 'm4', sender: 'Host' });
-const panel = element({ text: [rowHost, rowPerson, rowSystem, rowNoClock].map(x => x.innerText).join('\n'), children: [rowHost, rowPerson, rowSystem, rowNoClock] });
+const fakeCaption = element({ text: 'Alice Kumar\n10:33 AM\nI wanted to see this issue', role: 'article' });
+const panel = element({ text: [rowHost, rowPerson, rowSystem, rowNoClock, fakeCaption].map(x => x.innerText).join('\n'), children: [rowHost, rowPerson, rowSystem, rowNoClock, fakeCaption] });
 const input = element();
 input.getAttribute = key => key === 'aria-label' ? 'Message everyone' : '';
 input.parentElement = panel;
@@ -47,7 +49,7 @@ assert(chatScan, 'host chat must be observed on a dedicated interval');
 chatScan.fn();
 chatScan.fn();
 const chat = messages.filter(m => m.channel === 'host-meet-chat-message');
-assert.equal(chat.length, 3, 'real people forwarded once, even without timestamps; Meet admin notices removed');
+assert.equal(chat.length, 3, 'only verified message IDs forward; caption-like article, controls and admin notices excluded');
 assert.deepEqual(chat.map(m => m.sender), ['Host', 'Alice Kumar', 'Host']);
 assert.deepEqual(chat.map(m => m.message), ['Message from the host', 'Message from participant', 'Message without timestamp']);
 console.log(JSON.stringify({ ok: true, sandboxSafeHostChat: true, groupObservers: true, systemFiltered: true, deduped: true }));

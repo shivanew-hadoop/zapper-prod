@@ -24,7 +24,7 @@ function stopHostCaptionRelay() {
   try { old?.close(1000, 'host left'); } catch (_) {}
 }
 
-function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, onEnded = () => {}, onChat = () => {} }) {
+function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, onEnded = () => {}, onChat = () => {}, onCaption = () => {} }) {
   stopHostCaptionRelay();
   token = String(captureToken || '').trim();
   if (!token) return false;
@@ -55,7 +55,8 @@ function startHostCaptionRelay({ backendUrl, captureToken, onStatus = () => {}, 
         if (message.type === 'session_ended' || message.type === 'limit_reached') {
           stopHostCaptionRelay();
           onEnded(message.message || message.text || 'Host session ended.', message.type);
-        } else if (message.type === 'meet_chat') onChat(message);
+        } else if (message.type === 'transcript' && message.text) onCaption(message);
+        else if (message.type === 'meet_chat') onChat(message);
         else if (message.type === 'error') onStatus(`Host caption relay: ${message.message}`);
       } catch (_) {}
     });

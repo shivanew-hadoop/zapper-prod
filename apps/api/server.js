@@ -260,7 +260,10 @@ wss.on('connection', (clientWs, req) => {
   registerCapture(capture.session.id, connectionId, Boolean(hostAudio));
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
-  if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
+  // The host subscribes too: if its hidden Meet observer stalls, another
+  // authorized participant's live caption can safely refresh the host overlay.
+  // publish(..., excludeSocket) prevents an echo of the host's own caption.
+  hostCaptionRelay.subscribe(capture.session.id, clientWs);
   hostCaptionRelay.subscribeChat(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
@@ -483,7 +486,7 @@ wss.on('connection', (clientWs, req) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
-    if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
+    hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
     hostCaptionRelay.unsubscribeChat(capture.session.id, clientWs);
     unregisterCapture(capture.session.id, connectionId, Boolean(hostAudio));
   };

@@ -106,7 +106,16 @@
 
   function latestCaption() {
     // Same verified Meet caption selectors as the PIN-participant collector.
-    const container = document.querySelector('[jsname="tgaKEf"], [jsname="DS9Ooe"], [role="region"][aria-label*="caption" i]');
+    const selector = '[jsname="tgaKEf"], [jsname="DS9Ooe"], [role="region"][aria-label*="caption" i]';
+    // Google Meet can leave an old caption tray in the DOM after a layout
+    // update. Prefer the last *visible* tray instead of the first stale match.
+    const candidates = typeof document.querySelectorAll === 'function'
+      ? [...document.querySelectorAll(selector)].filter(el => {
+          if (!el || excluded(el) || typeof el.querySelectorAll !== 'function') return false;
+          const rect = el.getBoundingClientRect?.();
+          return !rect || (rect.width > 0 && rect.height > 0);
+        }) : [];
+    const container = candidates.length ? candidates[candidates.length - 1] : document.querySelector(selector);
     if (!container || excluded(container)) return null;
     const blocks = [...container.querySelectorAll('[jsname="YSxPC"]')];
     if (blocks.length) {
@@ -185,9 +194,10 @@
     if (!input) { openHostChat(); return; }
     const root = hostChatRoot(input);
     if (!root) return;
-    const items = [...root.querySelectorAll('[data-message-id], [role="listitem"], [role="article"]')]
-      .filter(chatVisible).filter(el => !el.querySelector('[data-message-id], [role="listitem"], [role="article"]'));
-    const blocks = items.length ? items : [root];
+    // A timestamped caption can look like sender/time/message. Never parse
+    // generic <article>/<listitem> nodes or the whole panel as Meet chat.
+    const blocks = [...root.querySelectorAll('[data-message-id]')]
+      .filter(chatVisible).filter(el => !el.querySelector('[data-message-id]'));
     const now = Date.now();
     for (const [id, at] of observedChatKeys) if (now - at > 3 * 60 * 60 * 1000) observedChatKeys.delete(id);
     for (const block of blocks) {

@@ -92,6 +92,21 @@ tick(2500);
 assert.equal(emitted.filter(e => e.isFinal).at(-1).text, 'I wanted to see',
   'overlay final must preserve the human-visible caption exactly');
 assert(!emitted.some(e => e.isFinal && e.text === 'I wanted Tu Si'), 'stale DOM spelling must never be committed');
+// After several minutes Google can leave a stale caption tray mounted while
+// rendering speech in a new tray. The collector must not keep reading the old.
+const oldBlock = { querySelector: selector => selector === '[jsname="bVV8Bd"]'
+  ? { innerText: 'old stale caption text', textContent: 'old stale caption text', closest: () => null } : null };
+const oldTray = { closest: () => null, getBoundingClientRect: () => ({ width: 160, height: 40 }),
+  querySelectorAll: selector => selector === '[jsname="YSxPC"]' ? [oldBlock] : [] };
+const oldQueryAll = doc.querySelectorAll;
+doc.querySelectorAll = selector => selector.startsWith('[jsname="tgaKEf"]')
+  ? [oldTray, captionContainer] : oldQueryAll(selector);
+captionText = 'New words after three minutes';
+visiblyRenderedCaption = '';
+tick(150);
+tick(300);
+assert.equal(emitted.filter(e => !e.isFinal).at(-1).text, 'New words after three minutes',
+  'a stale first Meet caption region cannot freeze the host overlay');
 assert(emitted.every(e => e.channel === 'host-caption-message'), 'host captions must use their own IPC channel');
 assert(!code.includes('getUserMedia ='), 'host capture must never mute microphone');
 console.log(JSON.stringify({ ok: true, hostCaptionsAutoEnabled: true, lowLatency: true, noDuplicateRevision: true, microphonePreserved: true, visibleCaptionPriority: true, ukCaptionSelected: true }));

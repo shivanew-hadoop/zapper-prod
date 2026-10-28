@@ -52,13 +52,8 @@ if (!gotSingleInstanceLock) {
   app.on('second-instance', (_event, argv) => {
     handleZapperUrl((argv || []).find(arg => /^zapper:\/\//i.test(String(arg))));
     if (overlayWindow && !overlayWindow.isDestroyed()) {
-      // Browser host controls (mic/resume/leave) open a second-instance URL.
-      // Repeated show/focus calls forcibly recompose the protected overlay and
-      // visibly flash it on Windows. Only an explicit launch may take focus.
-      if (!overlayWindow.isVisible()) overlayWindow.showInactive();
-      if (/^zapper:\/\/launch(?:[/?#]|$)/i.test(String((argv || []).find(arg => /^zapper:\/\//i.test(String(arg))) || ''))) {
-        overlayWindow.focus();
-      }
+      overlayWindow.show();
+      overlayWindow.focus();
       enforceOverlayPrivacyAndTopmost();
     }
   });
@@ -79,6 +74,7 @@ const {
 
 const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
+const { correctTechnologyTerms } = require('./transcriber/technologyCorrections');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -101,20 +97,15 @@ function handleZapperUrl(rawUrl) {
           if (!hostCaptionsAuthorized || started || !caption?.text || Date.now() - lastHostLocalCaptionAt < 2000) return;
           if (overlayWindow && !overlayWindow.isDestroyed()) {
             overlayWindow.webContents.send('host-session-active');
-            overlayWindow.webContents.send('transcript', { text: String(caption.text),
+            overlayWindow.webContents.send('transcript', { text: correctTechnologyTerms(String(caption.text)),
               isFinal: Boolean(caption.isFinal), source: 'meet-captions', origin: 'peer-relay' });
           }
         },
         onEnded: (reason, type) => {
-          // Expired/rejected relay authorization is NOT a Meet session end.
-          // Keep the local caption collector authorized and keep printed host
-          // words visible. Only explicit backend session end tears it down.
-          if (type !== 'session_ended' && type !== 'limit_reached') {
-            sendStatus('Caption relay unavailable; local Google Meet captions continue.');
-            return;
-          }
           hostCaptionsAuthorized = false;
-          leaveHost();
+          // Only a confirmed backend session end disconnects Meet. A temporary
+          // caption-token authorization failure must never terminate the call.
+          if (type === 'session_ended' || type === 'limit_reached') leaveHost();
           if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
         }
       });
@@ -149,11 +140,13 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 
 let overlayWindow = null;
+let privateCursorWindow = null;
 let started = false;
 let remoteSttStarted = false;
 let audioRelayStarted = false;
 let transcriptLimitReached = false;
 let overlayTopmostGuard = null;
+let overlayPointerGuard = null;
 let overlayResizeGuard = null;
 let overlayResizeState = null;
 let sessionStatusPoller = null;
@@ -182,28 +175,29 @@ let hostCaptionsAuthorized = false;
 let lastHostLocalCaptionAt = 0;
 
 
-// The overlay is already capture-protected. Never move it to the top every
-// quarter-second: each native moveTop() re-composes the transparent window and
-// can make the *entire host overlay* flash while Google Meet has focus.
+// Keep capture privacy and topmost protections enabled, but avoid resetting
+// native Windows compositor flags every 250ms while the pointer is hovering.
 let overlayPrivacyInitializedFor = null;
 function enforceOverlayPrivacyAndTopmost() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
+
   if (overlayPrivacyInitializedFor !== overlayWindow) {
     try { overlayWindow.setContentProtection(true); } catch (_) {}
     try { overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
     overlayPrivacyInitializedFor = overlayWindow;
   }
-  try {
-    if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-  } catch (_) {}
-  // No moveTop(), show(), focus(), or bounds changes in the guard.
+  try { if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
+  // Repeatedly raising the overlay over the protected cursor caused flicker.
+  // Both windows already have permanent topmost levels (1 and 2).
+  const pointerVisible = privateCursorWindow && !privateCursorWindow.isDestroyed() && privateCursorWindow.isVisible();
+  try { if (!pointerVisible && overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
 }
 
 function startOverlayTopmostGuard() {
   if (overlayTopmostGuard) clearInterval(overlayTopmostGuard);
-  // Event listeners restore topmost immediately. This slow health check is
-  // read-only in the steady state and cannot restart a paint/compositor cycle.
-  overlayTopmostGuard = setInterval(enforceOverlayPrivacyAndTopmost, 5000);
+  // Z-order protection is independent of STT/audio and does not steal focus.
+  // Reassert frequently so ordinary Windows/app focus changes cannot bury Zapper.
+  overlayTopmostGuard = setInterval(enforceOverlayPrivacyAndTopmost, 250);
   overlayTopmostGuard.unref?.();
 }
 
@@ -211,6 +205,113 @@ function stopOverlayTopmostGuard() {
   if (!overlayTopmostGuard) return;
   clearInterval(overlayTopmostGuard);
   overlayTopmostGuard = null;
+}
+
+function createPrivateCursorWindow() {
+  if (privateCursorWindow && !privateCursorWindow.isDestroyed()) return privateCursorWindow;
+
+  privateCursorWindow = new BrowserWindow({
+    width: 30,
+    height: 40,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    roundedCorners: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  const cursorMarkup = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;cursor:none!important;user-select:none}
+    svg{display:block;width:24px;height:32px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.65))}
+  </style></head><body><svg viewBox="0 0 24 32" aria-hidden="true">
+    <path d="M2 1.5V25.5L8.2 19.8L12.8 30.2L17 28.3L12.4 18H21.4L2 1.5Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/>
+  </svg></body></html>`;
+
+  privateCursorWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(cursorMarkup)}`);
+  try { privateCursorWindow.setIgnoreMouseEvents(true, { forward: true }); } catch (_) {}
+  try { privateCursorWindow.setContentProtection(true); } catch (_) {}
+  try { privateCursorWindow.setAlwaysOnTop(true, 'screen-saver', 2); } catch (_) {}
+  try { privateCursorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+
+  privateCursorWindow.on('closed', () => { privateCursorWindow = null; lastCursorPoint = null; });
+  return privateCursorWindow;
+}
+
+let lastCursorPoint = null;
+function showPrivateCursorAt(point) {
+  const win = createPrivateCursorWindow();
+  if (!win || win.isDestroyed()) return;
+  const x = Math.round(point.x - 2), y = Math.round(point.y - 2);
+  // No repeated protection / Z-order / native bounds calls at 60fps when the
+  // OS cursor has not moved. Those calls cause the transparent window to flash.
+  if (!lastCursorPoint || lastCursorPoint.x !== x || lastCursorPoint.y !== y) {
+    try { win.setBounds({ x, y, width: 30, height: 40 }, false); } catch (_) {}
+    lastCursorPoint = { x, y };
+  }
+  try { if (!win.isVisible()) { win.showInactive(); win.moveTop(); } } catch (_) {}
+}
+
+function hidePrivateCursorWindow() {
+  if (!privateCursorWindow || privateCursorWindow.isDestroyed()) return;
+  if (privateCursorWindow.isVisible()) {
+    try { privateCursorWindow.hide(); } catch (_) {}
+  }
+  lastCursorPoint = null;
+}
+
+function destroyPrivateCursorWindow() {
+  if (!privateCursorWindow || privateCursorWindow.isDestroyed()) { privateCursorWindow = null; return; }
+  try { privateCursorWindow.destroy(); } catch (_) {}
+  privateCursorWindow = null;
+  lastCursorPoint = null;
+}
+
+function startOverlayPointerGuard() {
+  if (overlayPointerGuard) clearInterval(overlayPointerGuard);
+
+  overlayPointerGuard = setInterval(() => {
+    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible()) {
+      hidePrivateCursorWindow();
+      return;
+    }
+
+    try {
+      const point = screen.getCursorScreenPoint();
+      const bounds = overlayWindow.getBounds();
+      // Inclusive right/bottom edge is intentional. During manual resize the OS
+      // pointer commonly sits exactly on the moving border; treating that pixel
+      // as outside was the reason the private cursor disappeared at the edges.
+      const inside =
+        point.x >= bounds.x && point.x <= bounds.x + bounds.width &&
+        point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+
+      if (inside) showPrivateCursorAt(point);
+      else hidePrivateCursorWindow();
+
+      // The renderer cursor is disabled; avoid sending 60 unused IPC messages
+      // per second into the same renderer that must paint live captions.
+    } catch (_) {}
+  }, 16);
+}
+
+function stopOverlayPointerGuard() {
+  if (overlayPointerGuard) clearInterval(overlayPointerGuard);
+  overlayPointerGuard = null;
+  hidePrivateCursorWindow();
 }
 
 function stopOverlayManualResize() {
@@ -429,19 +530,20 @@ ipcMain.on('meet-caption-state', (_, payload) => {
 ipcMain.on('host-caption-message', (_, payload) => {
   if (!hostCaptionsAuthorized || !payload?.text) return;
   lastHostLocalCaptionAt = Date.now();
-  publishHostCaption(payload); // authorized API relay to PIN participants + PDF
+  const text = correctTechnologyTerms(String(payload.text).trim());
+  publishHostCaption({ ...payload, text }); // authorized API relay to PIN participants + PDF
   if (started) return; // participant session, if present, owns this local view
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('host-session-active');
     overlayWindow.webContents.send('transcript', {
-      text: String(payload.text).trim(), isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'host-meet'
+      text, isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'host-meet'
     });
   }
 });
 
 ipcMain.on('meet-caption-message', (_, payload) => {
   if (!started || !payload) return;
-  const text = String(payload.text || '').trim();
+  const text = correctTechnologyTerms(String(payload.text || '').trim());
   if (!text) return;
   localCaptionReady = true;
   localCaptionLastAt = Number(payload.capturedAt) || Date.now();
@@ -606,7 +708,9 @@ async function terminateApplicationCompletely() {
   stopRemoteTranscriptStream();
   stopAudioWSServer();
   stopOverlayTopmostGuard();
+  stopOverlayPointerGuard();
   stopOverlayManualResize();
+  destroyPrivateCursorWindow();
   try { globalShortcut.unregisterAll(); } catch (_) {}
 
   // Close/destroy every Electron window, including hidden Meet/sign-in windows.
@@ -667,6 +771,7 @@ function createOverlayWindow() {
   try { overlayWindow.setFullScreenable(false); } catch (_) {}
 
   global.overlayWindow = overlayWindow;
+  createPrivateCursorWindow();
   overlayWindow.loadFile(path.join(__dirname, 'overlay', 'index.html'));
 
   overlayWindow.once('ready-to-show', () => {
@@ -674,6 +779,7 @@ function createOverlayWindow() {
     enforceOverlayPrivacyAndTopmost();
     overlayWindow.showInactive();
     startOverlayTopmostGuard();
+    startOverlayPointerGuard();
   });
 
   // Some Windows/app transitions can disturb z-order/capture affinity.
@@ -698,7 +804,9 @@ function createOverlayWindow() {
 
   overlayWindow.on('closed', () => {
     stopOverlayTopmostGuard();
-      stopOverlayManualResize();
+    stopOverlayPointerGuard();
+    stopOverlayManualResize();
+    hidePrivateCursorWindow();
     overlayWindow = null;
   });
 }
@@ -854,7 +962,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (payload.fromHost) hostRelayLastAt = Date.now();
       else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
-        text: payload.text,
+        text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,
         source: payload.source || 'backend',
         origin: payload.fromHost ? 'host-relay' : 'peer-relay'
@@ -1037,6 +1145,8 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
   stopHostCaptionRelay();
   stopOverlayTopmostGuard();
+  stopOverlayPointerGuard();
+  destroyPrivateCursorWindow();
   globalShortcut.unregisterAll();
 });
 

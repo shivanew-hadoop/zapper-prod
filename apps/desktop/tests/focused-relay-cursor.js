@@ -27,37 +27,79 @@ assert.match(relaySource, /message\.type === 'transcript' && message\.text\) onC
 const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 assert.match(mainSource, /Date\.now\(\) - lastHostLocalCaptionAt < 2000/);
 assert.match(mainSource, /origin: 'peer-relay'/);
+// A temporary token failure must not shut down local Meet caption rendering.
+const onEndedStart = mainSource.indexOf('onEnded: (reason, type) => {');
+const onEndedEnd = mainSource.indexOf('\n        }', onEndedStart);
+const onEndedHandler = mainSource.slice(onEndedStart, onEndedEnd);
+assert(onEndedHandler.indexOf('hostCaptionsAuthorized = false;') > onEndedHandler.indexOf("type !== 'session_ended'"),
+  'local host captions remain enabled when only peer relay authorization fails');
 hostRelay.stopHostCaptionRelay();
 
-let boundsChanged = 0, protectionChanged = 0, topmostChanged = 0, showCount = 0, hideCount = 0;
-const fakeCursor = {
-  destroyed: false, visible: false,
-  isDestroyed() { return this.destroyed; }, isVisible() { return this.visible; },
-  setBounds() { boundsChanged++; }, setContentProtection() { protectionChanged++; },
-  setAlwaysOnTop() { topmostChanged++; }, setVisibleOnAllWorkspaces() {},
-  setIgnoreMouseEvents() {}, loadURL() {}, on() {},
-  moveTop() {}, showInactive() { this.visible = true; showCount++; }, hide() { this.visible = false; hideCount++; },
-  destroy() { this.destroyed = true; }
+// Previous builds chased the pointer with a SECOND transparent, always-on-top
+// BrowserWindow and raised the overlay every 250 ms. The two independent
+// Windows surfaces caused full-window flashing under Electron on Windows.
+const guardStart = mainSource.indexOf('function enforceOverlayPrivacyAndTopmost()');
+const guardEnd = mainSource.indexOf('function stopOverlayManualResize()', guardStart);
+assert(guardStart >= 0 && guardEnd > guardStart);
+const guard = mainSource.slice(guardStart, guardEnd);
+assert(!/\.moveTop\(/.test(guard), 'topmost health guard never raises the native window');
+assert(!guard.includes('setBounds('), 'topmost health guard never changes window geometry');
+assert(!mainSource.includes('createPrivateCursorWindow'), 'second native cursor window removed');
+assert(!mainSource.includes('startOverlayPointerGuard'), '16ms native pointer monitor removed');
+assert(!mainSource.includes('overlayWindow.show();\n      overlayWindow.focus();'),
+  'browser-originated host control URLs must not continually refocus overlay');
+assert.match(mainSource, /setInterval\(enforceOverlayPrivacyAndTopmost, 5000\)/,
+  'slow conditional guard keeps topmost protection without compositor spam');
+const overlayJS = fs.readFileSync(path.join(__dirname, '../overlay/overlay.js'), 'utf8');
+const overlayCSS = fs.readFileSync(path.join(__dirname, '../overlay/overlay.css'), 'utf8');
+assert.match(overlayJS, /document\.addEventListener\('pointermove'/,
+  'protected renderer manages its own cursor without another window');
+assert.match(overlayCSS, /\.privateCursor\.visible \{ display: block; \}/);
+assert(!overlayCSS.includes('.privateCursor { display: none !important; }'));
+
+// Exercise the native guard with a simulated Windows overlay. Rechecking must
+// not cause capture-affinity or z-order changes after initial setup.
+let protections = 0, workspaceCalls = 0, topmostCalls = 0;
+const nativeOverlay = {
+  isDestroyed: () => false,
+  setContentProtection() { protections++; },
+  setVisibleOnAllWorkspaces() { workspaceCalls++; },
+  isAlwaysOnTop: () => true,
+  setAlwaysOnTop() { topmostCalls++; },
+  moveTop() { throw new Error('full-window flash from moveTop'); },
 };
-const start = mainSource.indexOf('function createPrivateCursorWindow()');
-const end = mainSource.indexOf('function startOverlayPointerGuard()', start);
-assert(start >= 0 && end > start);
-const ctx = { privateCursorWindow: null, BrowserWindow: function() { return fakeCursor; }, encodeURIComponent, Math };
-vm.createContext(ctx);
-vm.runInContext(mainSource.slice(start, end), ctx);
-vm.runInContext(`showPrivateCursorAt({ x: 100, y: 200 });
-  showPrivateCursorAt({ x: 100, y: 200 });
-  showPrivateCursorAt({ x: 101, y: 200 });`, ctx);
-assert.equal(boundsChanged, 2, 'still cursor must not cause native window repaint');
-assert.equal(protectionChanged, 1, 'capture protection configured once, not every frame');
-assert.equal(topmostChanged, 1, 'topmost flag configured once, not every frame');
-assert.equal(showCount, 1, 'cursor must not be shown again every 16ms');
-vm.runInContext('hidePrivateCursorWindow(); hidePrivateCursorWindow();', ctx);
-assert.equal(hideCount, 1, 'pointer should not hide twice at the same boundary');
-assert(!mainSource.includes("overlayWindow.webContents.send('private-pointer-position'"), 'no unused per-frame cursor IPC');
+const nativeContext = { overlayWindow: nativeOverlay, setInterval() {}, clearInterval() {} };
+vm.createContext(nativeContext);
+vm.runInContext(mainSource.slice(mainSource.indexOf('let overlayPrivacyInitializedFor = null;'), guardEnd), nativeContext);
+for (let i = 0; i < 100; i++) vm.runInContext('enforceOverlayPrivacyAndTopmost()', nativeContext);
+assert.equal(protections, 1);
+assert.equal(workspaceCalls, 1);
+assert.equal(topmostCalls, 0);
+
+// In-panel cursor follows only DOM pointer events, no native surface moves.
+const eventHandlers = new Map();
+const cursor = {style: {}, classList: {classes: new Set(), add(v){this.classes.add(v);}, remove(v){this.classes.delete(v);} }};
+const htmlElement = {classList: {add() {}}};
+const doc = {
+  getElementById: () => cursor,
+  documentElement: htmlElement,
+  addEventListener: (event, cb) => eventHandlers.set(event, cb)
+};
+const win = {innerWidth: 600, innerHeight: 300, addEventListener: (event, cb) => eventHandlers.set(`win-${event}`, cb)};
+const pointerStart = overlayJS.indexOf('function initPrivateCursor()');
+const pointerEnd = overlayJS.indexOf('\n// Resize through renderer-owned', pointerStart);
+assert(pointerStart >= 0 && pointerEnd > pointerStart);
+const pointerContext = { document: doc, window: win, privateCursor: null, Math };
+vm.createContext(pointerContext);
+vm.runInContext(overlayJS.slice(pointerStart, pointerEnd), pointerContext);
+eventHandlers.get('pointermove')({clientX: 120, clientY: 80});
+assert.equal(cursor.style.transform, 'translate3d(120px, 80px, 0)');
+assert(cursor.classList.classes.has('visible'));
+eventHandlers.get('pointerleave')();
+assert(!cursor.classList.classes.has('visible'));
 
 const participantSource = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
 assert(participantSource.includes('if (!input) { knownChatRoot = null; return null; }'));
 assert(!participantSource.includes('if (!root) { scanAnyVisibleChatBlocks(); return; }'));
 assert(!participantSource.includes('if (!rows.length) rows.push(...parseRootStream(root));'));
-console.log(JSON.stringify({ ok: true, hostFallbackWired: true, cursorStable: true, noPageWideChatScan: true }));
+console.log(JSON.stringify({ ok: true, hostFallbackWired: true, cursorInsideProtectedOverlay: true, noNativeRecompositing: true, noPageWideChatScan: true }));

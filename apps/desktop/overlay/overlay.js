@@ -67,7 +67,8 @@ let activeMeetUrl = '';
 let sessionStartedAt = 0;
 let activeGoogleEmail = '';
 let countdownInterval = null;
-const MAX_LINES = 100;
+// All printed captions remain accessible until the session explicitly ends.
+// Truncating at 100 lines previously caused full overlay redraws and lost text.
 const OUTGOING_ECHO_SUPPRESS_MS = 20000;
 const MIN_FONT = 10;
 const MAX_FONT = 34;
@@ -140,12 +141,25 @@ new MutationObserver(removeHoverTooltips).observe(document.documentElement, {
 });
 
 function initPrivateCursor() {
-  // The native cursor is hidden only while it is over the overlay.
-  // A separate, capture-protected main-process cursor window now paints the
-  // local-only pointer so it cannot be clipped by the overlay edges.
+  // The local-only pointer is rendered inside the SAME protected window as
+  // captions. No separate native window, timer, focus, or z-order operations.
+  // Native cursor remains hidden only over Zapper, not over other apps.
   privateCursor = document.getElementById('privateCursor');
-  privateCursor?.classList.remove('visible');
+  if (!privateCursor) return;
   document.documentElement.classList.add('private-cursor-ready');
+  let lastX = -1, lastY = -1;
+  document.addEventListener('pointermove', event => {
+    const x = Math.max(0, Math.min(Math.round(event.clientX), window.innerWidth - 24));
+    const y = Math.max(0, Math.min(Math.round(event.clientY), window.innerHeight - 32));
+    if (x !== lastX || y !== lastY) {
+      privateCursor.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      lastX = x;
+      lastY = y;
+    }
+    privateCursor.classList.add('visible');
+  }, { passive: true });
+  document.addEventListener('pointerleave', () => privateCursor.classList.remove('visible'));
+  window.addEventListener('blur', () => privateCursor.classList.remove('visible'));
 }
 
 if (document.readyState === 'loading') {
@@ -197,9 +211,9 @@ function transcriptIsNearBottom() {
 }
 
 function trimTranscriptHistoryIfFollowing() {
-  if (!transcriptAutoScroll || finalLines.length <= MAX_LINES) return false;
-  finalLines = finalLines.slice(-MAX_LINES);
-  return true;
+  // Intentionally no-op: live transcript is append-only for the session.
+  // The 3h30m session limit bounds growth; old text stays scrollable.
+  return false;
 }
 
 function pauseTranscriptFollow() {
@@ -488,81 +502,107 @@ if (chatSendForm) {
   });
 }
 
-// Completed lines are append-only DOM nodes. Provisional text consists of
-// immutable confirmed-prefix *word* nodes plus one changing tail. Meet may
-// correct the last two interim words without repainting any settled words.
+// The live transcript is immutable ink: once a spoken word becomes visible,
+// neither interim revisions nor final confirmations remove or repaint it.
+// The current recognition hypothesis is NOT rendered directly. Words are
+// shown after they repeat in consecutive Meet updates; final captions flush
+// whatever is still pending. This sacrifices at most one update of latency
+// in exchange for no blinking / retracting already-visible words.
 let renderedFinalLines = [];
-let liveStableWordNodes = [];
-let liveMutableNode = null;
-let placeholderNode = null;
-let previousLiveWords = [];
-let frozenLiveWords = [];
-function clearProvisionalPrefix() {
-  for (const node of liveStableWordNodes) {
-    if (transcriptEl.contains(node)) transcriptEl.removeChild(node);
-  }
-  liveStableWordNodes = [];
-  frozenLiveWords = [];
-  previousLiveWords = [];
+let lastInterimWords = [];
+let displayedInterimWords = [];
+let inkSentenceOpen = false;
+let inkHasText = false;
+let inkInitialized = false;
+let waitingInkNode = null;
+
+function startTranscriptInk() {
+  transcriptEl.textContent = '';
+  waitingInkNode = document.createTextNode('Waiting for host to speak...');
+  transcriptEl.append(waitingInkNode);
+  renderedFinalLines = [];
+  lastInterimWords = [];
+  displayedInterimWords = [];
+  inkSentenceOpen = false;
+  inkHasText = false;
+  inkInitialized = true;
 }
+
+function appendInkWords(words) {
+  let appended = false;
+  for (const word of words) {
+    if (!word) continue;
+    if (!inkHasText && waitingInkNode && transcriptEl.contains(waitingInkNode)) {
+      transcriptEl.removeChild(waitingInkNode);
+      waitingInkNode = null;
+    }
+    const prefix = inkSentenceOpen ? ' ' : (inkHasText ? '\n' : '');
+    // One text node per accepted word: it will NEVER be modified or removed
+    // while this session remains active, including on interim->final.
+    transcriptEl.append(document.createTextNode(prefix + word));
+    inkHasText = true;
+    inkSentenceOpen = true;
+    appended = true;
+  }
+  return appended;
+}
+
+function normalizedInkWord(word) {
+  return String(word || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 function renderTranscript() {
-  const samePrefix = renderedFinalLines.length <= finalLines.length &&
-    renderedFinalLines.every((line, index) => line === finalLines[index]);
-  if (!liveMutableNode || !transcriptEl.contains(liveMutableNode) || !samePrefix) {
-    transcriptEl.textContent = '';
-    renderedFinalLines = [];
-    previousLiveWords = [];
-    frozenLiveWords = [];
-    liveStableWordNodes = [];
-    placeholderNode = document.createTextNode('');
-    liveMutableNode = document.createTextNode('');
-    transcriptEl.append(placeholderNode, liveMutableNode);
-  }
-  let newFinalAdded = false;
+  if (!inkInitialized) startTranscriptInk();
+  // A genuinely new host/PIN session resets its transcript state. Ordinary
+  // interim revisions, source handoffs and finalLine growth never do.
+  const newSession = finalLines.length < renderedFinalLines.length ||
+    renderedFinalLines.some((line, i) => line !== finalLines[i]);
+  if (newSession) startTranscriptInk();
+
+  let appended = false;
   for (let i = renderedFinalLines.length; i < finalLines.length; i++) {
-    const line = document.createTextNode((i ? '\n' : '') + finalLines[i]);
-    transcriptEl.insertBefore(line, liveStableWordNodes[0] || liveMutableNode);
+    const finalText = String(finalLines[i] || '').trim();
+    const finalWords = finalText.split(/\s+/).filter(Boolean);
+    // The displayed prefix is already paint-stable. Append only final words
+    // we have not yet shown, without replacing the prefix DOM nodes.
+    let matchingPrefix = 0;
+    if (i === renderedFinalLines.length && inkSentenceOpen) {
+      while (matchingPrefix < Math.min(displayedInterimWords.length, finalWords.length) &&
+             normalizedInkWord(displayedInterimWords[matchingPrefix]) === normalizedInkWord(finalWords[matchingPrefix])) {
+        matchingPrefix++;
+      }
+      if (matchingPrefix < displayedInterimWords.length) {
+        // Google revised a previously confirmed word. Preserve the old ink;
+        // show the corrected FINAL line separately rather than silently
+        // erasing words the user already read.
+        inkSentenceOpen = false;
+        matchingPrefix = 0;
+      }
+    }
+    appended = appendInkWords(finalWords.slice(matchingPrefix)) || appended;
+    inkSentenceOpen = false;
+    displayedInterimWords = [];
+    lastInterimWords = [];
     renderedFinalLines.push(finalLines[i]);
-    newFinalAdded = true;
   }
-  // Transfer an interim sentence to its final node in the SAME synchronous
-  // render pass. No blank intermediate frame, no full transcript replacement.
-  if (newFinalAdded || !interimText) clearProvisionalPrefix();
-  const words = String(interimText || '').split(/\s+/).filter(Boolean);
-  let nextFrozen = frozenLiveWords;
-  if (words.length && previousLiveWords.length) {
-    let match = 0;
-    while (match < Math.min(words.length, previousLiveWords.length) &&
-           words[match] === previousLiveWords[match]) match++;
-    const lockUpTo = Math.max(0, Math.min(match, words.length - 2));
-    if (nextFrozen.every((word, i) => word === words[i])) {
-      if (lockUpTo > nextFrozen.length) nextFrozen = words.slice(0, lockUpTo);
-    } else {
-      // Meet started a different interim sentence. Old *final* lines remain.
-      clearProvisionalPrefix();
-      nextFrozen = [];
+
+  const currentWords = String(interimText || '').trim().split(/\s+/).filter(Boolean);
+  if (currentWords.length) {
+    let sameFromStart = 0;
+    while (sameFromStart < Math.min(currentWords.length, lastInterimWords.length) &&
+           currentWords[sameFromStart] === lastInterimWords[sameFromStart]) sameFromStart++;
+    // Only commit the part repeated in consecutive updates. Never render the
+    // mutable hypothesis tail, whose disappearance caused prior word flashing.
+    const printedPrefixMatches = displayedInterimWords.every((word, index) =>
+      normalizedInkWord(word) === normalizedInkWord(currentWords[index]));
+    if (printedPrefixMatches && sameFromStart > displayedInterimWords.length) {
+      const accepted = currentWords.slice(displayedInterimWords.length, sameFromStart);
+      appended = appendInkWords(accepted) || appended;
+      displayedInterimWords.push(...accepted);
     }
+    lastInterimWords = currentWords;
   }
-  if (nextFrozen.length > frozenLiveWords.length) {
-    for (let i = frozenLiveWords.length; i < nextFrozen.length; i++) {
-      const node = document.createTextNode(
-        i === 0 ? (finalLines.length ? '\n' : '') + nextFrozen[i] : ' ' + nextFrozen[i]);
-      transcriptEl.insertBefore(node, liveMutableNode);
-      liveStableWordNodes.push(node);
-    }
-    frozenLiveWords = nextFrozen;
-  }
-  previousLiveWords = words;
-  const tailWords = words.slice(frozenLiveWords.length);
-  const tail = words.length ?
-    (frozenLiveWords.length ? ' ' : (finalLines.length ? '\n' : '')) + tailWords.join(' ') : '';
-  const placeholder = finalLines.length || words.length ? '' : 'Waiting for host to speak...';
-  const changed = newFinalAdded || liveMutableNode.nodeValue !== tail ||
-    placeholderNode.nodeValue !== placeholder || nextFrozen.length > frozenLiveWords.length;
-  if (liveMutableNode.nodeValue !== tail) liveMutableNode.nodeValue = tail;
-  if (placeholderNode.nodeValue !== placeholder) placeholderNode.nodeValue = placeholder;
-  if (!changed) return;
-  // A single scroll update avoids the old multi-frame jump/flicker.
+  if (!appended) return;
   if (transcriptAutoScroll) transcriptEl.scrollTop = transcriptEl.scrollHeight;
   else if (!transcriptUserScrollIntent) {
     const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);

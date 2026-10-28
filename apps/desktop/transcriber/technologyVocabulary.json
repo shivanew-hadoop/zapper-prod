@@ -1,0 +1,741 @@
+{
+  "description": "Conservative single-token technology terms for Google Meet captions. Edit this file and rebuild the desktop app to extend vocabulary. Prefer unique spellings; do not add ambiguous or multiword phonetic guesses.",
+  "terms": [
+    {
+      "term": "AWS",
+      "variants": [
+        "aws",
+        "a-w-s"
+      ]
+    },
+    {
+      "term": "Azure",
+      "variants": [
+        "azure",
+        "azur",
+        "azhure",
+        "azoor"
+      ],
+      "contextBefore": [
+        "cloud",
+        "microsoft",
+        "aws",
+        "gcp",
+        "infrastructure",
+        "deploy",
+        "subscription"
+      ]
+    },
+    {
+      "term": "GCP",
+      "variants": [
+        "gcp",
+        "g-c-p"
+      ]
+    },
+    {
+      "term": "EC2",
+      "variants": [
+        "ec2",
+        "e-c-2"
+      ]
+    },
+    {
+      "term": "S3",
+      "variants": [
+        "s3",
+        "s-3"
+      ]
+    },
+    {
+      "term": "EKS",
+      "variants": [
+        "eks",
+        "e-k-s"
+      ]
+    },
+    {
+      "term": "AKS",
+      "variants": [
+        "aks",
+        "a-k-s"
+      ]
+    },
+    {
+      "term": "SQS",
+      "variants": [
+        "sqs",
+        "s-q-s"
+      ]
+    },
+    {
+      "term": "Kubernetes",
+      "variants": [
+        "kubernetes",
+        "kubernets",
+        "kubernetis",
+        "kuberneties",
+        "kubernetties",
+        "kubernates",
+        "kubernettis",
+        "cubarnetes",
+        "kubernitees"
+      ]
+    },
+    {
+      "term": "Docker",
+      "variants": [
+        "docker",
+        "dockar"
+      ]
+    },
+    {
+      "term": "Jenkins",
+      "variants": [
+        "jenkins",
+        "jenkinz",
+        "jenkings"
+      ],
+      "contextBefore": [
+        "ci",
+        "cd",
+        "pipeline",
+        "build",
+        "deploy",
+        "devops",
+        "automation",
+        "using",
+        "install",
+        "server"
+      ]
+    },
+    {
+      "term": "Terraform",
+      "variants": [
+        "terraform",
+        "terrafrom",
+        "terrafarm",
+        "terraforme"
+      ]
+    },
+    {
+      "term": "Ansible",
+      "variants": [
+        "ansible",
+        "ansibel",
+        "ansibul"
+      ]
+    },
+    {
+      "term": "GitHub",
+      "variants": [
+        "github",
+        "git-hub",
+        "gitub",
+        "githup",
+        "githab",
+        "githob"
+      ]
+    },
+    {
+      "term": "GitLab",
+      "variants": [
+        "gitlab",
+        "git-lab"
+      ]
+    },
+    {
+      "term": "Bitbucket",
+      "variants": [
+        "bitbucket",
+        "bit-bucket"
+      ]
+    },
+    {
+      "term": "DevOps",
+      "variants": [
+        "devops",
+        "dev-ops",
+        "devopps"
+      ]
+    },
+    {
+      "term": "CI/CD",
+      "variants": [
+        "ci/cd",
+        "ci-cd",
+        "cicd"
+      ]
+    },
+    {
+      "term": "Helm",
+      "variants": [
+        "helm"
+      ],
+      "contextBefore": [
+        "kubernetes",
+        "k8s",
+        "deployment",
+        "chart",
+        "charts",
+        "cluster",
+        "devops",
+        "pods"
+      ]
+    },
+    {
+      "term": "Argo CD",
+      "variants": [
+        "argocd",
+        "argo-cd"
+      ]
+    },
+    {
+      "term": "Prometheus",
+      "variants": [
+        "prometheus",
+        "promethius"
+      ]
+    },
+    {
+      "term": "Grafana",
+      "variants": [
+        "grafana",
+        "grafanna",
+        "graffana"
+      ]
+    },
+    {
+      "term": "OpenTelemetry",
+      "variants": [
+        "opentelemetry",
+        "open-telemetry"
+      ]
+    },
+    {
+      "term": "JavaScript",
+      "variants": [
+        "javascript",
+        "java-script",
+        "javasript"
+      ]
+    },
+    {
+      "term": "TypeScript",
+      "variants": [
+        "typescript",
+        "type-script",
+        "typescipt"
+      ]
+    },
+    {
+      "term": "Python",
+      "variants": [
+        "python",
+        "pythun"
+      ]
+    },
+    {
+      "term": "Java",
+      "variants": [
+        "java"
+      ],
+      "contextBefore": [
+        "programming",
+        "code",
+        "coding",
+        "developer",
+        "development",
+        "backend",
+        "spring",
+        "using",
+        "application",
+        "use"
+      ]
+    },
+    {
+      "term": "Node.js",
+      "variants": [
+        "node.js",
+        "nodejs",
+        "node-js"
+      ]
+    },
+    {
+      "term": "React",
+      "variants": [
+        "react"
+      ],
+      "contextBefore": [
+        "frontend",
+        "javascript",
+        "typescript",
+        "jsx",
+        "component",
+        "components",
+        "framework",
+        "hooks",
+        "website",
+        "web",
+        "using",
+        "build",
+        "building",
+        "use"
+      ]
+    },
+    {
+      "term": "Angular",
+      "variants": [
+        "angular"
+      ],
+      "contextBefore": [
+        "frontend",
+        "typescript",
+        "framework",
+        "component",
+        "web",
+        "using",
+        "build",
+        "building",
+        "use"
+      ]
+    },
+    {
+      "term": "Vue.js",
+      "variants": [
+        "vuejs",
+        "vue.js",
+        "vue-js"
+      ]
+    },
+    {
+      "term": "Spring Boot",
+      "variants": [
+        "springboot",
+        "spring-boot",
+        "springboat"
+      ]
+    },
+    {
+      "term": "REST API",
+      "variants": [
+        "restapi",
+        "rest-api"
+      ]
+    },
+    {
+      "term": "API",
+      "variants": [
+        "api",
+        "a-p-i"
+      ]
+    },
+    {
+      "term": "APIs",
+      "variants": [
+        "apis",
+        "a-p-is"
+      ]
+    },
+    {
+      "term": "SDK",
+      "variants": [
+        "sdk",
+        "s-d-k"
+      ]
+    },
+    {
+      "term": "CLI",
+      "variants": [
+        "cli",
+        "c-l-i"
+      ]
+    },
+    {
+      "term": "HTTP",
+      "variants": [
+        "http",
+        "h-t-t-p"
+      ]
+    },
+    {
+      "term": "HTTPS",
+      "variants": [
+        "https",
+        "h-t-t-p-s"
+      ]
+    },
+    {
+      "term": "JSON",
+      "variants": [
+        "json"
+      ]
+    },
+    {
+      "term": "YAML",
+      "variants": [
+        "yaml"
+      ]
+    },
+    {
+      "term": "XML",
+      "variants": [
+        "xml"
+      ]
+    },
+    {
+      "term": "HTML",
+      "variants": [
+        "html"
+      ]
+    },
+    {
+      "term": "CSS",
+      "variants": [
+        "css"
+      ]
+    },
+    {
+      "term": "JWT",
+      "variants": [
+        "jwt",
+        "j-w-t"
+      ]
+    },
+    {
+      "term": "OAuth",
+      "variants": [
+        "oauth",
+        "o-auth"
+      ]
+    },
+    {
+      "term": "gRPC",
+      "variants": [
+        "grpc",
+        "g-rpc"
+      ]
+    },
+    {
+      "term": "GraphQL",
+      "variants": [
+        "graphql",
+        "graph-ql"
+      ]
+    },
+    {
+      "term": "WebSocket",
+      "variants": [
+        "websocket",
+        "web-socket"
+      ]
+    },
+    {
+      "term": "npm",
+      "variants": [
+        "npm"
+      ]
+    },
+    {
+      "term": "SQL",
+      "variants": [
+        "sql",
+        "s-q-l"
+      ]
+    },
+    {
+      "term": "SQL",
+      "variants": [
+        "sequel"
+      ],
+      "contextBefore": [
+        "database",
+        "query",
+        "queries",
+        "jdbc",
+        "postgres",
+        "postgresql",
+        "mysql",
+        "table",
+        "schema",
+        "joins"
+      ]
+    },
+    {
+      "term": "PostgreSQL",
+      "variants": [
+        "postgresql",
+        "postgressql",
+        "postgre-sql",
+        "postgrasql",
+        "postgre-s-q-l"
+      ]
+    },
+    {
+      "term": "Postgres",
+      "variants": [
+        "postgres",
+        "postgress"
+      ]
+    },
+    {
+      "term": "MySQL",
+      "variants": [
+        "mysql",
+        "my-sql"
+      ]
+    },
+    {
+      "term": "MongoDB",
+      "variants": [
+        "mongodb",
+        "mongo-db",
+        "mongdb",
+        "mongobd"
+      ]
+    },
+    {
+      "term": "Redis",
+      "variants": [
+        "redis",
+        "reddis",
+        "rediss"
+      ]
+    },
+    {
+      "term": "Elasticsearch",
+      "variants": [
+        "elasticsearch",
+        "elastic-search",
+        "elasticserch"
+      ]
+    },
+    {
+      "term": "OpenSearch",
+      "variants": [
+        "opensearch",
+        "open-search"
+      ]
+    },
+    {
+      "term": "DynamoDB",
+      "variants": [
+        "dynamodb",
+        "dynamo-db"
+      ]
+    },
+    {
+      "term": "Snowflake",
+      "variants": [
+        "snowflake",
+        "snowflak"
+      ],
+      "contextBefore": [
+        "warehouse",
+        "sql",
+        "data",
+        "database",
+        "analytics",
+        "etl",
+        "dbt"
+      ]
+    },
+    {
+      "term": "Databricks",
+      "variants": [
+        "databricks",
+        "databriks",
+        "databrix",
+        "databrics"
+      ]
+    },
+    {
+      "term": "Hadoop",
+      "variants": [
+        "hadoop",
+        "haddop",
+        "hadoob"
+      ]
+    },
+    {
+      "term": "Kafka",
+      "variants": [
+        "kafka",
+        "kafca",
+        "kafcka"
+      ],
+      "contextBefore": [
+        "apache",
+        "streaming",
+        "topic",
+        "broker",
+        "producer",
+        "consumer",
+        "events",
+        "pipeline",
+        "cluster"
+      ]
+    },
+    {
+      "term": "Spark",
+      "variants": [
+        "spark"
+      ],
+      "contextBefore": [
+        "apache",
+        "pyspark",
+        "hadoop",
+        "databricks",
+        "etl",
+        "cluster",
+        "distributed"
+      ]
+    },
+    {
+      "term": "PySpark",
+      "variants": [
+        "pyspark",
+        "py-spark"
+      ]
+    },
+    {
+      "term": "Airflow",
+      "variants": [
+        "airflow",
+        "airflo"
+      ],
+      "contextBefore": [
+        "apache",
+        "dag",
+        "pipeline",
+        "scheduling",
+        "scheduler",
+        "orchestration",
+        "etl",
+        "data"
+      ]
+    },
+    {
+      "term": "dbt",
+      "variants": [
+        "dbt",
+        "d-b-t"
+      ]
+    },
+    {
+      "term": "ETL",
+      "variants": [
+        "etl",
+        "e-t-l"
+      ]
+    },
+    {
+      "term": "ELT",
+      "variants": [
+        "elt",
+        "e-l-t"
+      ]
+    },
+    {
+      "term": "RabbitMQ",
+      "variants": [
+        "rabbitmq",
+        "rabbit-mq"
+      ]
+    },
+    {
+      "term": "LLM",
+      "variants": [
+        "llm",
+        "l-l-m"
+      ]
+    },
+    {
+      "term": "LLMs",
+      "variants": [
+        "llms",
+        "l-l-ms"
+      ]
+    },
+    {
+      "term": "RAG",
+      "variants": [
+        "rag"
+      ],
+      "contextBefore": [
+        "llm",
+        "retrieval",
+        "generative",
+        "embedding",
+        "embeddings",
+        "vector",
+        "ai",
+        "chatbot",
+        "model"
+      ]
+    },
+    {
+      "term": "MLOps",
+      "variants": [
+        "mlops",
+        "ml-ops"
+      ]
+    },
+    {
+      "term": "PyTorch",
+      "variants": [
+        "pytorch",
+        "py-torch"
+      ]
+    },
+    {
+      "term": "TensorFlow",
+      "variants": [
+        "tensorflow",
+        "tensor-flow"
+      ]
+    },
+    {
+      "term": "NumPy",
+      "variants": [
+        "numpy",
+        "num-py"
+      ]
+    },
+    {
+      "term": "scikit-learn",
+      "variants": [
+        "scikitlearn",
+        "scikit-learn"
+      ]
+    },
+    {
+      "term": "Hugging Face",
+      "variants": [
+        "huggingface",
+        "hugging-face"
+      ]
+    },
+    {
+      "term": "LangChain",
+      "variants": [
+        "langchain",
+        "lang-chain"
+      ]
+    },
+    {
+      "term": "LlamaIndex",
+      "variants": [
+        "llamaindex",
+        "llama-index"
+      ]
+    },
+    {
+      "term": "OpenAI",
+      "variants": [
+        "openai",
+        "open-ai"
+      ]
+    }
+  ]
+}

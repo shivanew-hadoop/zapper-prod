@@ -52,7 +52,22 @@ html.private-cursor-ready body,
 html.private-cursor-ready body * {
   cursor: none !important;
 }
-.privateCursor { display: none !important; }
+/* Draw the pointer INSIDE the already capture-protected overlay. A second
+   always-on-top transparent BrowserWindow used to chase the cursor at 60 Hz,
+   causing Windows to recompose both windows and blink the entire overlay. */
+.privateCursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 24px;
+  height: 32px;
+  z-index: 2147483647;
+  pointer-events: none;
+  display: none;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.65));
+  transform: translate3d(0, 0, 0);
+}
+.privateCursor.visible { display: block; }
 
 /* Renderer-owned resize zones replace native Windows resize borders. This keeps
    resize interaction and its visible pointer inside the capture-protected overlay. */

@@ -102,10 +102,15 @@ function handleZapperUrl(rawUrl) {
           }
         },
         onEnded: (reason, type) => {
+          // Transport/authentication failures are NOT proof the host meeting
+          // ended. Preserve visible local captions and don't reset the overlay.
+          // Confirmed backend end and explicit host Leave are the only stops.
+          if (type !== 'session_ended' && type !== 'limit_reached') {
+            sendStatus('Host relay unavailable; local Google Meet captions remain visible. ' + String(reason || ''));
+            return;
+          }
           hostCaptionsAuthorized = false;
-          // Only a confirmed backend session end disconnects Meet. A temporary
-          // caption-token authorization failure must never terminate the call.
-          if (type === 'session_ended' || type === 'limit_reached') leaveHost();
+          leaveHost();
           if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
         }
       });
@@ -187,10 +192,9 @@ function enforceOverlayPrivacyAndTopmost() {
     overlayPrivacyInitializedFor = overlayWindow;
   }
   try { if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-  // Repeatedly raising the overlay over the protected cursor caused flicker.
-  // Both windows already have permanent topmost levels (1 and 2).
-  const pointerVisible = privateCursorWindow && !privateCursorWindow.isDestroyed() && privateCursorWindow.isVisible();
-  try { if (!pointerVisible && overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
+  // Topmost protection was set once above. Repeated moveTop() every 250 ms
+  // caused Windows to repaint the entire overlay when the cursor was outside.
+  // Only explicitly requested Show/Restore actions may bring it forward.
 }
 
 function startOverlayTopmostGuard() {
@@ -964,7 +968,11 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       if (payload.fromHost) hostRelayLastAt = Date.now();
-      if (localCaptionReady) return;
+      // The local observer can stall while Google Meet still visibly captions.
+      // Once it has been silent for five seconds, use the already-authorized
+      // Railway relay as recovery. Live local captions keep first priority.
+      // The append-only renderer deduplicates replay/overlap on recovery.
+      if (localCaptionReady && Date.now() - localCaptionLastAt < 5000) return;
       if (!payload.fromHost && Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
         text: correctTechnologyTerms(String(payload.text || '')),

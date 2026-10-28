@@ -59,16 +59,20 @@ assert.equal(captions().length, 2);
 assert.equal(captions()[1].data.text, 'LangGraph is live');
 assert.equal(captions()[1].data.origin, 'local-meet');
 assert.equal(saved.length, 1, 'local captions still go to Railway for persistence');
-// A host relay cannot take over after a silent minute, or splice a conflicting
-// transcript into the same PIN overlay while local Meet remains ready.
-now += 120000;
-remote({ fromHost: true, text: 'out of date host line', isFinal: true, source: 'meet-captions' });
-remote({ fromHost: false, text: 'duplicate from participant', isFinal: true, source: 'meet-captions' });
-assert.equal(captions().length, 2, 'active local Meet owns the display after pauses');
+// A quiet spell must NOT permanently disable the authorized caption fallback.
+// Local speech always displays immediately; host relay recovers the view when
+// the participant Meet collector stalls for five seconds or longer.
+now += 2500;
+remote({ fromHost: true, text: 'Ignore relay while local works', isFinal: false, source: 'meet-captions' });
+assert.equal(captions().length, 2, 'recent local captions keep priority');
+now += 2600;
+remote({ fromHost: true, text: 'Remote keeps captions moving', isFinal: true, source: 'meet-captions' });
+assert.equal(captions().length, 3, 'stalled local Meet must recover through relay');
+assert.equal(captions()[2].data.origin, 'host-relay');
 // New local words are immediate without a relay round-trip.
 handlers['meet-caption-message']({}, { text: 'Kubernetes has arrived', isFinal: true, capturedAt: now });
-assert.equal(captions().length, 3);
-assert.equal(captions()[2].data.text, 'Kubernetes has arrived');
+assert.equal(captions().length, 4);
+assert.equal(captions()[3].data.text, 'Kubernetes has arrived');
 // Chat and confirmed backend session end are unaffected by caption priority.
 remote({ type: 'meet_chat', message: 'Actual message', sender: 'Participant' });
 assert.equal(chats.length, 1);
@@ -83,11 +87,11 @@ sandbox.stopSessionStatusPoller = () => {};
 vm.runInContext(source.slice(resetStart, resetEnd) + '\nresetRuntimeFlags();', sandbox);
 assert.equal(sandbox.localCaptionReady, false);
 remote({ fromHost: true, text: 'New session fallback', isFinal: false, source: 'meet-captions' });
-assert.equal(captions().length, 4);
-assert.equal(captions()[3].data.origin, 'host-relay');
+assert.equal(captions().length, 5);
+assert.equal(captions()[4].data.origin, 'host-relay');
 // Do not alter the Meet observer stabilization or the host relay logic.
 assert.match(fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8'), /CAPTION_STABLE_MS = 240/);
 assert.match(source, /publishHostCaption\(\{ \.\.\.payload, text \}\)/);
 assert.match(source, /const DEEPGRAM_FALLBACK_ENABLED = false/);
 console.log(JSON.stringify({ ok: true, baseline: '1.0.12', localIpcImmediate: true, relayFallbackBeforeLocal: true,
-  noSourceMixingAfterSilence: true, backendPersistencePreserved: true, chatAndSessionEndPreserved: true }));
+  staleLocalRelayRecovery: true, backendPersistencePreserved: true, chatAndSessionEndPreserved: true }));

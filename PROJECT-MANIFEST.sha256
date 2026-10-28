@@ -30,7 +30,7 @@ d61b012917d36b0183ec76e35d66eab78a13d2db19c0caae7af55554763111b0  ./apps/desktop
 c03ad209892bd9988adf509673b50ace5fb280df94361bc79c0b2bf07860c44a  ./apps/desktop/audio-ws/server.js
 b28e71b6408550e955953e83d0f621783dfcfb2a4c34970052fa00c7199b0b6a  ./apps/desktop/build/installer.nsh
 d9e3c629b568f64195650e2bf6567ed8fce87f613c9f32ef31b3537329b6a442  ./apps/desktop/build-installer.ps1
-7ad8b1a569f3a2ab06d3781ddeee344620481f3ab0783719c3184a527a1f67ed  ./apps/desktop/main.js
+9e0ae69deb6b65dd4a851ca65063dffd8a182a6bc3cf1abe21198af3c3a13e1d  ./apps/desktop/main.js
 c208350ccd19fb4c00ff7fd6f23b83a90dab5d3031db1a8b6348ec430afe5da5  ./apps/desktop/meet-controller/host-caption-preload.js
 46d269083fac73961da67990b5ec9591c0ba204c2e07d4fb03741a8b853834c4  ./apps/desktop/meet-controller/host-join.js
 52e25c6f6d033dc4180a432525b0076a15bca3eb0a5e9ec8a61e21a27f682e2d  ./apps/desktop/meet-controller/index.js
@@ -38,12 +38,12 @@ db25e530b3435e51cf30627fb799681bb9e14da976923b76a565caf213301b00  ./apps/desktop
 05667874c3101bb114df9b911a217e39ff3cdcc4c4131d47c27ef3a32d1f239d  ./apps/desktop/meet-controller/meet-preload.js
 a0124c76b5841c3d9c185c15e53e865449d1a37a7ee70821c8be32675710d1b4  ./apps/desktop/overlay/index.html
 ab8e69f312c89bcf93c9d596bd8e2567845ca45f7cbe9039c1a694cb3ff26dc5  ./apps/desktop/overlay/overlay.css
-2b246b983136d1623fc7625ef0cd3d8cc78e6b63e5bce8fb32f0478fa1197e4c  ./apps/desktop/overlay/overlay.js
-ef78b9b74834b4bc19383d895aca93ede434319d1b9eed8edce498f388b6d415  ./apps/desktop/package.json
+a528713f399e48bf65b0d7d13ebad58a722d0785f53c585cef382280e3738453  ./apps/desktop/overlay/overlay.js
+9857ac6f7cce030aebd6dfd9669f6730f27195c9918d0ff5ace6cc8404db6635  ./apps/desktop/package.json
 286db3cba5ffcf16ab6b5eaea283aedc0c33ebbf9e7c6dca076bf405b1d71d9c  ./apps/desktop/preload.js
 eeedf652efa9b43ed19a531974fad51b2059fcefd8813bfa57ec8692a4ce269b  ./apps/desktop/tests/caption-dom-guard.js
 976822ed95d1e06c54485024289f1cbf1f9b6e976217aa2ce6235d21301e7ef4  ./apps/desktop/tests/chat-noise.js
-835a22c8d9909e544f9b904741e6ef52b001d2bb9b622632aa44fa712275e66d  ./apps/desktop/tests/focused-relay-cursor.js
+d5513b551d35b2d7b94fa202ea4f25fb1843c86f5f4f3048716b5cebeeb53673  ./apps/desktop/tests/focused-relay-cursor.js
 9c703b25ec67d73d8ade4f7b2632988bebb9f63201b4e6b1876723a8f1a7439a  ./apps/desktop/tests/group-send.js
 c8ca9ff6bcc4f6e5936bfd76cb624256042145b5b7bda71acec81e87adfa7108  ./apps/desktop/tests/host-caption-preload.js
 a64d0c481de8184ff6169c5a7cb9a4c30dc4d7bc5fb4683965e0b42969d8d0d1  ./apps/desktop/tests/host-caption-relay.js
@@ -53,9 +53,11 @@ dab476b050e8b4f7e8c9918b27333d0a9a4e1b44fadec98a1b871c016d9fbf7c  ./apps/desktop
 3e57cafb312cc84964bb9a0c70394489e438bb5cfc6e16d643d33149d5378ba5  ./apps/desktop/tests/meet-chat-rows.js
 8d9d28cef0975244ae3d8de03b2f22ffce44018b54b5d292b5331a45aae7cd7e  ./apps/desktop/tests/meet-empty-calls-guard.js
 c58db72fb387ec40ed1cf6014a021df51896c6f57c19e7281143b0fc1b2b7a6a  ./apps/desktop/tests/overlay-readiness.js
-e7d6d89a0f910a643c64bb7f945ea509c1613317754886971ef6ebd8aa9f55d7  ./apps/desktop/tests/overlay-stability.js
-d5c628f7185a00bba105f582b7c8518291fb6400f2c06eafb68ddb14dd88c4e4  ./apps/desktop/tests/v112-tech-phrases.js
-ca54195a518033e289099434c8bdeb770b2b95cf9cd5daf4991a481cf563dfb7  ./apps/desktop/tests/v115-pin-local-first.js
+38554f21d6bfe4e168c4754c1cb89b16bb161d2c0e4615198bff60320ac550a9  ./apps/desktop/tests/overlay-stability.js
+15b07ff870480114fcfb5a486ab9e69dc6ef646c6e74d9bcf558dfabd67ed574  ./apps/desktop/tests/v112-tech-phrases.js
+ee9bcde4ea7c03a8dbace5f43ec6cbf29d029f72a718c04fa9cb086561c79420  ./apps/desktop/tests/v115-pin-local-first.js
+d32eca4f7555b4aa09cf871bad9a7da03d1f7a2ab6f6badf45ead5afca6ebe7d  ./apps/desktop/tests/v116-caption-path-proof.js
+91f59a7aba6230b8267ab1c9cecd6a0e0f6129cc3ede708b40b5262f4e43ff83  ./apps/desktop/tests/v116-host-relay-preserve.js
 6f4e1d607acc96d5b13567651a981d1c629a8df54c5b3eb52af238938d412d61  ./apps/desktop/transcriber/hostCaptionRelay.js
 c0348bbb324923cd26149d0c4d29380881172e8b291ef62fe8523befe41940dd  ./apps/desktop/transcriber/remoteDeepgram.js
 bc23828e07f697c1833b5ee11a32d99e71fc3a2fe67689139d6160ae71989f36  ./apps/desktop/transcriber/technologyCorrections.js
@@ -90,6 +92,7 @@ bbad1c6e2809d990c5426c7891c9153427c9d381ef55ffd7fa2e584675ad5cf2  ./apps/web/tes
 d2fb65e143ce4f10b999e13367eba6a0787d4b445c66964f35e0b644a9865af4  ./docs/BUILD-V1.0.11-V107-BASELINE-TECH-VOCABULARY.md
 16668256832382f7118a9b05da12f489889b6f6ed1692cdfd294651f25182fb1  ./docs/BUILD-V1.0.12-FAST-TECH-PHRASES.md
 c104a2859af23991eb62f142142dd06bc98a9c5d3da3dc7f1063f12ffb9a0f3a  ./docs/BUILD-V1.0.15-FROM-1.0.12-LOCAL-PIN.md
+b0a46b74da2d8b1b6657bff0558cb089bca6349cd928b691e9b732a23e674f5d  ./docs/BUILD-V1.0.16-IMMUTABLE-CAPTIONS-RELAY-RECOVERY.md
 78687439a9f7d18762c32e4d36f33d23bfd4897545f2b3310e1028a56fb7bf92  ./docs/BUILD-V1.0.2-UK-CAPTIONS.md
 d7f8e72e48622e248fe88a594c31cde9de8674e5bcaf846043212fe1a5e1bd9e  ./docs/BUILD-V1.0.3-INACTIVITY-GUARD.md
 57f6daba478bb5c618b41d62de858a737b8e26bca7fc4b79689f12a67449a8ab  ./docs/BUILD-V1.0.4-AUTO-MEET-EMPTY-CALLS.md

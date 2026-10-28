@@ -56,6 +56,11 @@ vm.runInContext('hidePrivateCursorWindow(); hidePrivateCursorWindow();', ctx);
 assert.equal(hideCount, 1, 'pointer should not hide twice at the same boundary');
 assert(!mainSource.includes("overlayWindow.webContents.send('private-pointer-position'"), 'no unused per-frame cursor IPC');
 
+// The 250 ms native guard must never reposition or raise the overlay.
+const guardStart = mainSource.indexOf('function enforceOverlayPrivacyAndTopmost()');
+const guardEnd = mainSource.indexOf('function startOverlayTopmostGuard()', guardStart);
+assert(guardStart >= 0 && guardEnd > guardStart);
+assert(!mainSource.slice(guardStart, guardEnd).includes('overlayWindow.moveTop('), 'native overlay must not be raised on the periodic guard');
 const participantSource = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
 assert(participantSource.includes('if (!input) { knownChatRoot = null; return null; }'));
 assert(!participantSource.includes('if (!root) { scanAnyVisibleChatBlocks(); return; }'));

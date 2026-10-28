@@ -75,7 +75,6 @@ const {
 const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
 const { correctTechnologyTerms } = require('./transcriber/technologyCorrections');
-const { shouldRenderParticipantCaption } = require('./transcriber/participantCaptionPriority');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -103,16 +102,11 @@ function handleZapperUrl(rawUrl) {
           }
         },
         onEnded: (reason, type) => {
-          // A revoked/stale relay token must not turn off captions from an
-          // otherwise active Meet window. Only backend session completion ends
-          // the host overlay and invalidates its local caption authorization.
-          if (type === 'session_ended' || type === 'limit_reached') {
-            hostCaptionsAuthorized = false;
-            leaveHost();
-            if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
-          }
-          // Caption relay authentication may fail temporarily during a deploy.
-          // Do not clear the live overlay while the Meet window is still active.
+          hostCaptionsAuthorized = false;
+          // Only a confirmed backend session end disconnects Meet. A temporary
+          // caption-token authorization failure must never terminate the call.
+          if (type === 'session_ended' || type === 'limit_reached') leaveHost();
+          if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
         }
       });
       if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-active');
@@ -193,9 +187,10 @@ function enforceOverlayPrivacyAndTopmost() {
     overlayPrivacyInitializedFor = overlayWindow;
   }
   try { if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-  // No moveTop() here: the 250 ms guard repeatedly changed the native z-order,
-  // provoking full-window compositor flashes while live captions were shown.
-  // The overlay is already topmost; only recover that flag if Windows removes it.
+  // Repeatedly raising the overlay over the protected cursor caused flicker.
+  // Both windows already have permanent topmost levels (1 and 2).
+  const pointerVisible = privateCursorWindow && !privateCursorWindow.isDestroyed() && privateCursorWindow.isVisible();
+  try { if (!pointerVisible && overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
 }
 
 function startOverlayTopmostGuard() {
@@ -551,9 +546,7 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   const text = correctTechnologyTerms(String(payload.text || '').trim());
   if (!text) return;
   localCaptionReady = true;
-  // Measure local caption freshness on this computer, not against a Meet DOM
-  // timestamp that might have been queued before Electron received the IPC.
-  localCaptionLastAt = Date.now();
+  localCaptionLastAt = Number(payload.capturedAt) || Date.now();
   localCaptionLastText = text;
   localCaptionLastWasFinal = Boolean(payload.isFinal);
   audibleWithoutCaptionSince = 0;
@@ -562,11 +555,9 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   captionFallbackTimer = null;
   sendTranscriptionSource('meet-captions');
 
-  // Local-first: show this PIN computer's own Google Meet captions immediately,
-  // even if its Railway WebSocket is busy receiving host/peer captions. The
-  // relay is retained for authorization, saving PDFs, chat and a stale-local
-  // fallback, but is never required for a healthy local display.
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
+  // Use local Meet captions immediately if the authoritative host relay is
+  // unavailable. Otherwise all PIN viewers display the same host feed.
+  if (Date.now() - hostRelayLastAt > 1800 && overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'local-meet' });
   }
   // Backend receives text only for session-level PDF persistence and other PIN
@@ -963,19 +954,13 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
-      // Local-first PIN captions: prefer this machine's Electron IPC over any
-      // Railway relay. Use session-authorized host/peer captions only when the
-      // local Meet collector has not emitted for a substantial interval.
+      // Never permanently suppress a host relay just because the PIN window
+      // once detected local captions. Prefer the live host feed, with local
+      // Meet as an immediate fallback if that feed stops for 1.8 seconds.
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
-      const relayReceivedAt = Date.now();
-      if (payload.fromHost) hostRelayLastAt = relayReceivedAt;
-      if (!shouldRenderParticipantCaption({
-        source: payload.fromHost ? 'host-relay' : 'peer-relay',
-        lastLocalAt: localCaptionLastAt,
-        lastHostRelayAt: hostRelayLastAt,
-        now: relayReceivedAt
-      })) return;
+      if (payload.fromHost) hostRelayLastAt = Date.now();
+      else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
         text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,

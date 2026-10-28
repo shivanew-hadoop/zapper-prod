@@ -204,10 +204,7 @@ function pauseTranscriptFollow() {
 function resumeTranscriptFollow() {
   if (transcriptAutoScroll) return;
   transcriptAutoScroll = true;
-  // A scroll-only operation: do not re-render or replace caption nodes.
-  transcriptRenderRestoring = true;
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-  transcriptRenderRestoring = false;
+  renderTranscript();
 }
 
 // Wheel is the primary reading interaction. Capture the position after the
@@ -257,12 +254,14 @@ transcriptEl.addEventListener('keydown', (event) => {
 });
 
 transcriptEl.addEventListener('scroll', () => {
-  // Electron dispatches DOM scroll events *after* programmatic scrollTop changes.
-  // Never mistake our own auto-follow for an intentional user scroll; doing so
-  // stranded the live view above newly arriving captions for many lines.
-  if (transcriptRenderRestoring || !transcriptUserScrollIntent) return;
-  if (transcriptIsNearBottom()) resumeTranscriptFollow();
-  else {
+  // Any scroll event outside our render-restoration window is user-driven
+  // (wheel, scrollbar drag, touchpad/touch or keyboard). This also covers
+  // native scrollbar drags that do not reliably emit pointer events on Windows.
+  if (transcriptRenderRestoring) return;
+
+  if (transcriptIsNearBottom()) {
+    resumeTranscriptFollow();
+  } else {
     pauseTranscriptFollow();
     transcriptScrollTopLock = transcriptEl.scrollTop;
   }
@@ -481,102 +480,85 @@ if (chatSendForm) {
   });
 }
 
-// Completed lines are append-only DOM nodes.
-// The Meet collector already stabilizes words;
-// once a word appears here its DOM text node is never rewritten or removed.
-// Finalizing a line only appends any missing suffix, rather than removing the
-// interim and rebuilding a new sentence (the visible source of flashing).
+// Completed lines are append-only DOM nodes. Provisional text consists of
+// immutable confirmed-prefix *word* nodes plus one changing tail. Meet may
+// correct the last two interim words without repainting any settled words.
 let renderedFinalLines = [];
-let printedLiveWords = [];
-let liveMutableNode = null; // stable insertion anchor, never updated with captions
+let liveStableWordNodes = [];
+let liveMutableNode = null;
 let placeholderNode = null;
-
-function captionWords(value) {
-  return String(value || '').trim().split(/\s+/).filter(Boolean);
-}
-function captionWordKey(value) {
-  return String(value || '').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu, '');
-}
-function commonCaptionPrefix(existing, incoming) {
-  let count = 0;
-  while (count < existing.length && count < incoming.length &&
-         captionWordKey(existing[count]) === captionWordKey(incoming[count])) count++;
-  return count;
-}
-function suffixCaptionOverlap(existing, incoming) {
-  for (let size = Math.min(existing.length, incoming.length); size > 0; size--) {
-    if (existing.slice(-size).every((word, i) =>
-      captionWordKey(word) === captionWordKey(incoming[i]))) return size;
+let previousLiveWords = [];
+let frozenLiveWords = [];
+function clearProvisionalPrefix() {
+  for (const node of liveStableWordNodes) {
+    if (transcriptEl.contains(node)) transcriptEl.removeChild(node);
   }
-  return 0;
-}
-function appendCaptionWords(words, startNewLine) {
-  if (!words.length) return false;
-  const prefix = startNewLine ? '\n' : (printedLiveWords.length ? ' ' : '');
-  // One immutable text node per incoming *delta* keeps the DOM small even
-  // in long calls; previously printed words are never rewritten or removed.
-  transcriptEl.insertBefore(document.createTextNode(prefix + words.join(' ')), liveMutableNode);
-  printedLiveWords.push(...words);
-  return true;
-}
-function appendCurrentCaption(value, isFinal = false) {
-  const incoming = captionWords(value);
-  if (!incoming.length) return false;
-  const prior = printedLiveWords;
-  if (!prior.length) return appendCaptionWords(incoming, renderedFinalLines.length > 0);
-  const prefix = commonCaptionPrefix(prior, incoming);
-  if (prefix === prior.length) {
-    return appendCaptionWords(incoming.slice(prefix), false);
-  }
-  const overlap = suffixCaptionOverlap(prior, incoming);
-  if (overlap) {
-    return appendCaptionWords(incoming.slice(overlap), false);
-  }
-  // Google's late correction changed a word already printed. Do not repaint
-  // it or replay the sentence. Append only unequivocally new trailing words.
-  // (The canonical final transcript is still recorded by the existing path.)
-  if (isFinal && incoming.length > prior.length) {
-    return appendCaptionWords(incoming.slice(prior.length), false);
-  }
-  return false;
+  liveStableWordNodes = [];
+  frozenLiveWords = [];
+  previousLiveWords = [];
 }
 function renderTranscript() {
-  const sessionCleared = !finalLines.length && !interimText &&
-    (renderedFinalLines.length || printedLiveWords.length);
-  if (!liveMutableNode || !transcriptEl.contains(liveMutableNode) || sessionCleared) {
-    // Only an explicit session reset clears the transcript; not Meet revisions,
-    // source switching, new finals, or the 100th/200th caption line.
+  const samePrefix = renderedFinalLines.length <= finalLines.length &&
+    renderedFinalLines.every((line, index) => line === finalLines[index]);
+  if (!liveMutableNode || !transcriptEl.contains(liveMutableNode) || !samePrefix) {
     transcriptEl.textContent = '';
     renderedFinalLines = [];
-    printedLiveWords = [];
+    previousLiveWords = [];
+    frozenLiveWords = [];
+    liveStableWordNodes = [];
     placeholderNode = document.createTextNode('');
     liveMutableNode = document.createTextNode('');
     transcriptEl.append(placeholderNode, liveMutableNode);
   }
-  let changed = false;
+  let newFinalAdded = false;
   for (let i = renderedFinalLines.length; i < finalLines.length; i++) {
-    const finalText = finalLines[i];
-    changed = appendCurrentCaption(finalText, true) || changed;
-    renderedFinalLines.push(finalText);
-    printedLiveWords = []; // next interim starts on a new line
+    const line = document.createTextNode((i ? '\n' : '') + finalLines[i]);
+    transcriptEl.insertBefore(line, liveStableWordNodes[0] || liveMutableNode);
+    renderedFinalLines.push(finalLines[i]);
+    newFinalAdded = true;
   }
-  if (interimText) changed = appendCurrentCaption(interimText) || changed;
-  const placeholder = finalLines.length || printedLiveWords.length ? '' : 'Waiting for host to speak...';
-  if (placeholderNode.nodeValue !== placeholder) {
-    placeholderNode.nodeValue = placeholder;
-    changed = true;
+  // Transfer an interim sentence to its final node in the SAME synchronous
+  // render pass. No blank intermediate frame, no full transcript replacement.
+  if (newFinalAdded || !interimText) clearProvisionalPrefix();
+  const words = String(interimText || '').split(/\s+/).filter(Boolean);
+  let nextFrozen = frozenLiveWords;
+  if (words.length && previousLiveWords.length) {
+    let match = 0;
+    while (match < Math.min(words.length, previousLiveWords.length) &&
+           words[match] === previousLiveWords[match]) match++;
+    const lockUpTo = Math.max(0, Math.min(match, words.length - 2));
+    if (nextFrozen.every((word, i) => word === words[i])) {
+      if (lockUpTo > nextFrozen.length) nextFrozen = words.slice(0, lockUpTo);
+    } else {
+      // Meet started a different interim sentence. Old *final* lines remain.
+      clearProvisionalPrefix();
+      nextFrozen = [];
+    }
   }
+  if (nextFrozen.length > frozenLiveWords.length) {
+    for (let i = frozenLiveWords.length; i < nextFrozen.length; i++) {
+      const node = document.createTextNode(
+        i === 0 ? (finalLines.length ? '\n' : '') + nextFrozen[i] : ' ' + nextFrozen[i]);
+      transcriptEl.insertBefore(node, liveMutableNode);
+      liveStableWordNodes.push(node);
+    }
+    frozenLiveWords = nextFrozen;
+  }
+  previousLiveWords = words;
+  const tailWords = words.slice(frozenLiveWords.length);
+  const tail = words.length ?
+    (frozenLiveWords.length ? ' ' : (finalLines.length ? '\n' : '')) + tailWords.join(' ') : '';
+  const placeholder = finalLines.length || words.length ? '' : 'Waiting for host to speak...';
+  const changed = newFinalAdded || liveMutableNode.nodeValue !== tail ||
+    placeholderNode.nodeValue !== placeholder || nextFrozen.length > frozenLiveWords.length;
+  if (liveMutableNode.nodeValue !== tail) liveMutableNode.nodeValue = tail;
+  if (placeholderNode.nodeValue !== placeholder) placeholderNode.nodeValue = placeholder;
   if (!changed) return;
-  if (transcriptAutoScroll) {
-    // Programmatic scroll events are not evidence that the user scrolled away.
-    transcriptRenderRestoring = true;
-    transcriptEl.scrollTop = transcriptEl.scrollHeight;
-    transcriptRenderRestoring = false;
-  } else if (!transcriptUserScrollIntent) {
+  // A single scroll update avoids the old multi-frame jump/flicker.
+  if (transcriptAutoScroll) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  else if (!transcriptUserScrollIntent) {
     const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);
-    transcriptRenderRestoring = true;
     transcriptEl.scrollTop = Math.min(transcriptScrollTopLock, maxTop);
-    transcriptRenderRestoring = false;
   }
 }
 

@@ -69,7 +69,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 
 const overlay = fs.readFileSync(path.join(__dirname, '../overlay/overlay.js'), 'utf8');
 const hostCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/host-caption-preload.js'), 'utf8');
 const pinCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
-assert.equal(pkg.version, '1.0.16');
+assert.equal(pkg.version, '1.0.12');
 assert(pkg.build.files.includes('transcriber/**/*'), 'dictionary must be bundled in installer');
 assert(main.includes("require('./transcriber/technologyCorrections')"));
 assert(main.includes('const DEEPGRAM_FALLBACK_ENABLED = false'));
@@ -80,9 +80,9 @@ assert(hostCollector.includes('UK_LANGUAGE') && pinCollector.includes('UK_LANGUA
 assert(!overlay.includes('MAX_LINES = 100'), 'remove line count restriction');
 assert(!overlay.includes('trimTranscriptHistoryIfFollowing'), 'remove history trimming, not just increase threshold');
 
-// Exercise the real append-only overlay with 155 finalized captions.
-// The original 100-line cap must not erase any visible text.
-const start = overlay.indexOf('// Displayed captions are append-only');
+// Exercise the actual v1.0.7 renderer with 150 finals and a new interim.
+// A stream past 100 must never reset textContent or discard existing nodes.
+const start = overlay.indexOf('// Completed lines are append-only DOM nodes.');
 const end = overlay.indexOf('\nfunction showJoinError(', start);
 assert(start > -1 && end > start);
 const transcriptEl = {
@@ -91,22 +91,27 @@ const transcriptEl = {
   set textContent(value) { assert.equal(value, ''); this.clearCount++; this.children = []; },
   append(...items) { this.children.push(...items); },
   contains(item) { return this.children.includes(item); },
+  removeChild(item) { const index = this.children.indexOf(item); assert(index >= 0); this.children.splice(index, 1); },
+  insertBefore(item, next) { const idx = this.children.indexOf(next); assert(idx >= 0); this.children.splice(idx, 0, item); },
 };
 const state = {
   transcriptEl, document: { createTextNode(nodeValue) { return { nodeValue }; } },
-  Date, transcriptAutoScroll: true,
+  finalLines: [], interimText: '', transcriptAutoScroll: true,
   transcriptUserScrollIntent: false, transcriptScrollTopLock: 0, Math,
 };
 vm.createContext(state);
 vm.runInContext(overlay.slice(start, end), state);
 let firstFinalNode;
 for (let count = 1; count <= 155; count++) {
-  state.renderTranscript({ text: `Final line number ${count}`, isFinal: true, origin: 'host-meet' });
-  if (count === 1) firstFinalNode = transcriptEl.children[1];
-  assert(transcriptEl.contains(firstFinalNode), 'first line survives ' + count);
-  assert.equal(transcriptEl.clearCount, 1, 'only initial construction can clear for line ' + count);
+  state.finalLines = Array.from({ length: count }, (_, i) => `Final line number ${i + 1}`);
+  state.interimText = count % 2 ? 'in progress' : '';
+  vm.runInContext('renderTranscript()', state);
+  if (count === 1) firstFinalNode = transcriptEl.children.find(node => node.nodeValue === 'Final line number 1');
+  if (count > 1) assert(transcriptEl.contains(firstFinalNode), 'first line survives ' + count);
+  assert.equal(transcriptEl.clearCount, 1, 'only initial renderer creation can clear for line ' + count);
 }
-assert.equal(transcriptEl.children.length, 156);
+assert.equal(state.finalLines.length, 155);
+assert.equal(vm.runInContext('renderedFinalLines.length', state), 155);
 assert.equal(firstFinalNode.nodeValue, 'Final line number 1');
 
 // No deliberate timer / network request / buffering stage, and measure only
@@ -117,6 +122,6 @@ const t0 = performance.now();
 for (let i = 0; i < count; i++) correctTechnologyTerms(sample);
 const avgMs = (performance.now() - t0) / count;
 assert(avgMs < 0.75, `unexpected processing overhead: ${avgMs}ms`);
-console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.0.16', terms: terms.length,
+console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.0.12', terms: terms.length,
   retainedLines: 155, noHistoryRedraw: true, ukPreserved: true, deepgramOff: true,
   averageCorrectionMs: +avgMs.toFixed(4) }));

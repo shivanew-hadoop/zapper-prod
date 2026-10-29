@@ -102,15 +102,10 @@ function handleZapperUrl(rawUrl) {
           }
         },
         onEnded: (reason, type) => {
-          // Transport/authentication failures are NOT proof the host meeting
-          // ended. Preserve visible local captions and don't reset the overlay.
-          // Confirmed backend end and explicit host Leave are the only stops.
-          if (type !== 'session_ended' && type !== 'limit_reached') {
-            sendStatus('Host relay unavailable; local Google Meet captions remain visible. ' + String(reason || ''));
-            return;
-          }
           hostCaptionsAuthorized = false;
-          leaveHost();
+          // Only a confirmed backend session end disconnects Meet. A temporary
+          // caption-token authorization failure must never terminate the call.
+          if (type === 'session_ended' || type === 'limit_reached') leaveHost();
           if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
         }
       });
@@ -192,9 +187,10 @@ function enforceOverlayPrivacyAndTopmost() {
     overlayPrivacyInitializedFor = overlayWindow;
   }
   try { if (!overlayWindow.isAlwaysOnTop()) overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1); } catch (_) {}
-  // Topmost protection was set once above. Repeated moveTop() every 250 ms
-  // caused Windows to repaint the entire overlay when the cursor was outside.
-  // Only explicitly requested Show/Restore actions may bring it forward.
+  // Repeatedly raising the overlay over the protected cursor caused flicker.
+  // Both windows already have permanent topmost levels (1 and 2).
+  const pointerVisible = privateCursorWindow && !privateCursorWindow.isDestroyed() && privateCursorWindow.isVisible();
+  try { if (!pointerVisible && overlayWindow.isVisible()) overlayWindow.moveTop(); } catch (_) {}
 }
 
 function startOverlayTopmostGuard() {
@@ -559,11 +555,9 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   captionFallbackTimer = null;
   sendTranscriptionSource('meet-captions');
 
-  // PIN viewers render their own Meet captions directly via Electron IPC.
-  // Do not wait for the Railway host relay to become idle. A ready local Meet
-  // collector owns the display for this session, so a quiet spell cannot
-  // switch sources and replay/replace already visible caption words.
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
+  // Use local Meet captions immediately if the authoritative host relay is
+  // unavailable. Otherwise all PIN viewers display the same host feed.
+  if (Date.now() - hostRelayLastAt > 1800 && overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'local-meet' });
   }
   // Backend receives text only for session-level PDF persistence and other PIN
@@ -960,20 +954,13 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
-      // Railway remains connected for PIN/session checks, chat, PDF storage,
-      // and captions BEFORE local Meet starts producing them. Once a verified
-      // local caption source is ready, do not interleave relayed host/peer text
-      // into the same overlay (even after ordinary pauses between sentences).
-      // This is source ownership, not a 6-second silence timeout.
+      // Never permanently suppress a host relay just because the PIN window
+      // once detected local captions. Prefer the live host feed, with local
+      // Meet as an immediate fallback if that feed stops for 1.8 seconds.
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       if (payload.fromHost) hostRelayLastAt = Date.now();
-      // The local observer can stall while Google Meet still visibly captions.
-      // Once it has been silent for five seconds, use the already-authorized
-      // Railway relay as recovery. Live local captions keep first priority.
-      // The append-only renderer deduplicates replay/overlap on recovery.
-      if (localCaptionReady && Date.now() - localCaptionLastAt < 5000) return;
-      if (!payload.fromHost && Date.now() - hostRelayLastAt < 1800) return;
+      else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
         text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,

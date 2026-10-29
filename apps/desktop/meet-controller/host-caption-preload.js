@@ -93,7 +93,11 @@
       .replace(/\s*(?:arrow_downward|arrow downward?)\s*jump to bottom$/i, '');
     return text && !noise.test(text) && text.length <= 12000 ? text : '';
   };
-  const inCall = () => Boolean(document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]'));
+  const inCall = () => Boolean(document.querySelector(
+    '[aria-label*="Leave call" i], [data-tooltip*="Leave call" i], ' +
+    '[aria-label*="Turn off captions" i], [data-tooltip*="Turn off captions" i], ' +
+    '[aria-label*="Chat with everyone" i], [aria-label*="Meeting details" i]'
+  ));
   const excluded = el => Boolean(el?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="toolbar"], button, [role="button"]'));
 
   // Meet can keep alternate/hidden caption text in the same DOM node. Prefer
@@ -505,12 +509,16 @@
   function start() {
     setInterval(() => {
       dismissMeetAloneReminder(); // also works when the modal hides the leave button
-      if (!inCall()) return;
-      ensureCaptions();
+      // Live caption text itself proves the Meet capture is active even when
+      // Google renames the Leave-call control. Otherwise the old gate silently
+      // blocked ALL host and PIN-viewer captions on those Meet UI variants.
+      const caption = latestCaption();
+      if (!inCall() && !caption) return;
+      if (inCall()) ensureCaptions();
       // Leave UK language selection undisturbed on the first few seconds.
       if (!emptyCallJoinAt) emptyCallJoinAt = Date.now();
       if (ukApplied || ukAttempts >= 4 || Date.now() - emptyCallJoinAt > 6000) protectHostFromEmptyCallExit();
-      update(latestCaption());
+      update(caption);
       flushInterim();
     }, 120);
     setInterval(() => { if (inCall()) scanHostChat(); }, 650);

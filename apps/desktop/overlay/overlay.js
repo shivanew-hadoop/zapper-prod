@@ -25,7 +25,6 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const appVersionEl = document.getElementById('appVersion');
 const latestVersionBtn = document.getElementById('latestVersionBtn');
-const transcriptionSourceEl = document.getElementById('transcriptionSource');
 let privateCursor = null;
 
 async function initAppVersionAndDownload() {
@@ -83,23 +82,8 @@ let hostMirrorActive = false;
 let lastFinalCaptionAt = 0;
 let lastFinalCaptionOrigin = '';
 
-function setTranscriptionSource(source) {
-  if (!transcriptionSourceEl) return;
-  const normalized = String(source || '').trim().toLowerCase();
-  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting');
-  if (normalized === 'meet-captions') {
-    transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
-    transcriptionSourceEl.classList.add('source-meet');
-    return;
-  }
-  if (normalized === 'deepgram') {
-    transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
-    transcriptionSourceEl.classList.add('source-deepgram');
-    return;
-  }
-  transcriptionSourceEl.textContent = normalized === 'idle' ? 'Source: —' : 'Source: Detecting…';
-  transcriptionSourceEl.classList.add('source-detecting');
-}
+// Source status is intentionally not shown in the overlay.
+function setTranscriptionSource(_source) {}
 
 
 function normalizeGoogleMeetInput(value) {
@@ -274,8 +258,9 @@ function getRandomGuestName() {
 function showJoin({ force = false } = {}) {
   // Never let Google Sign-In or a stale UI event kick an active transcription
   // back to the PIN screen. The active session remains authoritative until the
-  // participant leaves or the host ends it.
-  if (!force && activeSessionToken && currentPanel === 'live') {
+  // participant leaves or the host ends it. Host startup may also race
+  // with async config: never return an active host overlay to the PIN panel.
+  if (!force && (hostMirrorActive || (activeSessionToken && currentPanel === 'live'))) {
     backToLiveBtn?.classList.add('hidden');
     return false;
   }
@@ -937,3 +922,13 @@ if (window.electronAPI.onCountdownStart) {
 
 renderMeetChat();
 
+// The portal can launch the host Meet before this overlay renderer has loaded.
+// Recover its current active state instead of depending on a one-shot IPC event.
+window.electronAPI.getCaptionSessionState?.().then(state => {
+  if (state?.hostActive && !activeSessionToken && !hostMirrorActive) {
+    hostMirrorActive = true;
+    showLive('Host Meet captions are live.');
+    leaveBtn.classList.add('hidden');
+    renderTranscript();
+  }
+}).catch(() => {});

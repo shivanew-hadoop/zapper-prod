@@ -85,6 +85,7 @@ function handleZapperUrl(rawUrl) {
   if (hostJoin) {
     // Host mode is separate from the participant's Meet/PIN capture lifecycle.
     // Legacy links without an authorized capture token still join as before.
+    hostMeetActive = true;
     hostCaptionsAuthorized = Boolean(hostJoin.captureToken);
     if (hostJoin.captureToken) {
       startHostCaptionRelay({ backendUrl: BACKEND_URL, captureToken: hostJoin.captureToken,
@@ -103,20 +104,26 @@ function handleZapperUrl(rawUrl) {
         },
         onEnded: (reason, type) => {
           hostCaptionsAuthorized = false;
-          // Only a confirmed backend session end disconnects Meet. A temporary
-          // caption-token authorization failure must never terminate the call.
-          if (type === 'session_ended' || type === 'limit_reached') leaveHost();
-          if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
+          // Authorization failure affects the remote relay, NOT locally visible
+          // Google Meet speech. Keep the host overlay open while Meet is live.
+          if (type === 'session_ended' || type === 'limit_reached') {
+            hostMeetActive = false;
+            leaveHost();
+            if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', reason);
+          } else sendStatus('Host caption relay unavailable: ' + reason + '. Local captions remain available.');
         }
       });
-      if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-active');
-    } else stopHostCaptionRelay();
+    } else {
+      stopHostCaptionRelay();
+      sendStatus('Host caption relay token missing. Host can view local captions, but PIN viewers need the portal to provide a valid capture token.');
+    }
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-active');
     joinAsHost(hostJoin, sendStatus).catch(error => sendStatus('Host mode could not join: ' + error.message));
     return;
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') { hostCaptionsAuthorized = false; stopHostCaptionRelay(); leaveHost(); if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', 'Host session ended.'); return; }
+  if (control.type === 'leave') { hostMeetActive = false; hostCaptionsAuthorized = false; stopHostCaptionRelay(); leaveHost(); if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', 'Host session ended.'); return; }
   if (control.type === 'resume') {
     resumeHost().then(ok => sendStatus(ok ? 'Host Meet verified or reconnecting after confirmation.' : 'Host Meet window is unavailable. Open your Google Meet manually.')).catch(error => sendStatus('Meet reconnection failed: ' + error.message));
     return;
@@ -172,6 +179,7 @@ let audibleWithoutCaptionSince = 0;
 const DEEPGRAM_FALLBACK_ENABLED = false;
 let meetOnlyFallbackNoticeSent = false;
 let hostCaptionsAuthorized = false;
+let hostMeetActive = false; // Local host display is independent of relay-token availability.
 let lastHostLocalCaptionAt = 0;
 
 
@@ -528,10 +536,10 @@ ipcMain.on('meet-caption-state', (_, payload) => {
 // Host Meet captions are collected in the existing host Meet window without
 // joining the room as a second participant and without Google overlay sign-in.
 ipcMain.on('host-caption-message', (_, payload) => {
-  if (!hostCaptionsAuthorized || !payload?.text) return;
+  if (!hostMeetActive || !payload?.text) return;
   lastHostLocalCaptionAt = Date.now();
   const text = correctTechnologyTerms(String(payload.text).trim());
-  publishHostCaption({ ...payload, text }); // authorized API relay to PIN participants + PDF
+  if (hostCaptionsAuthorized) publishHostCaption({ ...payload, text }); // token-authorized relay only
   if (started) return; // participant session, if present, owns this local view
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('host-session-active');
@@ -813,6 +821,9 @@ function createOverlayWindow() {
 
 ipcMain.handle('get-app-config', async () => getAppConfig());
 ipcMain.handle('get-app-version', async () => app.getVersion());
+// Overlay may load after the portal sends host-session-active. Querying state
+// after its IPC listeners attach eliminates the startup event-loss race.
+ipcMain.handle('get-caption-session-state', async () => ({ hostActive: hostMeetActive, participantActive: started }));
 ipcMain.handle('open-latest-download', async () => {
   if (!/^https:\/\//i.test(DOWNLOAD_URL)) return { success: false, error: 'Download URL is not configured.' };
   await shell.openExternal(DOWNLOAD_URL);

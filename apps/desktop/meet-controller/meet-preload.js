@@ -299,20 +299,21 @@
   }
 
   function isInMeeting() {
+    // In-call controls are stronger evidence than generic "Join now" text in
+    // an unrelated participant/chat panel. Check them before page-wide text.
+    try {
+      if (document.querySelector(
+        '[aria-label^="Leave call" i], [data-tooltip*="Leave call" i], ' +
+        '[aria-label*="Turn off captions" i], [data-tooltip*="Turn off captions" i], ' +
+        '[aria-label^="Chat with everyone" i], [aria-label^="Meeting details" i], ' +
+        '[aria-label^="Present now" i]'
+      )) return true;
+    } catch (_) {}
     const txt = normalizeText(document.body && document.body.innerText || '').toLowerCase();
-    // Treat Meet as admitted only after the real in-call UI is visible.
-    // Pre-join / waiting-room pages can still contain chat/people labels, so do not
-    // open chat or auto-send the init message from those states.
     if (/ready to join|ask to join|join now|waiting for host admission|waiting to be admitted|someone will let you in|you.ll join when someone lets you in|asking to be joined/i.test(txt)) return false;
     if (/leave call|you are in the meeting|you are in this call/i.test(txt)) return true;
-    // "Leave call" is usually only an aria-label / hidden tooltip, which innerText
-    // does not include, so also accept in-call controls that exist only after joining.
-    try {
-      return Boolean(document.querySelector(
-        '[aria-label^="Leave call" i], [aria-label*="Turn on captions" i], [aria-label*="Turn off captions" i], ' +
-        '[aria-label^="Chat with everyone" i], [aria-label^="Meeting details" i], [aria-label^="Present now" i]'
-      ));
-    } catch (_) { return false; }
+    try { return Boolean(document.querySelector('[aria-label*="Turn on captions" i]')); }
+    catch (_) { return false; }
   }
 
 

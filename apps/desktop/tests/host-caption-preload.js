@@ -107,6 +107,17 @@ tick(150);
 tick(300);
 assert.equal(emitted.filter(e => !e.isFinal).at(-1).text, 'New words after three minutes',
   'a stale first Meet caption region cannot freeze the host overlay');
+// Meet sometimes renames its in-call toolbar; a real caption row must
+// still be collected and shown rather than gated on a missing Leave-call label.
+const liveQuery = doc.querySelector;
+doc.querySelector = selector => /Leave call|Turn off captions|Chat with everyone|Meeting details/.test(selector)
+  ? null : liveQuery(selector);
+captionText = 'New captions despite renamed toolbar';
+tick(250);
+tick(250);
+assert.equal(emitted.filter(e => !e.isFinal).at(-1).text, 'New captions despite renamed toolbar',
+  'host text must not stop when Meet toolbar labels change');
+doc.querySelector = liveQuery;
 assert(emitted.every(e => e.channel === 'host-caption-message'), 'host captions must use their own IPC channel');
 assert(!code.includes('getUserMedia ='), 'host capture must never mute microphone');
 console.log(JSON.stringify({ ok: true, hostCaptionsAutoEnabled: true, lowLatency: true, noDuplicateRevision: true, microphonePreserved: true, visibleCaptionPriority: true, ukCaptionSelected: true }));

@@ -248,6 +248,9 @@
     if (oldSpeaker && speaker && oldSpeaker.toLowerCase() !== speaker.toLowerCase()) return false;
     const a = wordsOf(before).norm, b = wordsOf(after).norm;
     if (!a.length || !b.length) return true;
+    // A new one-word caption row can reuse the previous sentence's first word.
+    // Do not treat that as an update to the old sentence after a pause.
+    if (b.length === 1 && a.length >= 3) return false;
     let prefix = 0;
     while (prefix < Math.min(a.length, b.length) && near(a[prefix], b[prefix])) prefix++;
     if (prefix >= Math.max(1, Math.ceil(Math.min(a.length, b.length) * .6))) return true;
@@ -261,7 +264,7 @@
     if (!text) return;
     if (isFinal) {
       const key = wordsOf(text).norm.join(' ');
-      if (key === lastFinal && Date.now() - lastFinalAt < 3500) return;
+      if (key === lastFinal && Date.now() - lastFinalAt < (key.includes(' ') ? 3500 : 800)) return;
       lastFinal = key;
       lastFinalAt = Date.now();
     }
@@ -302,14 +305,14 @@
     changedAt = now;
     if (finalTimer) clearTimeout(finalTimer);
     finalTimer = setTimeout(() => {
-      if (lastText === text && Date.now() - changedAt >= 2300) commit();
-    }, 2400);
+      if (lastText === text && Date.now() - changedAt >= 1700) commit();
+    }, 1800);
   }
   function flushInterim() {
     if (!lastText) return;
     const { words } = wordsOf(lastText);
     let stable = 0;
-    while (stable < stamps.length && Date.now() - stamps[stable].at >= 240) stable++;
+    while (stable < stamps.length && Date.now() - stamps[stable].at >= 160) stable++;
     const next = delta(words.slice(0, stable).join(' '));
     if (next && next !== shownInterim) { shownInterim = next; emit(next, false); }
   }

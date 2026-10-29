@@ -112,8 +112,9 @@ assert.equal(captionContext.captionMostlySame('Great now it is working as expect
 assert.equal(captionContext.captionMostlySame('Yes', 'Yes'), false, 'short genuine replies must remain visible');
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Thank u for joining the call today', '', ''), true);
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Coming to my roles and responsibilities', '', ''), false);
-assert(source.includes('const CAPTION_STABLE_MS = 240'), 'interim captions should have a short stabilization window');
-assert(source.includes('}, 2400)'), 'final captions should allow later Google Meet recognition corrections');
+assert.equal(captionContext.isCaptionContinuation('We need more tests', 'We', '', ''), false, 'one-word rollover must start a new sentence');
+assert(source.includes('const CAPTION_STABLE_MS = 160'), 'interim captions should have a short stabilization window');
+assert(source.includes('}, 1800)'), 'final captions should allow later Google Meet recognition corrections');
 assert(source.includes('function renderedCaptionText'), 'caption extraction must prefer visibly rendered text to raw DOM');
 assert(source.includes('preferUKEnglishCaptions()'), 'participant Meet should prefer English UK');
 

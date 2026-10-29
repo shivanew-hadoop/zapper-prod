@@ -685,7 +685,7 @@
     const key = keyText(clean);
     const now = Date.now();
     // Only an immediate identical repeat is dropped; the same phrase said again later is real.
-    if (isFinal && now - lastEmittedFinalAt < 4000 &&
+    if (isFinal && now - lastEmittedFinalAt < (key.includes(' ') ? 4000 : 800) &&
         (key === lastEmittedFinalKey || captionMostlySame(clean, lastEmittedFinalKey))) return;
     if (isFinal) { lastEmittedFinalKey = key; lastEmittedFinalAt = now; }
     ipcRenderer.send('meet-caption-message', { text: clean, isFinal: Boolean(isFinal), capturedAt: now });
@@ -694,7 +694,7 @@
   // Show words soon after Meet stabilizes them. Interim captions may be revised
   // in place, but finals are committed only after the utterance has paused.
   // Previous 900ms hold + 2.25s final delay made the overlay appear unresponsive.
-  const CAPTION_STABLE_MS = 240;
+  const CAPTION_STABLE_MS = 160;
   let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
   let lastShownInterim = '';
 
@@ -751,10 +751,10 @@
     const scheduledKey = keyText(text);
     captionFinalTimer = setTimeout(() => {
       captionFinalTimer = null;
-      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 2300) {
+      if (scheduledKey && scheduledKey === lastCaptionKey && Date.now() - lastCaptionChangedAt >= 1700) {
         commitCaptionFinal();
       }
-    }, 2400);
+    }, 1800);
   }
 
   function markCaptionReady(strategyName) {
@@ -776,6 +776,9 @@
     const b = captionWordsOf(nextKey).norm;
     const shorter = Math.min(a.length, b.length);
     if (!shorter) return true;
+    // A new one-word caption row is not an edit of a multiword sentence,
+    // even if it happens to repeat the first word of that older sentence.
+    if (b.length === 1 && a.length >= 3) return false;
     // Same row edited in place: most leading words are unchanged (a revised word or two is fine).
     let lead = 0;
     while (lead < shorter && captionTokenNear(a[lead], b[lead])) lead += 1;

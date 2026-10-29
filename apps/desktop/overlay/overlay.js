@@ -498,8 +498,12 @@ function clearProvisionalPrefix() {
   previousLiveWords = [];
 }
 function renderTranscript() {
+  // Final lines are append-only. Inspect the boundaries in constant time,
+  // rather than rescanning hundreds of immutable lines on every speech token.
   const samePrefix = renderedFinalLines.length <= finalLines.length &&
-    renderedFinalLines.every((line, index) => line === finalLines[index]);
+    (!renderedFinalLines.length ||
+      (renderedFinalLines[0] === finalLines[0] &&
+       renderedFinalLines[renderedFinalLines.length - 1] === finalLines[renderedFinalLines.length - 1]));
   if (!liveMutableNode || !transcriptEl.contains(liveMutableNode) || !samePrefix) {
     transcriptEl.textContent = '';
     renderedFinalLines = [];
@@ -536,6 +540,13 @@ function renderTranscript() {
       nextFrozen = frozenLiveWords;
     }
   }
+  // On a caption-row rollover Meet may send a shorter or unrelated draft.
+  // Do not combine its word indices with already locked nodes: that silently
+  // dropped first words and displayed a jumbled mix after a one-word pause.
+  // The Meet collector commits the previous row before starting the new one.
+  if (frozenLiveWords.some((word, i) => word !== words[i])) {
+    return;
+  }
   if (nextFrozen.length > frozenLiveWords.length) {
     for (let i = frozenLiveWords.length; i < nextFrozen.length; i++) {
       const node = document.createTextNode(
@@ -545,11 +556,16 @@ function renderTranscript() {
     }
     frozenLiveWords = nextFrozen;
   }
-  previousLiveWords = words;
-  const tailWords = words.slice(frozenLiveWords.length);
-  const tail = words.length ?
+  // Meet can temporarily shorten/revise a row. Preserve the visible tail
+  // rather than retract text during a pause or a one-word caption transition.
+  const previousVisible = previousLiveWords;
+  const sameVisiblePrefix = previousVisible.every((word, i) => words[i] === word);
+  const displayWords = previousVisible.length && !sameVisiblePrefix ? previousVisible : words;
+  previousLiveWords = displayWords;
+  const tailWords = displayWords.slice(frozenLiveWords.length);
+  const tail = displayWords.length ?
     (frozenLiveWords.length ? ' ' : (finalLines.length ? '\n' : '')) + tailWords.join(' ') : '';
-  const placeholder = finalLines.length || words.length ? '' : 'Waiting for host to speak...';
+  const placeholder = finalLines.length || displayWords.length ? '' : 'Waiting for host to speak...';
   const changed = newFinalAdded || liveMutableNode.nodeValue !== tail ||
     placeholderNode.nodeValue !== placeholder || nextFrozen.length > frozenLiveWords.length;
   if (liveMutableNode.nodeValue !== tail) liveMutableNode.nodeValue = tail;

@@ -519,6 +519,7 @@ function renderTranscript() {
   }
   // Transfer an interim sentence to its final node in the SAME synchronous
   // render pass. No blank intermediate frame, no full transcript replacement.
+  // A final replaces only the provisional tail; completed lines stay untouched.
   if (newFinalAdded || !interimText) clearProvisionalPrefix();
   const words = String(interimText || '').split(/\s+/).filter(Boolean);
   let nextFrozen = frozenLiveWords;
@@ -530,9 +531,9 @@ function renderTranscript() {
     if (nextFrozen.every((word, i) => word === words[i])) {
       if (lockUpTo > nextFrozen.length) nextFrozen = words.slice(0, lockUpTo);
     } else {
-      // Meet started a different interim sentence. Old *final* lines remain.
-      clearProvisionalPrefix();
-      nextFrozen = [];
+      // Meet can revise its rolling caption. Keep already displayed stable words
+      // instead of deleting/repainting them. Only the uncommitted tail changes.
+      nextFrozen = frozenLiveWords;
     }
   }
   if (nextFrozen.length > frozenLiveWords.length) {
@@ -857,7 +858,11 @@ window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
     // every new final transcript line even though auto-scroll was disabled.
       interimText = '';
   } else {
-    interimText = text.trim();
+    const incoming = text.trim();
+    // A delayed caption from another collector must not replace a completed line.
+    const normalized = value => String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    if (finalLines.length && normalized(incoming) === normalized(finalLines[finalLines.length - 1])) return;
+    interimText = incoming;
   }
   renderTranscript();
 });

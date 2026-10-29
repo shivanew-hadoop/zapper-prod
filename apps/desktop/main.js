@@ -74,6 +74,7 @@ const {
 
 const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
+const { correctTechnologyTerms } = require('./transcriber/technologyCorrections');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -96,7 +97,7 @@ function handleZapperUrl(rawUrl) {
           if (!hostCaptionsAuthorized || started || !caption?.text || Date.now() - lastHostLocalCaptionAt < 2000) return;
           if (overlayWindow && !overlayWindow.isDestroyed()) {
             overlayWindow.webContents.send('host-session-active');
-            overlayWindow.webContents.send('transcript', { text: String(caption.text),
+            overlayWindow.webContents.send('transcript', { text: correctTechnologyTerms(String(caption.text)),
               isFinal: Boolean(caption.isFinal), source: 'meet-captions', origin: 'peer-relay' });
           }
         },
@@ -529,7 +530,7 @@ ipcMain.on('meet-caption-state', (_, payload) => {
 ipcMain.on('host-caption-message', (_, payload) => {
   if (!hostCaptionsAuthorized || !payload?.text) return;
   lastHostLocalCaptionAt = Date.now();
-  const text = String(payload.text).trim();
+  const text = correctTechnologyTerms(String(payload.text).trim());
   publishHostCaption({ ...payload, text }); // authorized API relay to PIN participants + PDF
   if (started) return; // participant session, if present, owns this local view
   if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -542,7 +543,7 @@ ipcMain.on('host-caption-message', (_, payload) => {
 
 ipcMain.on('meet-caption-message', (_, payload) => {
   if (!started || !payload) return;
-  const text = String(payload.text || '').trim();
+  const text = correctTechnologyTerms(String(payload.text || '').trim());
   if (!text) return;
   localCaptionReady = true;
   localCaptionLastAt = Number(payload.capturedAt) || Date.now();
@@ -961,7 +962,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (payload.fromHost) hostRelayLastAt = Date.now();
       else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
       overlayWindow.webContents.send('transcript', {
-        text: String(payload.text || ''),
+        text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,
         source: payload.source || 'backend',
         origin: payload.fromHost ? 'host-relay' : 'peer-relay'

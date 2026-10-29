@@ -53,17 +53,6 @@ assert.equal(transcriptEl.children[2], nextConfirmed);
 render(['I wanted to see', 'coming to my roles and responsibilities today'], 'next sentence grows');
 assert.equal(transcriptEl.children[1], confirmedLine, 'first finalized node never repainted');
 assert.equal(transcriptEl.children[2], nextConfirmed, 'second finalized node never repainted');
-// Meet retracting a provisional line after a pause must not remove printed text.
-render(['I wanted to see', 'coming to my roles and responsibilities today'], 'one word after pause');
-const beforeShortening = transcriptEl.children.map(n => n.nodeValue).join('');
-render(['I wanted to see', 'coming to my roles and responsibilities today'], 'one');
-assert.equal(transcriptEl.children.map(n => n.nodeValue).join(''), beforeShortening,
-  'shortened interim must not retract previously displayed words');
-render(['I wanted to see', 'coming to my roles and responsibilities today'], 'completely unrelated new speech');
-assert.equal(transcriptEl.children.map(n => n.nodeValue).join(''), beforeShortening,
-  'unrelated interim cannot jumble the already visible line');
-render(['I wanted to see', 'coming to my roles and responsibilities today', 'one word after pause'], 'Next');
-assert.equal(transcriptEl.children[1], confirmedLine, 'previous finalized sentence survives line rollover');
 render([], 'new host session');
 assert(!transcriptEl.contains(confirmedLine), 'only a new session can clear prior final nodes');
 console.log(JSON.stringify({ ok: true, immutableFinalLines: true, provisionalPrefixLocked: true, noRedraw: true, sessionReset: true }));

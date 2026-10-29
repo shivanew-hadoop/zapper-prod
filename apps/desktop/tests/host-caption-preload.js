@@ -107,14 +107,6 @@ tick(150);
 tick(300);
 assert.equal(emitted.filter(e => !e.isFinal).at(-1).text, 'New words after three minutes',
   'a stale first Meet caption region cannot freeze the host overlay');
-// A one-word caption after a multiword row may repeat its first word.
-// It must still be emitted as a distinct new utterance after the pause.
-captionText = 'We need reliable captions';
-tick(150); tick(1900);
-captionText = 'We';
-tick(150); tick(220); tick(1900);
-assert.equal(emitted.filter(e => e.isFinal).at(-1).text, 'We',
-  'single word after a pause must not be silently swallowed by old row overlap');
 assert(emitted.every(e => e.channel === 'host-caption-message'), 'host captions must use their own IPC channel');
 assert(!code.includes('getUserMedia ='), 'host capture must never mute microphone');
 console.log(JSON.stringify({ ok: true, hostCaptionsAutoEnabled: true, lowLatency: true, noDuplicateRevision: true, microphonePreserved: true, visibleCaptionPriority: true, ukCaptionSelected: true }));

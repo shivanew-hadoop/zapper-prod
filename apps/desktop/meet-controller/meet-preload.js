@@ -299,21 +299,20 @@
   }
 
   function isInMeeting() {
-    // In-call controls are stronger evidence than generic "Join now" text in
-    // an unrelated participant/chat panel. Check them before page-wide text.
-    try {
-      if (document.querySelector(
-        '[aria-label^="Leave call" i], [data-tooltip*="Leave call" i], ' +
-        '[aria-label*="Turn off captions" i], [data-tooltip*="Turn off captions" i], ' +
-        '[aria-label^="Chat with everyone" i], [aria-label^="Meeting details" i], ' +
-        '[aria-label^="Present now" i]'
-      )) return true;
-    } catch (_) {}
     const txt = normalizeText(document.body && document.body.innerText || '').toLowerCase();
+    // Treat Meet as admitted only after the real in-call UI is visible.
+    // Pre-join / waiting-room pages can still contain chat/people labels, so do not
+    // open chat or auto-send the init message from those states.
     if (/ready to join|ask to join|join now|waiting for host admission|waiting to be admitted|someone will let you in|you.ll join when someone lets you in|asking to be joined/i.test(txt)) return false;
     if (/leave call|you are in the meeting|you are in this call/i.test(txt)) return true;
-    try { return Boolean(document.querySelector('[aria-label*="Turn on captions" i]')); }
-    catch (_) { return false; }
+    // "Leave call" is usually only an aria-label / hidden tooltip, which innerText
+    // does not include, so also accept in-call controls that exist only after joining.
+    try {
+      return Boolean(document.querySelector(
+        '[aria-label^="Leave call" i], [aria-label*="Turn on captions" i], [aria-label*="Turn off captions" i], ' +
+        '[aria-label^="Chat with everyone" i], [aria-label^="Meeting details" i], [aria-label^="Present now" i]'
+      ));
+    } catch (_) { return false; }
   }
 
 
@@ -658,6 +657,32 @@
     return matches >= Math.max(4, Math.ceil(Math.max(x.length, y.length) * 0.86));
   }
 
+  // See host-caption-preload.js committedEnd(): align the committed words with
+  // the current row so one revised/inserted word in an already committed
+  // sentence cannot make the whole row print again. -1 = unrelated utterance.
+  function captionCommittedEnd(done, norm) {
+    const c = Math.min(done.length, 250);
+    const C = done.slice(done.length - c);
+    const n = Math.min(norm.length, c + 40);
+    if (c < 3 || n < 3) return -1;
+    const w = n + 1, table = new Uint16Array((c + 1) * w);
+    for (let i = 1; i <= c; i += 1) for (let j = 1; j <= n; j += 1) {
+      table[i * w + j] = captionTokenNear(C[i - 1], norm[j - 1]) ? table[(i - 1) * w + j - 1] + 1
+        : Math.max(table[(i - 1) * w + j], table[i * w + j - 1]);
+    }
+    let i = c, j = n, matches = 0, firstA = -1, firstB = -1, lastA = -1, lastB = -1;
+    while (i > 0 && j > 0) {
+      if (captionTokenNear(C[i - 1], norm[j - 1]) && table[i * w + j] === table[(i - 1) * w + j - 1] + 1) {
+        if (lastB < 0) { lastA = i - 1; lastB = j - 1; }
+        firstA = i - 1; firstB = j - 1; matches += 1; i -= 1; j -= 1;
+      } else if (table[(i - 1) * w + j] >= table[i * w + j - 1]) i -= 1;
+      else j -= 1;
+    }
+    if (matches < 2 || firstB > 3) return -1;
+    if (matches < 0.6 * (lastB - firstB + 1) || matches < 0.6 * (c - firstA)) return -1;
+    return Math.min(norm.length, lastB + 1 + (c - 1 - lastA));
+  }
+
   function captionDelta(text) {
     if (!captionCommitted.length) return text;
     const { words, norm } = captionWordsOf(text);
@@ -676,6 +701,8 @@
       for (let i = 0; i < m; i += 1) { if (done[done.length - m + i] !== norm[i]) { same = false; break; } }
       if (same) return words.slice(m).join(' ');
     }
+    const aligned = captionCommittedEnd(done, norm);
+    if (aligned >= 0) return aligned >= norm.length ? '' : words.slice(aligned).join(' ');
     captionCommitted = []; // a different utterance
     return text;
   }
@@ -695,7 +722,7 @@
   // Show words soon after Meet stabilizes them. Interim captions may be revised
   // in place, but finals are committed only after the utterance has paused.
   // Previous 900ms hold + 2.25s final delay made the overlay appear unresponsive.
-  const CAPTION_STABLE_MS = 200;
+  const CAPTION_STABLE_MS = 240;
   let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
   let lastShownInterim = '';
 
@@ -777,9 +804,6 @@
     const b = captionWordsOf(nextKey).norm;
     const shorter = Math.min(a.length, b.length);
     if (!shorter) return true;
-    // A one-word row after a pause is often fresh speech, not an edit of
-    // the previous sentence. Require a quiet gap to avoid false rollovers.
-    if (b.length === 1 && a.length >= 3 && Date.now() - lastCaptionChangedAt >= 600) return false;
     // Same row edited in place: most leading words are unchanged (a revised word or two is fine).
     let lead = 0;
     while (lead < shorter && captionTokenNear(a[lead], b[lead])) lead += 1;
@@ -794,6 +818,8 @@
       }
       if (tail || head) return true;
     }
+    // Same row with a word revised/inserted in the middle: still one utterance.
+    if (captionCommittedEnd(a, b) >= 0) return true;
     return false;
   }
 

@@ -100,7 +100,7 @@ assert(mainSource.includes('>= 4000'), 'fallback must require sustained audible 
 
 // Caption stream regressions: stable committed words must not be replayed
 // when Meet revises a single token, nor when it extends the same utterance.
-const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionDelta', 'isCaptionContinuation'];
+const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionCommittedEnd', 'captionDelta', 'isCaptionContinuation'];
 const captionContext = vm.createContext({ normalizeText, captionCommitted: [] });
 for (const name of captionFns) vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, captionContext);
 vm.runInContext(`captionCommitted = captionWordsOf('Thank you for joining the call').norm;`, captionContext);
@@ -112,7 +112,7 @@ assert.equal(captionContext.captionMostlySame('Great now it is working as expect
 assert.equal(captionContext.captionMostlySame('Yes', 'Yes'), false, 'short genuine replies must remain visible');
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Thank u for joining the call today', '', ''), true);
 assert.equal(captionContext.isCaptionContinuation('Thank you for joining the call', 'Coming to my roles and responsibilities', '', ''), false);
-assert(source.includes('const CAPTION_STABLE_MS = 200'), 'interim captions should have a short stabilization window');
+assert(source.includes('const CAPTION_STABLE_MS = 240'), 'interim captions should have a short stabilization window');
 assert(source.includes('}, 2400)'), 'final captions should allow later Google Meet recognition corrections');
 assert(source.includes('function renderedCaptionText'), 'caption extraction must prefer visibly rendered text to raw DOM');
 assert(source.includes('preferUKEnglishCaptions()'), 'participant Meet should prefer English UK');

@@ -21,7 +21,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopOverlayResize: () => ipcRenderer.invoke('overlay-resize-stop'),
   closeGoogleSignInWindow: () => ipcRenderer.invoke('close-google-signin-window'),
   countdownAutoCloseReady: () => ipcRenderer.invoke('countdown-auto-close-ready'),
-  getCaptionSessionState: () => ipcRenderer.invoke('get-caption-session-state'),
   onTranscript: (cb) => ipcRenderer.on('transcript', (_, data) => cb(data)),
   onHostSessionActive: (cb) => ipcRenderer.on('host-session-active', () => cb()),
   onHostSessionStopped: (cb) => ipcRenderer.on('host-session-stopped', (_, reason) => cb(reason)),

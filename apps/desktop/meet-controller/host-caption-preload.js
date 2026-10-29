@@ -93,11 +93,7 @@
       .replace(/\s*(?:arrow_downward|arrow downward?)\s*jump to bottom$/i, '');
     return text && !noise.test(text) && text.length <= 12000 ? text : '';
   };
-  const inCall = () => Boolean(document.querySelector(
-    '[aria-label*="Leave call" i], [data-tooltip*="Leave call" i], ' +
-    '[aria-label*="Turn off captions" i], [data-tooltip*="Turn off captions" i], ' +
-    '[aria-label*="Chat with everyone" i], [aria-label*="Meeting details" i]'
-  ));
+  const inCall = () => Boolean(document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]'));
   const excluded = el => Boolean(el?.closest?.('[role="dialog"], [role="alertdialog"], [role="menu"], [role="toolbar"], button, [role="button"]'));
 
   // Meet can keep alternate/hidden caption text in the same DOM node. Prefer
@@ -233,6 +229,35 @@
   let lastText = '', lastSpeaker = '', changedAt = 0, lastCommittedText = '';
   let committed = [], stamps = [], shownInterim = '', finalTimer = null;
   let lastFinal = '', lastFinalAt = 0;
+  // Where do the words that were NOT yet committed begin in `norm`? Meet may
+  // revise or insert a word in the middle of a row that is already committed;
+  // a plain "same first N words" test then fails and the WHOLE row (all earlier
+  // sentences) was printed again. This aligns the committed words against the
+  // new row (longest common subsequence, tolerant of one-letter edits) and
+  // treats unmatched trailing committed words as in-place revisions.
+  // Returns -1 when the row is genuinely unrelated (a new utterance).
+  function committedEnd(done, norm) {
+    const c = Math.min(done.length, 250);
+    const C = done.slice(done.length - c);
+    const n = Math.min(norm.length, c + 40);
+    if (c < 3 || n < 3) return -1;
+    const w = n + 1, table = new Uint16Array((c + 1) * w);
+    for (let i = 1; i <= c; i++) for (let j = 1; j <= n; j++) {
+      table[i * w + j] = near(C[i - 1], norm[j - 1]) ? table[(i - 1) * w + j - 1] + 1
+        : Math.max(table[(i - 1) * w + j], table[i * w + j - 1]);
+    }
+    let i = c, j = n, matches = 0, firstA = -1, firstB = -1, lastA = -1, lastB = -1;
+    while (i > 0 && j > 0) {
+      if (near(C[i - 1], norm[j - 1]) && table[i * w + j] === table[(i - 1) * w + j - 1] + 1) {
+        if (lastB < 0) { lastA = i - 1; lastB = j - 1; }
+        firstA = i - 1; firstB = j - 1; matches++; i--; j--;
+      } else if (table[(i - 1) * w + j] >= table[i * w + j - 1]) i--;
+      else j--;
+    }
+    if (matches < 2 || firstB > 3) return -1;
+    if (matches < 0.6 * (lastB - firstB + 1) || matches < 0.6 * (c - firstA)) return -1;
+    return Math.min(norm.length, lastB + 1 + (c - 1 - lastA));
+  }
   function delta(value) {
     const { words, norm } = wordsOf(value);
     if (!committed.length) return value;
@@ -246,21 +271,22 @@
         return words.slice(size).join(' ');
       }
     }
+    const aligned = committedEnd(committed, norm);
+    if (aligned >= 0) return aligned >= norm.length ? '' : words.slice(aligned).join(' ');
     return value;
   }
   function continuation(before, after, oldSpeaker, speaker) {
     if (oldSpeaker && speaker && oldSpeaker.toLowerCase() !== speaker.toLowerCase()) return false;
     const a = wordsOf(before).norm, b = wordsOf(after).norm;
     if (!a.length || !b.length) return true;
-    // Meet may recycle the previous row's first word when a new short utterance
-    // starts after a pause. Preserve the old row instead of merging them.
-    if (b.length === 1 && a.length >= 3 && Date.now() - changedAt >= 600) return false;
     let prefix = 0;
     while (prefix < Math.min(a.length, b.length) && near(a[prefix], b[prefix])) prefix++;
     if (prefix >= Math.max(1, Math.ceil(Math.min(a.length, b.length) * .6))) return true;
     for (let size = Math.min(a.length, b.length); size >= 2; size--) {
       if (a.slice(-size).every((word, i) => near(word, b[i]))) return true;
     }
+    // Same row with a word revised/inserted in the middle: still one utterance.
+    if (committedEnd(a, b) >= 0) return true;
     return false;
   }
   function emit(value, isFinal) {
@@ -316,7 +342,7 @@
     if (!lastText) return;
     const { words } = wordsOf(lastText);
     let stable = 0;
-    while (stable < stamps.length && Date.now() - stamps[stable].at >= 200) stable++;
+    while (stable < stamps.length && Date.now() - stamps[stable].at >= 240) stable++;
     const next = delta(words.slice(0, stable).join(' '));
     if (next && next !== shownInterim) { shownInterim = next; emit(next, false); }
   }
@@ -509,16 +535,12 @@
   function start() {
     setInterval(() => {
       dismissMeetAloneReminder(); // also works when the modal hides the leave button
-      // Live caption text itself proves the Meet capture is active even when
-      // Google renames the Leave-call control. Otherwise the old gate silently
-      // blocked ALL host and PIN-viewer captions on those Meet UI variants.
-      const caption = latestCaption();
-      if (!inCall() && !caption) return;
-      if (inCall()) ensureCaptions();
+      if (!inCall()) return;
+      ensureCaptions();
       // Leave UK language selection undisturbed on the first few seconds.
       if (!emptyCallJoinAt) emptyCallJoinAt = Date.now();
       if (ukApplied || ukAttempts >= 4 || Date.now() - emptyCallJoinAt > 6000) protectHostFromEmptyCallExit();
-      update(caption);
+      update(latestCaption());
       flushInterim();
     }, 120);
     setInterval(() => { if (inCall()) scanHostChat(); }, 650);

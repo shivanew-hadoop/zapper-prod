@@ -248,6 +248,9 @@
     if (oldSpeaker && speaker && oldSpeaker.toLowerCase() !== speaker.toLowerCase()) return false;
     const a = wordsOf(before).norm, b = wordsOf(after).norm;
     if (!a.length || !b.length) return true;
+    // Meet may recycle the previous row's first word when a new short utterance
+    // starts after a pause. Preserve the old row instead of merging them.
+    if (b.length === 1 && a.length >= 3 && Date.now() - changedAt >= 600) return false;
     let prefix = 0;
     while (prefix < Math.min(a.length, b.length) && near(a[prefix], b[prefix])) prefix++;
     if (prefix >= Math.max(1, Math.ceil(Math.min(a.length, b.length) * .6))) return true;
@@ -309,7 +312,7 @@
     if (!lastText) return;
     const { words } = wordsOf(lastText);
     let stable = 0;
-    while (stable < stamps.length && Date.now() - stamps[stable].at >= 240) stable++;
+    while (stable < stamps.length && Date.now() - stamps[stable].at >= 200) stable++;
     const next = delta(words.slice(0, stable).join(' '));
     if (next && next !== shownInterim) { shownInterim = next; emit(next, false); }
   }

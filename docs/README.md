@@ -1,14 +1,13 @@
-# Zapper desktop – operations and caption behavior
+# Zapper — desktop notes
 
-Version: 1.1.1
+## Runtime
 
-- Google Meet provides recognition; Electron locally reads the visible caption text. Offline speech recognition is not included.
-- Host captions are displayed in Electron immediately and relayed to authorized PIN viewers and backend transcript storage.
-- Captions are shown as interim text after a short stabilization window; the collector finalizes after a quiet period. Google Meet's own caption generation and network transport can still contribute latency.
-- The 84-term technology substitution module is removed. Captions now reflect Google Meet's actual wording. There is no extra terminology processing layer.
-- Finalized transcript lines are appended without history trimming. Scrolling upward disables automatic follow until the viewer returns to the bottom.
-- Browser login, subscription/PIN authorization, chat, Deepgram-disabled setting and meeting management remain unchanged.
+Google Meet generates speech captions. The host Electron window reads displayed Meet captions, corrects known technical spellings with an exact local dictionary, and sends text to the authenticated caption relay. PIN-authorized viewers receive the relay while their separate Meet admission is pending. Deepgram is disabled.
 
-Build (Windows): from `apps/desktop`, run `npm install`, `npm run check`, then `npm run dist`.
+## Stability and display
 
-The standalone source ZIP is not an installed app. Deploy the backend/web separately if those services change; this revision changes only desktop-side caption behavior.
+A short interim stabilization interval reduces volatile Meet revisions. Finalized lines are append-only, and scrolling back must not trim existing lines. Google Meet recognition, host upload, and the relay network can still contribute delay.
+
+## Build and test
+
+From `apps/desktop`, run `npm install`, `npm run check`, then `npm run dist` on Windows for an installer. This source ZIP does not deploy the app or backend.

@@ -636,45 +636,57 @@ async function joinMeet(meetUrl, guestName, onStatusUpdate) {
   manualJoinWatcher = null;
 
   let attempts = 0;
-  const maxAttempts = 40; // ~40 seconds worth of retries
+  const maxAttempts = 40;
+  let joinPollBusy = false;
+  const currentMeetWindow = meetWindow;
 
   safeStatus(onStatusUpdate, 'Preparing to join meeting...');
 
-  // Run automation polling to automatically click join buttons
-  pollTimer = setInterval(async () => {
-    if (!meetWindow || meetWindow.isDestroyed()) {
-      clearInterval(pollTimer);
+  // A Meet automation pass may take several seconds. Never run overlapping
+  // DOM clicks or count an in-flight attempt as another failed join. The PIN
+  // WebSocket relay is independent and stays connected during these attempts.
+  const thisPollTimer = setInterval(async () => {
+    if (pollTimer !== thisPollTimer) {
+      clearInterval(thisPollTimer);
       return;
     }
-
+    if (meetWindow !== currentMeetWindow || !meetWindow || meetWindow.isDestroyed()) {
+      clearInterval(thisPollTimer);
+      pollTimer = null;
+      return;
+    }
+    if (joinPollBusy) return;
+    joinPollBusy = true;
     attempts++;
-    
     try {
-      // Keep mic/camera off
       if (attempts % 3 === 0) await prepareMeetPreJoinOnly(guestName, onStatusUpdate);
-
-      // Attempt automatic join
-      const result = await runMeetAutomation(guestName, onStatusUpdate);
-      
-      // Check if join was successful
+      // Avoid clicking Join again once the host is already admitting us.
+      if (!isManualJoinSubmitted(await readMeetBodyText())) {
+        await runMeetAutomation(guestName, onStatusUpdate);
+      }
       const bodyText = await readMeetBodyText();
+      if (meetWindow !== currentMeetWindow || pollTimer !== thisPollTimer) return;
       if (isManualJoinSubmitted(bodyText)) {
-        clearInterval(pollTimer);
+        clearInterval(thisPollTimer);
         pollTimer = null;
-        safeStatus(onStatusUpdate, 'Successfully joined meeting. Captions active...');
+        safeStatus(onStatusUpdate, 'Meet join request sent or admitted. Host captions available through PIN relay.');
       } else if (attempts >= maxAttempts) {
-        clearInterval(pollTimer);
+        clearInterval(thisPollTimer);
         pollTimer = null;
-        safeStatus(onStatusUpdate, 'Could not auto-join. Please check meeting URL and try again.');
+        safeStatus(onStatusUpdate, 'Meet could not auto-join. PIN caption relay remains connected; press Ctrl+Shift+M for manual Meet join.');
       }
     } catch (e) {
       console.error('[AutoJoin] error:', e.message);
-      if (attempts >= maxAttempts) {
-        clearInterval(pollTimer);
+      if (attempts >= maxAttempts && pollTimer === thisPollTimer) {
+        clearInterval(thisPollTimer);
         pollTimer = null;
+        safeStatus(onStatusUpdate, 'Meet auto-join failed. PIN caption relay remains connected; press Ctrl+Shift+M to join manually.');
       }
+    } finally {
+      joinPollBusy = false;
     }
   }, 1000);
+  pollTimer = thisPollTimer;
 
   return true;
 }

@@ -20,6 +20,8 @@ for (const [before, after] of [
   ['I am using kubernet in the cluster', 'I am using Kubernetes in the cluster'],
   ['We use land chain with land graph', 'We use LangChain with LangGraph'],
   ['I use lang chain and lang graph', 'I use LangChain and LangGraph'],
+  ['We use lag chain and LAN graph', 'We use LangChain and LangGraph'],
+  ['Deploy lime chain and lag graph', 'Deploy LangChain and LangGraph'],
   ['The landchain agents communicate with landgraph', 'The LangChain agents communicate with LangGraph'],
   ['We use land   chain and land\ngraph', 'We use LangChain and LangGraph'],
   ['I use lang-chain and lang-graph', 'I use LangChain and LangGraph'],
@@ -38,6 +40,7 @@ for (const untouched of [
   'We need the helm of this ship',
   'I wanted to see the results',
   'Normal English (UK) is still enabled',
+  'We need to learn the language before teaching',
 ]) assert.equal(correctTechnologyTerms(untouched), untouched, 'false positive: ' + untouched);
 
 // Incremental text must not retroactively alter an already corrected word.
@@ -69,7 +72,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 
 const overlay = fs.readFileSync(path.join(__dirname, '../overlay/overlay.js'), 'utf8');
 const hostCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/host-caption-preload.js'), 'utf8');
 const pinCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
-assert.equal(pkg.version, '1.0.12');
+assert.equal(pkg.version, '1.1.1');
 assert(pkg.build.files.includes('transcriber/**/*'), 'dictionary must be bundled in installer');
 assert(main.includes("require('./transcriber/technologyCorrections')"));
 assert(main.includes('const DEEPGRAM_FALLBACK_ENABLED = false'));
@@ -122,6 +125,6 @@ const t0 = performance.now();
 for (let i = 0; i < count; i++) correctTechnologyTerms(sample);
 const avgMs = (performance.now() - t0) / count;
 assert(avgMs < 0.75, `unexpected processing overhead: ${avgMs}ms`);
-console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.0.12', terms: terms.length,
+console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.1.1', terms: terms.length,
   retainedLines: 155, noHistoryRedraw: true, ukPreserved: true, deepgramOff: true,
   averageCorrectionMs: +avgMs.toFixed(4) }));

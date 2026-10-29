@@ -545,11 +545,29 @@ function renderTranscript() {
     }
     frozenLiveWords = nextFrozen;
   }
-  previousLiveWords = words;
-  const tailWords = words.slice(frozenLiveWords.length);
-  const tail = words.length ?
+  // Some Google Meet snapshots temporarily shrink/replace an unfinished row.
+  // Avoid blanking or splicing words into previously locked DOM nodes. If
+  // a new row is real, the collector emits the old final before the new row.
+  const sameDisplayedPrefix = previousLiveWords.every((word, i) => words[i] === word);
+  const sameFrozenPrefix = frozenLiveWords.every((word, i) => words[i] === word);
+  let displayWords = words;
+  if (!sameFrozenPrefix || (previousLiveWords.length && !sameDisplayedPrefix)) {
+    // A correction of the last couple of words must not rewrite already
+    // printed words. Still append genuinely newer trailing words when the
+    // surviving prefix proves it is the same growing caption row.
+    let shared = 0;
+    while (shared < Math.min(previousLiveWords.length, words.length) &&
+           previousLiveWords[shared] === words[shared]) shared++;
+    const nearlySameRow = shared >= Math.max(1, previousLiveWords.length - 2);
+    displayWords = nearlySameRow && words.length > previousLiveWords.length
+      ? previousLiveWords.concat(words.slice(previousLiveWords.length))
+      : previousLiveWords;
+  }
+  previousLiveWords = displayWords;
+  const tailWords = displayWords.slice(frozenLiveWords.length);
+  const tail = displayWords.length ?
     (frozenLiveWords.length ? ' ' : (finalLines.length ? '\n' : '')) + tailWords.join(' ') : '';
-  const placeholder = finalLines.length || words.length ? '' : 'Waiting for host to speak...';
+  const placeholder = finalLines.length || displayWords.length ? '' : 'Waiting for host to speak...';
   const changed = newFinalAdded || liveMutableNode.nodeValue !== tail ||
     placeholderNode.nodeValue !== placeholder || nextFrozen.length > frozenLiveWords.length;
   if (liveMutableNode.nodeValue !== tail) liveMutableNode.nodeValue = tail;
@@ -844,19 +862,40 @@ window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
     if (origin && lastFinalCaptionOrigin && origin !== lastFinalCaptionOrigin &&
         normalizeCaption(finalLines[finalLines.length - 1]) === normalizeCaption(cleanFinal) &&
         Date.now() - lastFinalCaptionAt < 5000) {
-      interimText = '';
-      renderTranscript();
+      // A delayed duplicate from the other collector must not erase newer
+      // interim speech or force the overlay to blank the last live line.
       return;
     }
     lastFinalCaptionAt = Date.now();
     lastFinalCaptionOrigin = origin;
+    // Keep the verbatim recognized final for PDF/backend persistence. For the
+    // LIVE VIEW only, do not withdraw a prefix already printed while Meet
+    // revises its last couple of provisional words at the sentence boundary.
+    let visibleFinal = cleanFinal;
+    if (previousLiveWords.length && interimText) {
+      const pendingWords = previousLiveWords;
+      const finalizedWords = cleanFinal.split(/\s+/).filter(Boolean);
+      const lower = word => word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+      let common = 0;
+      while (common < Math.min(pendingWords.length, finalizedWords.length) &&
+             lower(pendingWords[common]) === lower(finalizedWords[common])) common++;
+      const sameSentence = common >= Math.max(2, Math.ceil(Math.min(pendingWords.length, finalizedWords.length) * 0.7));
+      if (sameSentence) {
+        // A shorter final cannot retract text; late-added final words can be
+        // appended without touching the already visible words.
+        visibleFinal = pendingWords.concat(finalizedWords.slice(pendingWords.length)).join(' ');
+      }
+    }
     transcriptArchive.push(cleanFinal);
     transcriptSegments.push({ text: cleanFinal, at: Date.now() });
-    finalLines.push(cleanFinal);
-    // Never delete lines from the top while the user is reading older text.
-    // Top-trimming was the hidden cause of the view moving down one line for
-    // every new final transcript line even though auto-scroll was disabled.
-      interimText = '';
+    finalLines.push(visibleFinal);
+    // If the old final arrives after the NEXT sentence's interim, keep that
+    // newer provisional row alive instead of clearing and repainting it.
+    const pending = String(interimText || '').trim().toLowerCase();
+    const finalized = cleanFinal.toLowerCase();
+    const related = !pending || finalized.includes(pending) || pending.includes(finalized);
+    if (related) interimText = '';
+    // Finalized history is never trimmed while the user scrolls up.
   } else {
     const incoming = text.trim();
     // A delayed caption from another collector must not replace a completed line.

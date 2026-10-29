@@ -694,7 +694,7 @@
   // Show words soon after Meet stabilizes them. Interim captions may be revised
   // in place, but finals are committed only after the utterance has paused.
   // Previous 900ms hold + 2.25s final delay made the overlay appear unresponsive.
-  const CAPTION_STABLE_MS = 240;
+  const CAPTION_STABLE_MS = 200;
   let captionWordStamps = []; // [{ norm, since }] aligned with the current row's words
   let lastShownInterim = '';
 
@@ -776,6 +776,9 @@
     const b = captionWordsOf(nextKey).norm;
     const shorter = Math.min(a.length, b.length);
     if (!shorter) return true;
+    // A one-word row after a pause is often fresh speech, not an edit of
+    // the previous sentence. Require a quiet gap to avoid false rollovers.
+    if (b.length === 1 && a.length >= 3 && Date.now() - lastCaptionChangedAt >= 600) return false;
     // Same row edited in place: most leading words are unchanged (a revised word or two is fine).
     let lead = 0;
     while (lead < shorter && captionTokenNear(a[lead], b[lead])) lead += 1;

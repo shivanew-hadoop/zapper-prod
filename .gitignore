@@ -24,3 +24,5 @@ Thumbs.db
 
 # Electron artifacts
 apps/desktop/dist/
+
+/apps/desktop/models/

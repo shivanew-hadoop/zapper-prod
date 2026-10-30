@@ -25,7 +25,6 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const appVersionEl = document.getElementById('appVersion');
 const latestVersionBtn = document.getElementById('latestVersionBtn');
-const transcriptionSourceEl = document.getElementById('transcriptionSource');
 let privateCursor = null;
 
 async function initAppVersionAndDownload() {
@@ -83,29 +82,6 @@ let hostMirrorActive = false;
 let lastFinalCaptionAt = 0;
 let lastFinalCaptionOrigin = '';
 let lastFinalCaptionText = '';
-
-function setTranscriptionSource(source) {
-  if (!transcriptionSourceEl) return;
-  const normalized = String(source || '').trim().toLowerCase();
-  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting', 'source-local');
-  if (normalized === 'local-zipformer') {
-    transcriptionSourceEl.textContent = 'Source: Local Streaming Zipformer (offline)';
-    transcriptionSourceEl.classList.add('source-local');
-    return;
-  }
-  if (normalized === 'meet-captions') {
-    transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
-    transcriptionSourceEl.classList.add('source-meet');
-    return;
-  }
-  if (normalized === 'deepgram') {
-    transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
-    transcriptionSourceEl.classList.add('source-deepgram');
-    return;
-  }
-  transcriptionSourceEl.textContent = normalized === 'idle' ? 'Source: —' : 'Source: Detecting…';
-  transcriptionSourceEl.classList.add('source-detecting');
-}
 
 
 function normalizeGoogleMeetInput(value) {
@@ -878,7 +854,6 @@ if (window.electronAPI.onSessionEnded) {
   });
 }
 if (window.electronAPI.onTranscriptionSource) {
-  window.electronAPI.onTranscriptionSource((source) => setTranscriptionSource(source));
 }
 
 // The automatically joined host Meet has a separate, caption-only path.
@@ -896,7 +871,6 @@ window.electronAPI.onHostSessionActive?.(() => {
   }
   if (currentPanel !== 'live') showLive('Host Meet captions are live.');
   leaveBtn.classList.add('hidden'); // Host End Session stays in the web portal.
-  setTranscriptionSource('meet-captions');
 });
 window.electronAPI.onHostSessionStopped?.((reason) => {
   if (!hostMirrorActive) return;
@@ -912,7 +886,6 @@ window.electronAPI.onHostSessionStopped?.((reason) => {
 });
 
 window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
-  if (source === 'meet-captions' || source === 'deepgram' || source === 'local-zipformer') setTranscriptionSource(source);
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();

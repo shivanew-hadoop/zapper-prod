@@ -59,8 +59,7 @@ if (!gotSingleInstanceLock) {
   });
 }
 
-const { startAudioWSServer, onAudioChunk, onHostAudioChunk, stopAudioWSServer } = require('./audio-ws/server');
-const { LocalZipformer } = require('./transcriber/localZipformer');
+const { startAudioWSServer, onAudioChunk, stopAudioWSServer } = require('./audio-ws/server');
 const {
   joinMeet,
   leaveMeet,
@@ -77,58 +76,6 @@ const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHo
 const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
 const { correctTechnologyTerms } = require('./transcriber/technologyCorrections');
 
-// The host and every PIN participant run independent, in-process OFFLINE STT.
-// Only the existing JSON captions and session-control events use Railway.
-let hostLocalRecognizer = null;
-let participantLocalRecognizer = null;
-function activateHostLocalRecognition() {
-  if (hostLocalRecognizer) hostLocalRecognizer.stop();
-  hostLocalRecognizer = new LocalZipformer({
-    onStatus: message => { sendTranscriptionSource('local-zipformer'); sendStatus('Host: ' + message); },
-    onError: message => sendStatus('Host local STT error: ' + message),
-    onFinal: caption => {
-      if (!hostCaptionsAuthorized) return;
-      lastHostLocalCaptionAt = Date.now();
-      publishHostCaption({ text: caption.text, isFinal: true, capturedAt: Date.now() });
-      if (!started && overlayWindow && !overlayWindow.isDestroyed()) {
-        overlayWindow.webContents.send('host-session-active');
-        overlayWindow.webContents.send('transcript', { ...caption, origin: 'host-local' });
-      }
-    }
-  });
-  try { hostLocalRecognizer.start(); }
-  catch (e) { sendStatus('Host offline STT unavailable: ' + e.message); }
-  onHostAudioChunk(pcm => { if (hostCaptionsAuthorized) hostLocalRecognizer?.push(pcm); });
-}
-function stopHostLocalRecognition() {
-  onHostAudioChunk(() => {});
-  if (hostLocalRecognizer) hostLocalRecognizer.stop();
-  hostLocalRecognizer = null;
-}
-function activateParticipantLocalRecognition() {
-  if (participantLocalRecognizer) participantLocalRecognizer.stop();
-  participantLocalRecognizer = new LocalZipformer({
-    onStatus: message => { sendTranscriptionSource('local-zipformer'); sendStatus(message); },
-    onError: message => sendStatus('Offline speech recognition unavailable: ' + message),
-    onFinal: caption => {
-      if (!started || transcriptLimitReached) return;
-      if (overlayWindow && !overlayWindow.isDestroyed()) {
-        overlayWindow.webContents.send('transcript', { ...caption, origin: 'participant-local' });
-      }
-      // Only finalized TEXT goes to the unchanged authenticated PDF ledger.
-      sendLocalCaption({ text: caption.text, isFinal: true, capturedAt: Date.now() });
-    }
-  });
-  try { participantLocalRecognizer.start(); }
-  catch (e) { sendStatus('Offline speech recognition unavailable: ' + e.message); }
-  onAudioChunk(pcm => participantLocalRecognizer?.push(pcm));
-}
-function stopParticipantLocalRecognition() {
-  onAudioChunk(() => {});
-  if (participantLocalRecognizer) participantLocalRecognizer.stop();
-  participantLocalRecognizer = null;
-}
-
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
 // Any other zapper:// link (e.g. zapper://launch) keeps its existing behaviour.
@@ -139,7 +86,6 @@ function handleZapperUrl(rawUrl) {
     // Host mode is separate from the participant's Meet/PIN capture lifecycle.
     // Legacy links without an authorized capture token still join as before.
     hostCaptionsAuthorized = Boolean(hostJoin.captureToken);
-    activateHostLocalRecognition();
     if (hostJoin.captureToken) {
       startHostCaptionRelay({ backendUrl: BACKEND_URL, captureToken: hostJoin.captureToken,
         onStatus: sendStatus,
@@ -148,7 +94,6 @@ function handleZapperUrl(rawUrl) {
           // The host normally renders its own 120 ms Meet observer directly.
           // Only use a PIN desktop's caption if that observer has been silent;
           // never mix two active captions into the same provisional line.
-          if (hostLocalRecognizer) return; // Each desktop displays only its own ASR final.
           if (!hostCaptionsAuthorized || started || !caption?.text || Date.now() - lastHostLocalCaptionAt < 2000) return;
           if (overlayWindow && !overlayWindow.isDestroyed()) {
             overlayWindow.webContents.send('host-session-active');
@@ -158,7 +103,6 @@ function handleZapperUrl(rawUrl) {
         },
         onEnded: (reason, type) => {
           hostCaptionsAuthorized = false;
-          stopHostLocalRecognition();
           // Only a confirmed backend session end disconnects Meet. A temporary
           // caption-token authorization failure must never terminate the call.
           if (type === 'session_ended' || type === 'limit_reached') leaveHost();
@@ -172,19 +116,7 @@ function handleZapperUrl(rawUrl) {
   }
   const control = parseHostControlUrl(rawUrl);
   if (!control) return;
-  if (control.type === 'leave') {
-    // Commit any pending last words before disconnecting the authorized text
-    // relay. A finalized sentence must never be replaced by an interim row.
-    Promise.resolve(hostLocalRecognizer?.finish(650)).catch(() => {}).finally(() => {
-      hostCaptionsAuthorized = false;
-      stopHostLocalRecognition();
-      stopHostCaptionRelay();
-      leaveHost();
-      if (overlayWindow && !overlayWindow.isDestroyed())
-        overlayWindow.webContents.send('host-session-stopped', 'Host session ended.');
-    });
-    return;
-  }
+  if (control.type === 'leave') { hostCaptionsAuthorized = false; stopHostCaptionRelay(); leaveHost(); if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.webContents.send('host-session-stopped', 'Host session ended.'); return; }
   if (control.type === 'resume') {
     resumeHost().then(ok => sendStatus(ok ? 'Host Meet verified or reconnecting after confirmation.' : 'Host Meet window is unavailable. Open your Google Meet manually.')).catch(error => sendStatus('Meet reconnection failed: ' + error.message));
     return;
@@ -197,6 +129,7 @@ app.on('open-url', (event, url) => { event.preventDefault(); handleZapperUrl(url
 
 const {
   startRemoteTranscriptStream,
+  sendAudioChunk,
   sendLocalCaption,
   publishMeetChat,
   stopRemoteTranscriptStream
@@ -595,7 +528,6 @@ ipcMain.on('meet-caption-state', (_, payload) => {
 // Host Meet captions are collected in the existing host Meet window without
 // joining the room as a second participant and without Google overlay sign-in.
 ipcMain.on('host-caption-message', (_, payload) => {
-  if (hostLocalRecognizer) return; // No Google caption mixing after switching to local audio STT.
   if (!hostCaptionsAuthorized || !payload?.text) return;
   lastHostLocalCaptionAt = Date.now();
   const text = correctTechnologyTerms(String(payload.text).trim());
@@ -610,7 +542,6 @@ ipcMain.on('host-caption-message', (_, payload) => {
 });
 
 ipcMain.on('meet-caption-message', (_, payload) => {
-  if (participantLocalRecognizer) return; // Local PCM -> Zipformer is the sole transcript source.
   if (!started || !payload) return;
   const text = correctTechnologyTerms(String(payload.text || '').trim());
   if (!text) return;
@@ -717,8 +648,6 @@ async function stopActiveCaptureRuntime(statusText = 'Stopped') {
   try {
     stopSessionStatusPoller();
     onAudioChunk(() => {});
-    if (participantLocalRecognizer) await participantLocalRecognizer.finish();
-    stopParticipantLocalRecognition();
     // Flush the latest Meet interim into the session ledger before closing the
     // authenticated socket. The API accepts a short grace window after host End.
     if (localCaptionLastText && !localCaptionLastWasFinal) {
@@ -767,8 +696,7 @@ async function terminateApplicationCompletely() {
 
   resetRuntimeFlags();
   stopSessionStatusPoller();
-  stopParticipantLocalRecognition();
-  stopHostLocalRecognition();
+  onAudioChunk(() => {});
 
   // Do not let a slow Meet/Google renderer keep the Electron process alive.
   await Promise.race([
@@ -969,8 +897,10 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     activeCaptureGoogleEmail = String(googleEmail || '');
 
     meetOnlyFallbackNoticeSent = false;
-    sendTranscriptionSource('local-zipformer');
-    sendStatus('Session verified. Opening Meet... Local offline Streaming Zipformer selected.');
+    sendTranscriptionSource('detecting');
+    sendStatus(!DEEPGRAM_FALLBACK_ENABLED
+      ? 'Session verified. Opening Meet... Google Meet captions only; Deepgram fallback disabled.'
+      : 'Session verified. Opening Meet...');
     startSessionStatusPoller(sessionToken);
 
     startAudioWSServer({ isOverlayReady: () => Boolean(
@@ -998,7 +928,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       }
 
       if (payload.type === 'status') {
-        if (participantLocalRecognizer) return; // Online session socket is only a text ledger.
         overlayWindow.webContents.send('status', payload.text);
         return;
       }
@@ -1011,7 +940,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
 
       if (payload.type === 'limit_reached') {
         transcriptLimitReached = true;
-        stopParticipantLocalRecognition();
         overlayWindow.webContents.send('status', payload.text || 'Transcript limit reached. Captions disconnected.');
         stopRemoteTranscriptStream();
         return;
@@ -1026,7 +954,6 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         return;
       }
 
-      if (participantLocalRecognizer) return; // Remote text cannot overwrite locally finalized speech.
       // Never permanently suppress a host relay just because the PIN window
       // once detected local captions. Prefer the live host feed, with local
       // Meet as an immediate fallback if that feed stops for 1.8 seconds.
@@ -1042,9 +969,44 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       });
     });
 
-    // Existing Meet preload still captures 16-kHz PCM. Unlike previous builds,
-    // these bytes go ONLY to this machine's streaming Zipformer worker.
-    activateParticipantLocalRecognition();
+    onAudioChunk(pcmBuffer => {
+      if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
+
+      // Deepgram is disabled: never send Meet PCM to the transcription provider.
+      // Audio capture may still exist for the unchanged Meet controller, but the
+      // bytes stop here and never leave the desktop process.
+      if (!DEEPGRAM_FALLBACK_ENABLED) return;
+
+      // Deepgram is a true fallback: do not start it because a caption DOM node
+      // has not appeared while the meeting is quiet. Start only after admitted
+      // Meet audio is actually audible for 4 seconds without a validated Google
+      // caption update. Any later Meet caption immediately disables fallback and
+      // closes its Deepgram stream on the backend.
+      if (localCaptionAdmitted && !deepgramFallbackActive) {
+        if (pcmLooksAudible(pcmBuffer)) {
+          if (!audibleWithoutCaptionSince) audibleWithoutCaptionSince = Date.now();
+          const lastCaptionReference = localCaptionLastAt || audibleWithoutCaptionSince;
+          if (Date.now() - Math.max(lastCaptionReference, audibleWithoutCaptionSince) >= 4000) {
+            const hadMeetCaptions = localCaptionReady || Boolean(localCaptionLastAt);
+            localCaptionReady = false;
+            activateDeepgramFallback(hadMeetCaptions
+              ? 'no Meet caption updates during audible speech'
+              : 'no Meet caption text during audible speech');
+          }
+        } else {
+          audibleWithoutCaptionSince = 0;
+        }
+      }
+
+      // Normal path never sends Meet audio off the device. Audio is forwarded
+      // only if the local Meet-caption observer failed after admission.
+      if (!deepgramFallbackActive || localCaptionReady) return;
+      if (!firstAudioSeen) {
+        firstAudioSeen = true;
+        sendStatus('Deepgram fallback active. Streaming Meet audio for transcription...');
+      }
+      sendAudioChunk(pcmBuffer);
+    });
 
     sendStatus('Meet opened. Click Ask to Join manually when ready.');
 
@@ -1061,7 +1023,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
 
   } catch (err) {
     stopRemoteTranscriptStream();
-    stopParticipantLocalRecognition();
+    onAudioChunk(() => {});
     resetRuntimeFlags();
     console.error('[Main] join-meet error:', err);
 
@@ -1181,8 +1143,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => {
-  stopHostLocalRecognition();
-  stopParticipantLocalRecognition();
   stopHostCaptionRelay();
   stopOverlayTopmostGuard();
   stopOverlayPointerGuard();
@@ -1191,8 +1151,6 @@ app.on('will-quit', () => {
 });
 
 app.on('window-all-closed', async () => {
-  stopHostLocalRecognition();
-  stopParticipantLocalRecognition();
   resetRuntimeFlags();
   await leaveMeet().catch(() => {});
   stopRemoteTranscriptStream();

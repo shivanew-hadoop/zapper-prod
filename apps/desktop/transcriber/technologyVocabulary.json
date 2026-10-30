@@ -1,5 +1,5 @@
 {
-  "description": "Curated, deterministic on-device terminology corrections for English streaming Zipformer (and legacy Meet-caption code). Matches only complete words/phrases; does not use online APIs or alter saved final sentences.",
+  "description": "Low-latency deterministic corrections for Google Meet live captions. Handles single-token and multi-token phonetic forms; no Deepgram, network, buffering or timers. Context-guard ambiguous terms.",
   "terms": [
     {
       "term": "AWS",
@@ -84,7 +84,14 @@
         "kubernett",
         "kuber netes",
         "kuber net is",
-        "cuber netes"
+        "cuber netes",
+        "kuber net ease",
+        "kuber netties",
+        "cube er net ease",
+        "cube or net ease",
+        "kube r netes",
+        "kube netes",
+        "kube and eighties"
       ]
     },
     {
@@ -120,7 +127,11 @@
         "terraform",
         "terrafrom",
         "terrafarm",
-        "terraforme"
+        "terraforme",
+        "terra form",
+        "terra from",
+        "tera form",
+        "terra farm"
       ]
     },
     {
@@ -139,21 +150,25 @@
         "gitub",
         "githup",
         "githab",
-        "githob"
+        "githob",
+        "git hub",
+        "get hub"
       ]
     },
     {
       "term": "GitLab",
       "variants": [
         "gitlab",
-        "git-lab"
+        "git-lab",
+        "git lab"
       ]
     },
     {
       "term": "Bitbucket",
       "variants": [
         "bitbucket",
-        "bit-bucket"
+        "bit-bucket",
+        "bit bucket"
       ]
     },
     {
@@ -169,7 +184,10 @@
       "variants": [
         "ci/cd",
         "ci-cd",
-        "cicd"
+        "cicd",
+        "ci cd",
+        "c i c d",
+        "cic d"
       ]
     },
     {
@@ -199,7 +217,8 @@
       "term": "Prometheus",
       "variants": [
         "prometheus",
-        "promethius"
+        "promethius",
+        "prom eth eus"
       ]
     },
     {
@@ -207,14 +226,16 @@
       "variants": [
         "grafana",
         "grafanna",
-        "graffana"
+        "graffana",
+        "gra fana"
       ]
     },
     {
       "term": "OpenTelemetry",
       "variants": [
         "opentelemetry",
-        "open-telemetry"
+        "open-telemetry",
+        "open telemetry"
       ]
     },
     {
@@ -222,7 +243,8 @@
       "variants": [
         "javascript",
         "java-script",
-        "javasript"
+        "javasript",
+        "java script"
       ]
     },
     {
@@ -230,7 +252,8 @@
       "variants": [
         "typescript",
         "type-script",
-        "typescipt"
+        "typescipt",
+        "type script"
       ]
     },
     {
@@ -263,7 +286,9 @@
       "variants": [
         "node.js",
         "nodejs",
-        "node-js"
+        "node-js",
+        "node js",
+        "node j s"
       ]
     },
     {
@@ -332,7 +357,8 @@
       "term": "API",
       "variants": [
         "api",
-        "a-p-i"
+        "a-p-i",
+        "a p i"
       ]
     },
     {
@@ -373,13 +399,15 @@
     {
       "term": "JSON",
       "variants": [
-        "json"
+        "json",
+        "j son"
       ]
     },
     {
       "term": "YAML",
       "variants": [
-        "yaml"
+        "yaml",
+        "yam l"
       ]
     },
     {
@@ -425,14 +453,17 @@
       "term": "GraphQL",
       "variants": [
         "graphql",
-        "graph-ql"
+        "graph-ql",
+        "graph ql",
+        "graph q l"
       ]
     },
     {
       "term": "WebSocket",
       "variants": [
         "websocket",
-        "web-socket"
+        "web-socket",
+        "web socket"
       ]
     },
     {
@@ -445,7 +476,8 @@
       "term": "SQL",
       "variants": [
         "sql",
-        "s-q-l"
+        "s-q-l",
+        "s q l"
       ]
     },
     {
@@ -473,7 +505,12 @@
         "postgressql",
         "postgre-sql",
         "postgrasql",
-        "postgre-s-q-l"
+        "postgre-s-q-l",
+        "postgre sql",
+        "postgre sequel",
+        "postgres sql",
+        "postgress sql",
+        "post gray sql"
       ]
     },
     {
@@ -496,7 +533,8 @@
         "mongodb",
         "mongo-db",
         "mongdb",
-        "mongobd"
+        "mongobd",
+        "mongo db"
       ]
     },
     {
@@ -526,7 +564,8 @@
       "term": "DynamoDB",
       "variants": [
         "dynamodb",
-        "dynamo-db"
+        "dynamo-db",
+        "dynamo db"
       ]
     },
     {
@@ -567,7 +606,9 @@
       "variants": [
         "kafka",
         "kafca",
-        "kafcka"
+        "kafcka",
+        "kaf ka",
+        "kaffka"
       ],
       "contextBefore": [
         "apache",
@@ -600,7 +641,8 @@
       "term": "PySpark",
       "variants": [
         "pyspark",
-        "py-spark"
+        "py-spark",
+        "pie spark"
       ]
     },
     {
@@ -645,14 +687,16 @@
       "term": "RabbitMQ",
       "variants": [
         "rabbitmq",
-        "rabbit-mq"
+        "rabbit-mq",
+        "rabbit mq"
       ]
     },
     {
       "term": "LLM",
       "variants": [
         "llm",
-        "l-l-m"
+        "l-l-m",
+        "l l m"
       ]
     },
     {
@@ -665,7 +709,8 @@
     {
       "term": "RAG",
       "variants": [
-        "rag"
+        "rag",
+        "r a g"
       ],
       "contextBefore": [
         "llm",
@@ -690,14 +735,16 @@
       "term": "PyTorch",
       "variants": [
         "pytorch",
-        "py-torch"
+        "py-torch",
+        "pie torch"
       ]
     },
     {
       "term": "TensorFlow",
       "variants": [
         "tensorflow",
-        "tensor-flow"
+        "tensor-flow",
+        "tensor flow"
       ]
     },
     {
@@ -718,7 +765,8 @@
       "term": "Hugging Face",
       "variants": [
         "huggingface",
-        "hugging-face"
+        "hugging-face",
+        "hugging face"
       ]
     },
     {
@@ -730,21 +778,29 @@
         "land chain",
         "landchain",
         "land chane",
-        "lang chane"
+        "lang chane",
+        "land chains",
+        "lang chains",
+        "lang ch ain",
+        "land ch ain",
+        "lang chen",
+        "lang chan"
       ]
     },
     {
       "term": "LlamaIndex",
       "variants": [
         "llamaindex",
-        "llama-index"
+        "llama-index",
+        "llama index"
       ]
     },
     {
       "term": "OpenAI",
       "variants": [
         "openai",
-        "open-ai"
+        "open-ai",
+        "open ai"
       ]
     },
     {
@@ -755,209 +811,11 @@
         "lang graph",
         "land graph",
         "landgraph",
-        "lang graft"
-      ]
-    },
-    {
-      "term": "FastAPI",
-      "variants": [
-        "fastapi",
-        "fast api",
-        "fast a p i"
-      ]
-    },
-    {
-      "term": "Next.js",
-      "variants": [
-        "nextjs",
-        "next js"
-      ]
-    },
-    {
-      "term": "Express.js",
-      "variants": [
-        "expressjs",
-        "express js"
-      ]
-    },
-    {
-      "term": "Spring Cloud",
-      "variants": [
-        "spring cloud"
-      ]
-    },
-    {
-      "term": "GitOps",
-      "variants": [
-        "gitops",
-        "git ops"
-      ]
-    },
-    {
-      "term": "Azure DevOps",
-      "variants": [
-        "azure devops"
-      ]
-    },
-    {
-      "term": "BigQuery",
-      "variants": [
-        "bigquery",
-        "big query"
-      ]
-    },
-    {
-      "term": "CloudWatch",
-      "variants": [
-        "cloudwatch",
-        "cloud watch"
-      ]
-    },
-    {
-      "term": "CloudFormation",
-      "variants": [
-        "cloudformation",
-        "cloud formation"
-      ]
-    },
-    {
-      "term": "AWS Lambda",
-      "variants": [
-        "aws lambda"
-      ]
-    },
-    {
-      "term": "Apache Flink",
-      "variants": [
-        "apache flink"
-      ]
-    },
-    {
-      "term": "Delta Lake",
-      "variants": [
-        "delta lake"
-      ]
-    },
-    {
-      "term": "MLflow",
-      "variants": [
-        "mlflow",
-        "ml flow"
-      ]
-    },
-    {
-      "term": "Vertex AI",
-      "variants": [
-        "vertex ai"
-      ]
-    },
-    {
-      "term": "Amazon Bedrock",
-      "variants": [
-        "amazon bedrock"
-      ]
-    },
-    {
-      "term": "MCP",
-      "variants": [
-        "mcp",
-        "m c p"
-      ]
-    },
-    {
-      "term": "ChromaDB",
-      "variants": [
-        "chromadb",
-        "chroma db"
-      ]
-    },
-    {
-      "term": "FAISS",
-      "variants": [
-        "faiss"
-      ]
-    },
-    {
-      "term": "Vector database",
-      "variants": [
-        "vector database",
-        "vector db"
-      ]
-    },
-    {
-      "term": "OAuth2",
-      "variants": [
-        "oauth2",
-        "oauth 2"
-      ]
-    },
-    {
-      "term": "Microservices",
-      "variants": [
-        "microservices",
-        "micro services"
-      ]
-    },
-    {
-      "term": "Data Lakehouse",
-      "variants": [
-        "data lakehouse",
-        "data lake house"
-      ]
-    },
-    {
-      "term": "OpenShift",
-      "variants": [
-        "openshift",
-        "open shift"
-      ]
-    },
-    {
-      "term": "Helm Charts",
-      "variants": [
-        "helm charts"
-      ]
-    },
-    {
-      "term": "Apache Iceberg",
-      "variants": [
-        "apache iceberg"
-      ]
-    },
-    {
-      "term": "RabbitMQ Streams",
-      "variants": [
-        "rabbitmq streams"
-      ]
-    },
-    {
-      "term": "Graph RAG",
-      "variants": [
-        "graph rag"
-      ]
-    },
-    {
-      "term": "Anthropic",
-      "variants": [
-        "anthropic"
-      ]
-    },
-    {
-      "term": "Cloud Run",
-      "variants": [
-        "cloud run"
-      ]
-    },
-    {
-      "term": "Postman",
-      "variants": [
-        "postman"
-      ]
-    },
-    {
-      "term": "Playwright",
-      "variants": [
-        "playwright"
+        "lang graft",
+        "land graphs",
+        "lang graphs",
+        "land graft",
+        "lang graff"
       ]
     }
   ]

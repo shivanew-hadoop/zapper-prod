@@ -5,13 +5,12 @@ const { overlayReadinessMessage } = require('./readiness');
 const PORT = 9999;
 let wss = null;
 let audioCb = () => {};
-let hostAudioCb = () => {};
 let clients = new Set();
 
 function startAudioWSServer({ isOverlayReady } = {}) {
   if (wss) return true;
 
-  wss = new WebSocket.Server({ host: '127.0.0.1', port: PORT });
+  wss = new WebSocket.Server({ port: PORT });
   clients = new Set();
 
   wss.on('connection', (ws, request) => {
@@ -23,14 +22,6 @@ function startAudioWSServer({ isOverlayReady } = {}) {
       });
       return;
     }
-    // Keep host and PIN viewer raw PCM streams on their own desktops.
-    const isHost = request?.url === '/host-audio';
-    const isParticipant = request?.url === '/' || request?.url === '/participant-audio';
-    const origin = String(request?.headers?.origin || '');
-    if ((!isHost && !isParticipant) || (origin && !/^https:\/\/meet\.google\.com$/.test(origin))) {
-      ws.close(1008, 'unsupported audio source');
-      return;
-    }
     clients.add(ws);
     console.log('[AudioRelay] Meet audio client connected');
 
@@ -38,7 +29,7 @@ function startAudioWSServer({ isOverlayReady } = {}) {
       if (!data || data.length === 0) return;
       try {
         const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        if (isHost) hostAudioCb(buf); else audioCb(buf);
+        audioCb(buf);
       } catch (err) {
         console.error('[AudioRelay] Audio chunk error:', err.message);
       }
@@ -70,10 +61,7 @@ function onAudioChunk(cb) {
   audioCb = typeof cb === 'function' ? cb : () => {};
 }
 
-function onHostAudioChunk(cb) { hostAudioCb = typeof cb === 'function' ? cb : () => {}; }
-
 function stopAudioWSServer() {
-  hostAudioCb = () => {};
   audioCb = () => {};
 
   for (const ws of clients) {
@@ -87,4 +75,4 @@ function stopAudioWSServer() {
   }
 }
 
-module.exports = { startAudioWSServer, onAudioChunk, onHostAudioChunk, stopAudioWSServer };
+module.exports = { startAudioWSServer, onAudioChunk, stopAudioWSServer };

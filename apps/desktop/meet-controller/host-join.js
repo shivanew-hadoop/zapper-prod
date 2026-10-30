@@ -7,7 +7,8 @@
 const { BrowserWindow, screen, session, systemPreferences } = require('electron');
 const path = require('node:path');
 
-const HOST_PARTITION = 'persist:zapper-host-meet'; // separate from the participant profile
+const HOST_PARTITION = 'persist:zapper-host-meet'; // prefer the existing host identity
+const SHARED_GOOGLE_PARTITION = 'persist:gmeet-profile'; // existing signed-in Zapper Google identity
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -115,7 +116,8 @@ async function hostAutomation(hostName) {
   const stillWrong = buttons().some(b => CAMERA_ON.test(labelOf(b)) || MIC_OFF.test(labelOf(b)));
   if (stillWrong) return { state: 'preparing' };
 
-  const PATTERNS = ['join now', 'ask to join', 'request to join', 'join meeting', 'join this call', 'join call', 'switch here', 'join here'];
+  const PATTERNS = ['join now', 'ask to join', 'request to join', 'join meeting', 'join this call', 'join call', 'switch here', 'join here',
+    'continue as guest', 'join as guest', 'join as a guest', 'join without signing in'];
   for (const b of buttons()) {
     if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
     const l = labelOf(b);
@@ -129,8 +131,25 @@ async function hostAutomation(hostName) {
   return { state: 'searching' };
 }
 
-function allowMediaForHostSession() {
-  const ses = session.fromPartition(HOST_PARTITION);
+// Reuse an authenticated Google profile already saved by Zapper instead of
+// sending the user into an embedded Google OAuth screen on every session.
+// The original host profile wins (including when both profiles are signed in);
+// this does not read browser cookies, passwords or remote credentials.
+const GOOGLE_AUTH_COOKIE_NAMES = new Set(['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID']);
+async function hasSavedGoogleAuth(partition) {
+  try {
+    const cookies = await session.fromPartition(partition).cookies.get({ domain: '.google.com' });
+    return cookies.some(cookie => GOOGLE_AUTH_COOKIE_NAMES.has(cookie.name));
+  } catch (_) { return false; }
+}
+async function chooseHostPartition() {
+  if (await hasSavedGoogleAuth(HOST_PARTITION)) return HOST_PARTITION;
+  if (await hasSavedGoogleAuth(SHARED_GOOGLE_PARTITION)) return SHARED_GOOGLE_PARTITION;
+  return HOST_PARTITION; // anonymous join attempt where Meet policy allows it
+}
+
+function allowMediaForHostSession(partition = HOST_PARTITION) {
+  const ses = session.fromPartition(partition);
   ses.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['media', 'microphone', 'camera', 'notifications'].includes(permission));
   });
@@ -204,20 +223,25 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   if (process.platform === 'darwin' && systemPreferences?.askForMediaAccess) {
     await systemPreferences.askForMediaAccess('microphone').catch(() => {});
   }
-  allowMediaForHostSession();
+  const hostPartition = await chooseHostPartition();
+  allowMediaForHostSession(hostPartition);
 
   const display = screen.getPrimaryDisplay();
-  const width = 520, height = 400;
+  // Google Meet hides or moves Join / Sign-in controls in a 520x400 viewport.
+  // Keep the *same* embedded host window and Google profile; only give its
+  // pre-join page enough usable screen space. The window is hidden once joined.
+  const width = Math.min(980, Math.max(360, display.workArea.width - 24));
+  const height = Math.min(700, Math.max(320, display.workArea.height - 24));
   const win = new BrowserWindow({
     width, height,
-    x: display.workArea.x + display.workArea.width - width - 12,
-    y: display.workArea.y + display.workArea.height - height - 12,
+    x: display.workArea.x + Math.max(0, display.workArea.width - width - 12),
+    y: display.workArea.y + Math.max(0, display.workArea.height - height - 12),
     show: true,
     title: 'Zapper Host — Google Meet',
     autoHideMenuBar: true,
     backgroundColor: '#202124',
     webPreferences: {
-      partition: HOST_PARTITION,
+      partition: hostPartition,
       // Host audio interception must execute before Meet initializes WebRTC.
       // Keep nodeIntegration OFF; this setting affects this host window only.
       contextIsolation: false,
@@ -242,7 +266,7 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
   let busy = false;
   let lastClickAt = 0;
   let joinedTicks = 0;
-  let askedSignIn = false;
+  let blockedNoticeSent = false;
   let lastNavAt = Date.now();
   let lastProgressAt = Date.now();
   let lastState = '';
@@ -264,9 +288,17 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       const onRoom = currentUrl.includes(roomCode);
       // Bounced to the Meet home / landing page (e.g. "Returning to home screen"): go back.
       if (!onGoogleSignIn && !onRoom && /^https:\/\/meet\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
-      // Signed in through Google (one-time): return to the room afterwards.
+      // Authenticated Google account pages may redirect; return to the same room.
       if (!onGoogleSignIn && !onRoom && /^https:\/\/(myaccount|www)\.google\.com\//.test(currentUrl)) { await reopenRoom(); return; }
-      if (onGoogleSignIn) { lastProgressAt = Date.now(); return; } // let the host sign in undisturbed
+      if (onGoogleSignIn) {
+        // Google owns authentication; embedded OAuth must not be scripted.
+        // No automatic password entry, CAPTCHA bypass or login-page injection.
+        if (!blockedNoticeSent) {
+          blockedNoticeSent = true;
+          say('Host mode: Google requires account authentication. Automatic joining cannot complete until Google permits access.');
+        }
+        return;
+      }
 
       const result = await win.webContents.executeJavaScript(`(${hostAutomation.toString()})(${JSON.stringify(sanitizeName(name))})`, true);
       if (result.state !== lastState) { lastState = result.state; lastProgressAt = Date.now(); }
@@ -284,18 +316,28 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
       } else if (result.state === 'waiting') {
         say('Host mode: waiting to be admitted to the meeting…');
       } else if (result.state === 'cant_join' || result.state === 'signin_required') {
-        const signedIn = await hostSignedIn();
-        if (!signedIn && !askedSignIn) {
-          // Google will not let an anonymous guest in: sign in ONCE in this window.
-          askedSignIn = true;
-          showHostWindow(win);
-          say('Host mode: sign in to Google in the Zapper Host window (one time). It continues automatically afterwards.');
-          await win.loadURL('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(meetUrl), { userAgent: USER_AGENT }).catch(() => {});
-        } else if (reloads < 8) {
+        // Never navigate into Google's login page from this embedded browser.
+        // First retry the original meeting link a limited number of times; if
+        // Google still blocks the session, surface a truthful status instead.
+        if (reloads < 2) {
           await reopenRoom();
+        } else if (!blockedNoticeSent) {
+          blockedNoticeSent = true;
+          say('Host mode: Google rejected automatic joining or requires a signed-in account. Zapper cannot bypass Google authentication or meeting access controls.');
         }
-      } else if (Date.now() - lastProgressAt > 30000 && reloads < 6) {
-        // Stuck on the pre-join page for 30 s: reload the room and try again.
+      } else if (result.state === 'searching' && Date.now() - lastProgressAt > 12000) {
+        // Retry a slow prejoin screen twice without prompting the host to click
+        // Join or continually navigating away from the meeting. If Google is
+        // blocking the session, report it rather than implying success.
+        lastProgressAt = Date.now();
+        if (reloads < 2) {
+          say('Host mode: waiting for Google Meet controls; retrying automatically…');
+          await reopenRoom();
+        } else if (!blockedNoticeSent) {
+          blockedNoticeSent = true;
+          say('Host mode: Google Meet did not expose a Join button. Authentication, bot verification or meeting permissions may be blocking auto-join.');
+        }
+      } else if (Date.now() - lastProgressAt > 30000 && reloads < 2) {
         lastProgressAt = Date.now();
         await reopenRoom();
       }
@@ -331,13 +373,6 @@ function showHostWindow(win) {
     win.show();
     win.focus();
   } catch (_) {}
-}
-
-async function hostSignedIn() {
-  try {
-    const cookies = await session.fromPartition(HOST_PARTITION).cookies.get({ name: 'SAPISID' });
-    return cookies.length > 0;
-  } catch (_) { return false; }
 }
 
 function toggleHostWindow() {
@@ -401,4 +436,4 @@ function leaveHost({ preserveRecovery = false } = {}) {
   try { if (win && !win.isDestroyed()) win.destroy(); } catch (_) {}
 }
 
-module.exports = { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL };
+module.exports = { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl, hostAutomation, sanitizeName, MEET_URL, chooseHostPartition };

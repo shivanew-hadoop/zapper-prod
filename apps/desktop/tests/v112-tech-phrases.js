@@ -69,7 +69,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 
 const overlay = fs.readFileSync(path.join(__dirname, '../overlay/overlay.js'), 'utf8');
 const hostCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/host-caption-preload.js'), 'utf8');
 const pinCollector = fs.readFileSync(path.join(__dirname, '../meet-controller/meet-preload.js'), 'utf8');
-assert.equal(pkg.version, '1.0.14');
+assert.equal(pkg.version, '1.0.16');
 assert(pkg.build.files.includes('transcriber/**/*'), 'dictionary must be bundled in installer');
 assert(main.includes("require('./transcriber/technologyCorrections')"));
 assert(main.includes('const DEEPGRAM_FALLBACK_ENABLED = false'));
@@ -122,6 +122,6 @@ const t0 = performance.now();
 for (let i = 0; i < count; i++) correctTechnologyTerms(sample);
 const avgMs = (performance.now() - t0) / count;
 assert(avgMs < 0.75, `unexpected processing overhead: ${avgMs}ms`);
-console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.0.14', terms: terms.length,
+console.log(JSON.stringify({ ok: true, base: '1.0.7', version: '1.0.16', terms: terms.length,
   retainedLines: 155, noHistoryRedraw: true, ukPreserved: true, deepgramOff: true,
   averageCorrectionMs: +avgMs.toFixed(4) }));

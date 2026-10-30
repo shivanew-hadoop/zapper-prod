@@ -1,6 +1,6 @@
 {
   "name": "@zapper/desktop",
-  "version": "1.0.14",
+  "version": "1.0.16",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "npm run prepare:local-model && electron-builder --win nsis --x64",
-    "check": "node --check main.js && node --check transcriber/localZipformer.js && node --check transcriber/localZipformerWorker.js && node --check transcriber/localFinalLedger.js && node --check meet-controller/host-audio-tap.js && node --check audio-ws/server.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/host-caption-preload.js && node --check meet-controller/meet-chat-rows.js && node --check transcriber/technologyCorrections.js && node --check transcriber/hostCaptionRelay.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/meet-chat-rows.js && node tests/host-chat-preload.js && node tests/group-send.js && node tests/overlay-stability.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/host-meet-recovery.js && node tests/host-caption-preload.js && node tests/meet-empty-calls-guard.js && node tests/host-caption-relay.js && node tests/focused-relay-cursor.js && node tests/overlay-readiness.js && node tests/v112-tech-phrases.js && node tests/v113-stable-captions.js && node tests/local-zipformer.js && node tests/local-worker-execution.js",
+    "check": "node --check main.js && node --check transcriber/localZipformer.js && node --check transcriber/localZipformerWorker.js && node --check transcriber/localFinalLedger.js && node --check meet-controller/host-audio-tap.js && node --check audio-ws/server.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/host-caption-preload.js && node --check meet-controller/meet-chat-rows.js && node --check transcriber/technologyCorrections.js && node --check transcriber/hostCaptionRelay.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/meet-chat-rows.js && node tests/host-chat-preload.js && node tests/group-send.js && node tests/overlay-stability.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/host-meet-recovery.js && node tests/host-caption-preload.js && node tests/meet-empty-calls-guard.js && node tests/host-caption-relay.js && node tests/focused-relay-cursor.js && node tests/overlay-readiness.js && node tests/v112-tech-phrases.js && node tests/v113-stable-captions.js && node tests/local-zipformer.js && node tests/local-worker-execution.js && node tests/host-prejoin-visibility.js && node tests/host-auto-profile.js",
     "dist:portable": "npm run prepare:local-model && electron-builder --win portable --x64",
     "test:chat": "node tests/chat-noise.js",
     "prepare:local-model": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-stt-model.ps1"

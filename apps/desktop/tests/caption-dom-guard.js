@@ -94,13 +94,13 @@ assert.equal(cleanCaptionText('arrow_downwardJump to bottom'), '', 'standalone J
 assert.equal(cleanCaptionText('We should jump to bottom of the document'), 'We should jump to bottom of the document', 'ordinary spoken words must not be over-filtered');
 assert(!mainSource.includes("activateDeepgramFallback('caption DOM not detected')"), 'quiet meetings must not activate Deepgram just because caption DOM is absent');
 assert(mainSource.includes('const DEEPGRAM_FALLBACK_ENABLED = false;'), 'desktop Deepgram fallback must remain OFF by default');
-assert(mainSource.includes('activateParticipantLocalRecognition()'), 'each PIN viewer must start local recognition');
-assert(!/sendAudioChunk\(pcmBuffer\)/.test(mainSource), 'Meet PCM must never be forwarded to remote Deepgram');
-assert(mainSource.includes('onAudioChunk(pcm => participantLocalRecognizer?.push(pcm))'), '16-kHz PCM must go to local worker');
+assert(mainSource.includes('if (!DEEPGRAM_FALLBACK_ENABLED) return;'), 'audio chunks must never reach Deepgram while disabled');
+assert(mainSource.includes('localCaptionAdmitted && !deepgramFallbackActive'), 'fallback must be gated by admitted meeting audio');
+assert(mainSource.includes('>= 4000'), 'fallback must require sustained audible speech without captions');
 
 // Caption stream regressions: stable committed words must not be replayed
 // when Meet revises a single token, nor when it extends the same utterance.
-const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionCommittedEnd', 'captionDelta', 'isCaptionContinuation'];
+const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionDelta', 'isCaptionContinuation'];
 const captionContext = vm.createContext({ normalizeText, captionCommitted: [] });
 for (const name of captionFns) vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, captionContext);
 vm.runInContext(`captionCommitted = captionWordsOf('Thank you for joining the call').norm;`, captionContext);

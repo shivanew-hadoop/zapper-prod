@@ -1,6 +1,6 @@
 'use strict';
 
-// Synchronous, precompiled technology corrections on the existing Google Meet caption path.
+// Synchronous, exact-match technology corrections on the v1.0.7 caption path.
 // Both single words and short multiword phonetic variants are compiled once.
 // No timers, buffering, audio capture, network requests or fuzzy matching.
 const { terms } = require('./technologyVocabulary.json');

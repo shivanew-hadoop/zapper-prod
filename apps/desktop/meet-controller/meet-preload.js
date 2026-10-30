@@ -657,32 +657,6 @@
     return matches >= Math.max(4, Math.ceil(Math.max(x.length, y.length) * 0.86));
   }
 
-  // See host-caption-preload.js committedEnd(): align the committed words with
-  // the current row so one revised/inserted word in an already committed
-  // sentence cannot make the whole row print again. -1 = unrelated utterance.
-  function captionCommittedEnd(done, norm) {
-    const c = Math.min(done.length, 250);
-    const C = done.slice(done.length - c);
-    const n = Math.min(norm.length, c + 40);
-    if (c < 3 || n < 3) return -1;
-    const w = n + 1, table = new Uint16Array((c + 1) * w);
-    for (let i = 1; i <= c; i += 1) for (let j = 1; j <= n; j += 1) {
-      table[i * w + j] = captionTokenNear(C[i - 1], norm[j - 1]) ? table[(i - 1) * w + j - 1] + 1
-        : Math.max(table[(i - 1) * w + j], table[i * w + j - 1]);
-    }
-    let i = c, j = n, matches = 0, firstA = -1, firstB = -1, lastA = -1, lastB = -1;
-    while (i > 0 && j > 0) {
-      if (captionTokenNear(C[i - 1], norm[j - 1]) && table[i * w + j] === table[(i - 1) * w + j - 1] + 1) {
-        if (lastB < 0) { lastA = i - 1; lastB = j - 1; }
-        firstA = i - 1; firstB = j - 1; matches += 1; i -= 1; j -= 1;
-      } else if (table[(i - 1) * w + j] >= table[i * w + j - 1]) i -= 1;
-      else j -= 1;
-    }
-    if (matches < 2 || firstB > 3) return -1;
-    if (matches < 0.6 * (lastB - firstB + 1) || matches < 0.6 * (c - firstA)) return -1;
-    return Math.min(norm.length, lastB + 1 + (c - 1 - lastA));
-  }
-
   function captionDelta(text) {
     if (!captionCommitted.length) return text;
     const { words, norm } = captionWordsOf(text);
@@ -701,8 +675,6 @@
       for (let i = 0; i < m; i += 1) { if (done[done.length - m + i] !== norm[i]) { same = false; break; } }
       if (same) return words.slice(m).join(' ');
     }
-    const aligned = captionCommittedEnd(done, norm);
-    if (aligned >= 0) return aligned >= norm.length ? '' : words.slice(aligned).join(' ');
     captionCommitted = []; // a different utterance
     return text;
   }
@@ -818,8 +790,6 @@
       }
       if (tail || head) return true;
     }
-    // Same row with a word revised/inserted in the middle: still one utterance.
-    if (captionCommittedEnd(a, b) >= 0) return true;
     return false;
   }
 

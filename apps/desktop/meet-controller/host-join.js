@@ -218,9 +218,11 @@ async function joinAsHost({ meetUrl, name }, onStatus = () => {}) {
     backgroundColor: '#202124',
     webPreferences: {
       partition: HOST_PARTITION,
-      contextIsolation: true,
+      // Host audio interception must execute before Meet initializes WebRTC.
+      // Keep nodeIntegration OFF; this setting affects this host window only.
+      contextIsolation: false,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       backgroundThrottling: false,
       preload: path.join(__dirname, 'host-caption-preload.js'),
       autoplayPolicy: 'no-user-gesture-required',

@@ -1,5 +1,5 @@
 {
-  "description": "Exact, low-latency technology vocabulary for Google Meet captions. Includes limited multiword pronunciation variants (e.g. land chain -> LangChain). No fuzzy matching, timers or network calls. Extend carefully to avoid changing normal speech.",
+  "description": "Curated, deterministic on-device terminology corrections for English streaming Zipformer (and legacy Meet-caption code). Matches only complete words/phrases; does not use online APIs or alter saved final sentences.",
   "terms": [
     {
       "term": "AWS",
@@ -756,6 +756,208 @@
         "land graph",
         "landgraph",
         "lang graft"
+      ]
+    },
+    {
+      "term": "FastAPI",
+      "variants": [
+        "fastapi",
+        "fast api",
+        "fast a p i"
+      ]
+    },
+    {
+      "term": "Next.js",
+      "variants": [
+        "nextjs",
+        "next js"
+      ]
+    },
+    {
+      "term": "Express.js",
+      "variants": [
+        "expressjs",
+        "express js"
+      ]
+    },
+    {
+      "term": "Spring Cloud",
+      "variants": [
+        "spring cloud"
+      ]
+    },
+    {
+      "term": "GitOps",
+      "variants": [
+        "gitops",
+        "git ops"
+      ]
+    },
+    {
+      "term": "Azure DevOps",
+      "variants": [
+        "azure devops"
+      ]
+    },
+    {
+      "term": "BigQuery",
+      "variants": [
+        "bigquery",
+        "big query"
+      ]
+    },
+    {
+      "term": "CloudWatch",
+      "variants": [
+        "cloudwatch",
+        "cloud watch"
+      ]
+    },
+    {
+      "term": "CloudFormation",
+      "variants": [
+        "cloudformation",
+        "cloud formation"
+      ]
+    },
+    {
+      "term": "AWS Lambda",
+      "variants": [
+        "aws lambda"
+      ]
+    },
+    {
+      "term": "Apache Flink",
+      "variants": [
+        "apache flink"
+      ]
+    },
+    {
+      "term": "Delta Lake",
+      "variants": [
+        "delta lake"
+      ]
+    },
+    {
+      "term": "MLflow",
+      "variants": [
+        "mlflow",
+        "ml flow"
+      ]
+    },
+    {
+      "term": "Vertex AI",
+      "variants": [
+        "vertex ai"
+      ]
+    },
+    {
+      "term": "Amazon Bedrock",
+      "variants": [
+        "amazon bedrock"
+      ]
+    },
+    {
+      "term": "MCP",
+      "variants": [
+        "mcp",
+        "m c p"
+      ]
+    },
+    {
+      "term": "ChromaDB",
+      "variants": [
+        "chromadb",
+        "chroma db"
+      ]
+    },
+    {
+      "term": "FAISS",
+      "variants": [
+        "faiss"
+      ]
+    },
+    {
+      "term": "Vector database",
+      "variants": [
+        "vector database",
+        "vector db"
+      ]
+    },
+    {
+      "term": "OAuth2",
+      "variants": [
+        "oauth2",
+        "oauth 2"
+      ]
+    },
+    {
+      "term": "Microservices",
+      "variants": [
+        "microservices",
+        "micro services"
+      ]
+    },
+    {
+      "term": "Data Lakehouse",
+      "variants": [
+        "data lakehouse",
+        "data lake house"
+      ]
+    },
+    {
+      "term": "OpenShift",
+      "variants": [
+        "openshift",
+        "open shift"
+      ]
+    },
+    {
+      "term": "Helm Charts",
+      "variants": [
+        "helm charts"
+      ]
+    },
+    {
+      "term": "Apache Iceberg",
+      "variants": [
+        "apache iceberg"
+      ]
+    },
+    {
+      "term": "RabbitMQ Streams",
+      "variants": [
+        "rabbitmq streams"
+      ]
+    },
+    {
+      "term": "Graph RAG",
+      "variants": [
+        "graph rag"
+      ]
+    },
+    {
+      "term": "Anthropic",
+      "variants": [
+        "anthropic"
+      ]
+    },
+    {
+      "term": "Cloud Run",
+      "variants": [
+        "cloud run"
+      ]
+    },
+    {
+      "term": "Postman",
+      "variants": [
+        "postman"
+      ]
+    },
+    {
+      "term": "Playwright",
+      "variants": [
+        "playwright"
       ]
     }
   ]

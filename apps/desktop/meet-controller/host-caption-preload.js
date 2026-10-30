@@ -548,3 +548,9 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
 })();
+
+// Host PCM tap is independent of captions. It never alters the Meet microphone.
+if (typeof process !== 'undefined' && process.versions?.electron) {
+  try { require('./host-audio-tap').installHostAudioTap(); }
+  catch (e) { console.warn('[ZapperHostAudio]', e.message); }
+}

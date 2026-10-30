@@ -87,7 +87,12 @@ let lastFinalCaptionText = '';
 function setTranscriptionSource(source) {
   if (!transcriptionSourceEl) return;
   const normalized = String(source || '').trim().toLowerCase();
-  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting');
+  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting', 'source-local');
+  if (normalized === 'local-zipformer') {
+    transcriptionSourceEl.textContent = 'Source: Local Streaming Zipformer (offline)';
+    transcriptionSourceEl.classList.add('source-local');
+    return;
+  }
   if (normalized === 'meet-captions') {
     transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
     transcriptionSourceEl.classList.add('source-meet');
@@ -907,7 +912,7 @@ window.electronAPI.onHostSessionStopped?.((reason) => {
 });
 
 window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
-  if (source === 'meet-captions' || source === 'deepgram') setTranscriptionSource(source);
+  if (source === 'meet-captions' || source === 'deepgram' || source === 'local-zipformer') setTranscriptionSource(source);
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();

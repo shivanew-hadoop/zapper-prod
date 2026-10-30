@@ -3,7 +3,7 @@
   let ipcRenderer = null;
   try { ipcRenderer = require('electron').ipcRenderer; } catch (_) {}
 
-  const WS_URL = 'ws://localhost:9999';
+  const WS_URL = 'ws://127.0.0.1:9999/participant-audio';
   const TARGET_RATE = 16000;
 
   let ws;

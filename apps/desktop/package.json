@@ -1,19 +1,21 @@
 {
   "name": "@zapper/desktop",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Zapper desktop private Google Meet transcription client",
   "main": "main.js",
   "productName": "Zapper",
   "author": "Zapper",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --x64",
-    "check": "node --check main.js && node --check audio-ws/server.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/host-caption-preload.js && node --check meet-controller/meet-chat-rows.js && node --check transcriber/technologyCorrections.js && node --check transcriber/hostCaptionRelay.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/meet-chat-rows.js && node tests/host-chat-preload.js && node tests/group-send.js && node tests/overlay-stability.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/host-meet-recovery.js && node tests/host-caption-preload.js && node tests/meet-empty-calls-guard.js && node tests/host-caption-relay.js && node tests/focused-relay-cursor.js && node tests/overlay-readiness.js && node tests/v112-tech-phrases.js && node tests/v113-stable-captions.js",
-    "dist:portable": "electron-builder --win portable --x64",
-    "test:chat": "node tests/chat-noise.js"
+    "dist": "npm run prepare:local-model && electron-builder --win nsis --x64",
+    "check": "node --check main.js && node --check transcriber/localZipformer.js && node --check transcriber/localZipformerWorker.js && node --check transcriber/localFinalLedger.js && node --check meet-controller/host-audio-tap.js && node --check audio-ws/server.js && node --check preload.js && node --check overlay/overlay.js && node --check meet-controller/index.js && node --check meet-controller/meet-preload.js && node --check meet-controller/host-join.js && node --check meet-controller/host-caption-preload.js && node --check meet-controller/meet-chat-rows.js && node --check transcriber/technologyCorrections.js && node --check transcriber/hostCaptionRelay.js && node --check transcriber/remoteDeepgram.js && node tests/chat-noise.js && node tests/meet-chat-rows.js && node tests/host-chat-preload.js && node tests/group-send.js && node tests/overlay-stability.js && node tests/caption-dom-guard.js && node tests/host-join.js && node tests/host-meet-recovery.js && node tests/host-caption-preload.js && node tests/meet-empty-calls-guard.js && node tests/host-caption-relay.js && node tests/focused-relay-cursor.js && node tests/overlay-readiness.js && node tests/v112-tech-phrases.js && node tests/v113-stable-captions.js && node tests/local-zipformer.js && node tests/local-worker-execution.js",
+    "dist:portable": "npm run prepare:local-model && electron-builder --win portable --x64",
+    "test:chat": "node tests/chat-noise.js",
+    "prepare:local-model": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-stt-model.ps1"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "sherpa-onnx-node": "1.13.8"
   },
   "devDependencies": {
     "electron": "^30.5.1",
@@ -42,6 +44,7 @@
       "app-config.json",
       "overlay/**/*",
       "meet-controller/**/*",
+      "models/README.md",
       "transcriber/**/*",
       "audio-ws/**/*",
       "package.json",
@@ -76,6 +79,20 @@
       "include": "build/installer.nsh",
       "deleteAppDataOnUninstall": false,
       "artifactName": "Zapper-Setup-x64.${ext}"
-    }
+    },
+    "asarUnpack": [
+      "**/node_modules/sherpa-onnx-node/**"
+    ],
+    "extraResources": [
+      {
+        "from": "models/sherpa-onnx-streaming-zipformer-en-2023-06-21",
+        "to": "models/sherpa-onnx-streaming-zipformer-en-2023-06-21",
+        "filter": [
+          "*.onnx",
+          "tokens.txt",
+          "bpe.model"
+        ]
+      }
+    ]
   }
 }

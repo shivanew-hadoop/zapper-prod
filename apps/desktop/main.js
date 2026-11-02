@@ -75,6 +75,7 @@ const {
 const { joinAsHost, leaveHost, setHostMic, resumeHost, toggleHostWindow, parseHostControlUrl, parseHostJoinUrl } = require('./meet-controller/host-join');
 const { startHostCaptionRelay, stopHostCaptionRelay, publishHostCaption, publishHostChat } = require('./transcriber/hostCaptionRelay');
 const { correctTechnologyTerms } = require('./transcriber/technologyCorrections');
+const { startLocalWhisper, pushLocalAudio, stopLocalWhisper } = require('./transcriber/localWhisper');
 
 // zapper://host-join?meet=<link>&name=<name> — sent by the web portal right after Create
 // Session. The desktop app joins that Meet as the host (camera off, microphone on).
@@ -159,6 +160,7 @@ let localCaptionReady = false;
 let localCaptionAdmitted = false;
 let localCaptionLastAt = 0;
 let hostRelayLastAt = 0;
+let localAsrLastAt = 0;
 let localCaptionLastText = '';
 let localCaptionLastWasFinal = false;
 let deepgramFallbackActive = false;
@@ -648,6 +650,7 @@ async function stopActiveCaptureRuntime(statusText = 'Stopped') {
   try {
     stopSessionStatusPoller();
     onAudioChunk(() => {});
+    stopLocalWhisper();
     // Flush the latest Meet interim into the session ledger before closing the
     // authenticated socket. The API accepts a short grace window after host End.
     if (localCaptionLastText && !localCaptionLastWasFinal) {
@@ -960,7 +963,9 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       if (payload.fromHost) hostRelayLastAt = Date.now();
-      else if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
+      // Preserve the existing authoritative host/native caption priority.
+      if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
+      if (Date.now() - localAsrLastAt < 2500) return;
       overlayWindow.webContents.send('transcript', {
         text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,
@@ -969,8 +974,29 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       });
     });
 
+    startLocalWhisper({
+      onTranscript: event => {
+        if (!started || transcriptLimitReached) return;
+        // Preserve Google native captions and authoritative host captions when available.
+        // Local ASR is independent for each participant; do not wait for host relay.
+        const text = correctTechnologyTerms(String(event.text || '').trim());
+        if (!text) return;
+        // ASR is fallback only: never overwrite fresh Meet captions or host relay.
+        if (Date.now() - localCaptionLastAt < 2000 || Date.now() - hostRelayLastAt < 2000) return;
+        localAsrLastAt = Date.now();
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.webContents.send('transcript', { text, isFinal: true,
+            source: 'local-whisper', origin: 'local-asr' });
+        }
+        // Do not relay local ASR: each participant independently transcribes its own Meet audio.
+        // Existing native caption relay and PDF pipeline remain unchanged.
+      },
+      onStatus: message => sendStatus(message)
+    });
+
     onAudioChunk(pcmBuffer => {
       if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
+      pushLocalAudio(pcmBuffer); // local-only; never sends PCM to backend
 
       // Deepgram is disabled: never send Meet PCM to the transcription provider.
       // Audio capture may still exist for the unchanged Meet controller, but the

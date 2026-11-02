@@ -1,0 +1,1 @@
+Optional offline model location: asr-models/Xenova/whisper-base.en/ . Download the complete Transformers.js-compatible ONNX model repository here before npm run dist to bundle it. Without it, model downloads on first use.

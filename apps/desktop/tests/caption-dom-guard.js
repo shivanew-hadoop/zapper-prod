@@ -100,7 +100,7 @@ assert(mainSource.includes('>= 4000'), 'fallback must require sustained audible 
 
 // Caption stream regressions: stable committed words must not be replayed
 // when Meet revises a single token, nor when it extends the same utterance.
-const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionDelta', 'isCaptionContinuation'];
+const captionFns = ['captionWordsOf', 'captionTokenNear', 'captionMostlySame', 'captionCommittedEnd', 'captionDelta', 'isCaptionContinuation'];
 const captionContext = vm.createContext({ normalizeText, captionCommitted: [] });
 for (const name of captionFns) vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, captionContext);
 vm.runInContext(`captionCommitted = captionWordsOf('Thank you for joining the call').norm;`, captionContext);

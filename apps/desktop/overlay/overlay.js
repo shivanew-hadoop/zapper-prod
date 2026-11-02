@@ -921,6 +921,10 @@ window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
       // everything on screen (including the sentence now being spoken) alone.
       return;
     }
+    // Ignore repeated finalized hypotheses from the same caption source too.
+    // This is display-only: existing host relay, PIN and PDF logic is untouched.
+    if (normalizeCaption(lastFinalCaptionText) === normalizeCaption(cleanFinal) &&
+        Date.now() - lastFinalCaptionAt < 3500) return;
     lastFinalCaptionAt = Date.now();
     lastFinalCaptionOrigin = origin;
     lastFinalCaptionText = cleanFinal;

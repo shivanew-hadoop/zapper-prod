@@ -161,6 +161,8 @@ let localCaptionAdmitted = false;
 let localCaptionLastAt = 0;
 let hostRelayLastAt = 0;
 let localAsrLastAt = 0;
+let localAsrReady = false;
+let localAudioLastAt = 0;
 let localCaptionLastText = '';
 let localCaptionLastWasFinal = false;
 let deepgramFallbackActive = false;
@@ -412,6 +414,9 @@ function resetRuntimeFlags() {
   localCaptionAdmitted = false;
   localCaptionLastAt = 0;
   hostRelayLastAt = 0;
+  localAsrLastAt = 0;
+  localAsrReady = false;
+  localAudioLastAt = 0;
   localCaptionLastText = '';
   localCaptionLastWasFinal = false;
   deepgramFallbackActive = false;
@@ -557,9 +562,9 @@ ipcMain.on('meet-caption-message', (_, payload) => {
   captionFallbackTimer = null;
   sendTranscriptionSource('meet-captions');
 
-  // Use local Meet captions immediately if the authoritative host relay is
-  // unavailable. Otherwise all PIN viewers display the same host feed.
-  if (Date.now() - hostRelayLastAt > 1800 && overlayWindow && !overlayWindow.isDestroyed()) {
+  // Participant-local captions always beat the host relay. Once local ASR is
+  // delivering text, use it; native Meet captions bridge model warm-up/failure.
+  if (Date.now() - localAsrLastAt > 4000 && overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('transcript', { text, isFinal: Boolean(payload.isFinal), source: 'meet-captions', origin: 'local-meet' });
   }
   // Backend receives text only for session-level PDF persistence and other PIN
@@ -912,6 +917,7 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     audioRelayStarted = true;
 
     let firstAudioSeen = false;
+    let localPcmNoticeSent = false;
 
     // Open the PIN-authorized caption socket BEFORE any Meet audio arrives.
     // Without this, a silent desktop cannot receive the host's browser
@@ -963,9 +969,9 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
       if (!DEEPGRAM_FALLBACK_ENABLED && payload.source === 'deepgram') return;
       if (payload.source === 'deepgram' && !deepgramFallbackActive) return;
       if (payload.fromHost) hostRelayLastAt = Date.now();
-      // Preserve the existing authoritative host/native caption priority.
-      if (Date.now() - localCaptionLastAt < 1500 || Date.now() - hostRelayLastAt < 1800) return;
-      if (Date.now() - localAsrLastAt < 2500) return;
+      // Relay is a LAST RESORT for a participant. Never let host text override
+      // locally recognized speech or local Meet captions.
+      if (Date.now() - localCaptionLastAt < 4000 || Date.now() - localAsrLastAt < 6000) return;
       overlayWindow.webContents.send('transcript', {
         text: correctTechnologyTerms(String(payload.text || '')),
         isFinal: payload.isFinal,
@@ -977,12 +983,11 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
     startLocalWhisper({
       onTranscript: event => {
         if (!started || transcriptLimitReached) return;
-        // Preserve Google native captions and authoritative host captions when available.
-        // Local ASR is independent for each participant; do not wait for host relay.
+        // Each participant independently transcribes the PCM received by its
+        // own Meet renderer. No host relay/network round-trip is involved.
         const text = correctTechnologyTerms(String(event.text || '').trim());
         if (!text) return;
-        // ASR is fallback only: never overwrite fresh Meet captions or host relay.
-        if (Date.now() - localCaptionLastAt < 2000 || Date.now() - hostRelayLastAt < 2000) return;
+        // Do not gate participant-local ASR on host activity.
         localAsrLastAt = Date.now();
         if (overlayWindow && !overlayWindow.isDestroyed()) {
           overlayWindow.webContents.send('transcript', { text, isFinal: true,
@@ -991,11 +996,19 @@ ipcMain.handle('join-meet', async (_, { meetUrl, guestName, sessionToken, sessio
         // Do not relay local ASR: each participant independently transcribes its own Meet audio.
         // Existing native caption relay and PDF pipeline remain unchanged.
       },
-      onStatus: message => sendStatus(message)
+      onStatus: message => {
+        localAsrReady = /^JS Whisper ready/.test(String(message));
+        sendStatus(message);
+      }
     });
 
     onAudioChunk(pcmBuffer => {
       if (!pcmBuffer || !pcmBuffer.length || transcriptLimitReached) return;
+      localAudioLastAt = Date.now();
+      if (!localPcmNoticeSent) {
+        localPcmNoticeSent = true;
+        sendStatus('Participant-local Google Meet PCM received; local ASR processing on this computer.');
+      }
       pushLocalAudio(pcmBuffer); // local-only; never sends PCM to backend
 
       // Deepgram is disabled: never send Meet PCM to the transcription provider.

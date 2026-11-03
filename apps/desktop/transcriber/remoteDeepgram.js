@@ -6,8 +6,6 @@ let socket = null;
 let transcriptCb = () => {};
 let opened = false;
 let bufferedChunks = [];
-let bufferedLocalCaptions = [];
-let bufferedMeetChat = [];
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let currentUrl = '';
@@ -17,7 +15,6 @@ let permanentClose = false;
 let streamGeneration = 0;
 
 const MAX_BUFFERED_CHUNKS = 40;
-const MAX_BUFFERED_LOCAL_CAPTIONS = 120;
 const BACKEND_HEARTBEAT_MS = 15000;
 const BASE_RECONNECT_MS = 3000;
 const MAX_RECONNECT_MS = 15000;
@@ -59,9 +56,7 @@ function isSocketActive() {
 
 function shouldReconnect(code) {
   if (manuallyStopped || permanentClose) return false;
-  // A Railway deploy or orderly transport restart may use 1000. Only an
-  // intentional local stop or explicit authentication failure is permanent.
-  if (code === 1008) return false;
+  if (code === 1000 || code === 1008) return false;
   return Boolean(currentUrl);
 }
 
@@ -113,17 +108,6 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
       }
     }, BACKEND_HEARTBEAT_MS);
 
-    for (const chat of bufferedMeetChat.splice(0)) {
-      if (generation !== streamGeneration || socket !== ws || ws.readyState !== WebSocket.OPEN) break;
-      try { ws.send(chat); } catch (_) { bufferedMeetChat.unshift(chat); break; }
-    }
-    for (const caption of bufferedLocalCaptions.splice(0)) {
-      try {
-        if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ ...JSON.parse(caption), catchUpOnly: true }));
-        }
-      } catch (_) {}
-    }
     for (const chunk of bufferedChunks.splice(0)) {
       try {
         if (generation === streamGeneration && socket === ws && ws.readyState === WebSocket.OPEN) ws.send(chunk);
@@ -156,15 +140,12 @@ function connectSocket(url, isReconnect = false, generation = streamGeneration) 
       return emit({ type: 'session_ended', text: msg.message || 'This Zapper session is no longer active.' });
     }
     if (msg.type === 'speech_started') return emit({ type: 'speech_started' });
-    if (msg.type === 'meet_chat' && msg.message) return emit(msg);
 
     if (msg.type === 'transcript' && msg.text) {
       return emit({
         text: msg.text,
         isFinal: !!msg.isFinal,
         confidence: msg.confidence || 0,
-        source: String(msg.source || 'deepgram'),
-        fromHost: Boolean(msg.fromHost),
       });
     }
   });
@@ -213,8 +194,6 @@ function startRemoteTranscriptStream({ backendUrl, sessionToken, googleEmail = '
   reconnectAttempt = 0;
   opened = false;
   bufferedChunks = [];
-  bufferedLocalCaptions = [];
-  bufferedMeetChat = [];
 
   connectSocket(currentUrl, false, generation);
   return true;
@@ -238,49 +217,6 @@ function sendAudioChunk(pcmBuffer) {
   }
 }
 
-
-function sendLocalCaption({ text, isFinal = false, capturedAt = Date.now() } = {}) {
-  const cleanText = String(text || '').trim().slice(0, 12000);
-  if (!cleanText || manuallyStopped || permanentClose) return false;
-  const message = JSON.stringify({
-    type: 'local_caption',
-    text: cleanText,
-    isFinal: Boolean(isFinal),
-    capturedAt: Math.max(1, Number(capturedAt) || Date.now()),
-  });
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    try { socket.send(message); return true; } catch (_) {}
-  }
-  // Final captions are the PDF ledger. Keep a bounded local queue across a
-  // short Railway/network reconnect; interim captions remain best-effort.
-  if (isFinal) {
-    bufferedLocalCaptions.push(message);
-    if (bufferedLocalCaptions.length > MAX_BUFFERED_LOCAL_CAPTIONS) bufferedLocalCaptions.shift();
-    if (!isSocketActive() && currentUrl && !reconnectTimer) {
-      scheduleReconnect(1006, 'local caption arrived while backend socket was closed', streamGeneration);
-    }
-  }
-  return false;
-}
-
-function publishMeetChat(payload) {
-  const message = String(payload?.message || '').trim();
-  if (!message || manuallyStopped || permanentClose) return false;
-  const chat = JSON.stringify({ type: 'meet_chat', sender: String(payload.sender || 'Participant'),
-    message, meetTime: String(payload.meetTime || ''), chatKey: String(payload.chatKey || '') });
-  if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 512 * 1024) {
-    try { socket.send(chat); return true; } catch (_) {}
-  }
-  bufferedMeetChat.push(chat);
-  // Only the disconnected-network backlog is bounded. Normal message count
-  // and Google Meet's own content-length rules are not changed by Zapper.
-  if (bufferedMeetChat.length > 200) bufferedMeetChat.shift();
-  if (!isSocketActive() && currentUrl && !reconnectTimer) {
-    scheduleReconnect(1006, 'group message queued while relay disconnected', streamGeneration);
-  }
-  return true; // accepted for delivery after reconnect
-}
-
 function stopRemoteTranscriptStream() {
   // Invalidate every event handler belonging to the previous stream before
   // asking its socket to close. This prevents a late close/error event from
@@ -289,8 +225,6 @@ function stopRemoteTranscriptStream() {
   manuallyStopped = true;
   permanentClose = false;
   bufferedChunks = [];
-  bufferedLocalCaptions = [];
-  bufferedMeetChat = [];
   opened = false;
   currentUrl = '';
   reconnectAttempt = 0;
@@ -310,7 +244,5 @@ function stopRemoteTranscriptStream() {
 module.exports = {
   startRemoteTranscriptStream,
   sendAudioChunk,
-  sendLocalCaption,
-  publishMeetChat,
   stopRemoteTranscriptStream,
 };

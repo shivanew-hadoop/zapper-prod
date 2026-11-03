@@ -1,27 +1,18 @@
 // audio-ws/server.js — local relay from Meet preload to Electron main process
 const WebSocket = require('ws');
-const { overlayReadinessMessage } = require('./readiness');
 
 const PORT = 9999;
 let wss = null;
 let audioCb = () => {};
 let clients = new Set();
 
-function startAudioWSServer({ isOverlayReady } = {}) {
+function startAudioWSServer() {
   if (wss) return true;
 
   wss = new WebSocket.Server({ port: PORT });
   clients = new Set();
 
-  wss.on('connection', (ws, request) => {
-    // Do not pass host readiness checks into the existing Meet audio relay.
-    if (request?.url === '/host-ready') {
-      ws.on('error', () => {});
-      ws.send(overlayReadinessMessage(isOverlayReady), () => {
-        try { ws.close(1000, 'readiness delivered'); } catch (_) {}
-      });
-      return;
-    }
+  wss.on('connection', (ws) => {
     clients.add(ws);
     console.log('[AudioRelay] Meet audio client connected');
 

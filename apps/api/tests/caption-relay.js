@@ -23,9 +23,6 @@ class ClientSocket extends EventEmitter {
   assert.equal(a.messages[0].source, 'host');
   assert.equal(b.messages[0].text, 'Host speaking');
   assert.equal(other.messages.length, 0);
-  assert.equal(relay.publish('room1', { text: 'Local caption', isFinal: true }, { excludeSocket: a, source: 'meet-captions' }), 1);
-  assert.equal(a.messages.filter(m => m.text === 'Local caption').length, 0);
-  assert.equal(b.messages.at(-1).source, 'meet-captions');
   b.bufferedAmount = 1024 * 1024;
   assert.equal(relay.publish('room1', { text: 'Interim', isFinal: false }), 1);
   relay.unsubscribe('room1', a);
@@ -66,7 +63,6 @@ class ClientSocket extends EventEmitter {
     appendLiveTranscriptSegment() {},
     appendLiveTranscriptSegments() {},
     touchSessionSpeech() {},
-    touchSessionCaption() {},
   };
   const apiFile = path.join(__dirname, '../server.js');
   const code = fs.readFileSync(apiFile, 'utf8');
@@ -80,12 +76,11 @@ class ClientSocket extends EventEmitter {
     if (moduleName === 'http') return { createServer: () => ({ listen(_p, _host, callback) { callback(); } }) };
     if (moduleName === './session-control') return () => sessionControl;
     if (moduleName === './live-caption-relay') return relayFactory;
-    if (moduleName === './meet-chat-filter') return require('../meet-chat-filter');
     if (moduleName === './demo-inquiries') return { installDemoInquiries() {} };
     return require(moduleName);
   };
   vm.runInNewContext(code, {
-    require: fakeRequire, __dirname: path.dirname(apiFile), process: { env: { JWT_SECRET: 'fake', DEEPGRAM_API_KEY: 'test-key', ZAPPER_ENABLE_DEEPGRAM_STT: 'true', WEB_ORIGINS: 'https://www.zapperapp.in' } },
+    require: fakeRequire, __dirname: path.dirname(apiFile), process: { env: { JWT_SECRET: 'fake', DEEPGRAM_API_KEY: 'test-key', WEB_ORIGINS: 'https://www.zapperapp.in' } },
     Buffer, URL, URLSearchParams, console: { log() {}, error() {} },
     setInterval: (...args) => setInterval(...args), clearInterval, setTimeout, clearTimeout, setImmediate,
   }, { filename: apiFile });
@@ -96,138 +91,32 @@ class ClientSocket extends EventEmitter {
   serverSocket.emit('connection', foreign, fakeReq('x'));
   serverSocket.emit('connection', host, fakeReq('host'));
   assert.equal(deepgramSockets.length, 0, 'desktop should listen without sending any PCM');
-  // Deepgram is hard OFF even when a deployment still has the old key and
-  // enable flag. Host and participant audio must never reach a provider.
-  host.emit('message', Buffer.alloc(3200), true);
-  desktopA.emit('message', Buffer.alloc(3200), true);
+  host.emit('message', Buffer.alloc(3200));
   await new Promise(resolve => process.nextTick(resolve));
-  assert.equal(deepgramSockets.length, 0, 'no provider connection even with legacy enable flag');
+  assert.equal(deepgramSockets.length, 1, 'host PCM opens the transcription provider');
+  const providerPayload = (text, final) => Buffer.from(JSON.stringify({
+    is_final: final, speech_final: final, channel: { alternatives: [{ transcript: text, confidence: .9 }] }
+  }));
+  deepgramSockets[0].emit('message', providerPayload('hello from web host', false));
+  deepgramSockets[0].emit('message', providerPayload('hello from web host', true));
+  assert.deepEqual(desktopA.messages.filter(m => m.type === 'transcript').map(m => [m.text, m.isFinal]),
+    [['hello from web host', false], ['hello from web host', true]]);
+  assert.deepEqual(desktopB.messages.filter(m => m.type === 'transcript').map(m => m.source), ['host', 'host']);
+  assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'another PIN cannot view host captions');
 
-  // If a PIN client speaks first, the host must still take over as the
-  // authoritative caption source as soon as its own Meet observer publishes.
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'early PIN caption', isFinal: false, capturedAt: Date.now()
-  })), false);
-  assert(desktopB.messages.some(m => m.text === 'early PIN caption'), 'PIN caption can lead while host is silent');
-  assert(host.messages.some(m => m.text === 'early PIN caption'),
-    'host overlay must be able to recover from authorized PIN captions when its Meet observer stalls');
-  // The primary caption path stays live: original text from Meet is persisted
-  // and relayed only to viewers authorized for the same session.
-  host.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'I wanted to see', isFinal: true, capturedAt: Date.now()
-  })), false);
+  // Existing desktop -> backend transcription remains local, not rebroadcast.
+  desktopA.emit('message', Buffer.alloc(3200));
   await new Promise(resolve => process.nextTick(resolve));
-  assert.equal(desktopA.messages.find(m => m.text === 'I wanted to see')?.source, 'meet-captions');
-  assert.equal(desktopB.messages.find(m => m.text === 'I wanted to see')?.isFinal, true);
-  assert.equal(desktopB.messages.find(m => m.text === 'I wanted to see')?.fromHost, true,
-    'host preempts an earlier PIN caption leader');
-  const beforeReplay = desktopB.messages.filter(m => m.type === 'transcript').length;
-  host.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'offline archived phrase', isFinal: true,
-    capturedAt: Date.now() - 5000, catchUpOnly: true
-  })), false);
-  assert.equal(desktopB.messages.filter(m => m.type === 'transcript').length, beforeReplay,
-    'offline finals saved for PDF must not flood the live overlay');
-  assert.equal(foreign.messages.filter(m => m.type === 'transcript').length, 0, 'PIN isolation preserved');
-  assert.equal(host.messages.filter(m => m.text === 'I wanted to see').length, 0, 'no local echo');
-
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'caption from Meet DOM', isFinal: false, capturedAt: Date.now()
-  })), false);
-  await new Promise(resolve => process.nextTick(resolve));
-  assert.equal(desktopB.messages.find(m => m.text === 'caption from Meet DOM'), undefined,
-    'secondary PIN viewers must not replace the host as the caption relay leader');
-  assert.equal(desktopA.messages.find(m => m.text === 'caption from Meet DOM'), undefined, 'no echo to sender');
-  // A stalled host's Meet observer must no longer leave the host overlay
-  // silent while a PIN desktop is correctly receiving Google captions.
-  await new Promise(resolve => setTimeout(resolve, 3100));
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'live PIN fallback after host stalls', isFinal: false, capturedAt: Date.now()
-  })), false);
-  assert(host.messages.some(m => m.text === 'live PIN fallback after host stalls'),
-    'host subscription receives fallback after the silent-source window');
-  assert(desktopB.messages.some(m => m.text === 'live PIN fallback after host stalls'),
-    'other PIN overlay also continues without interruption');
-  host.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'host caption source resumes', isFinal: false, capturedAt: Date.now()
-  })), false);
-  assert(desktopB.messages.some(m => m.text === 'host caption source resumes'),
-    'live host Meet source immediately takes priority again');
-  assert(!host.messages.some(m => m.text === 'host caption source resumes'),
-    'host never receives its own relay as a duplicate');
-  assert.equal(deepgramSockets.length, 0, 'transcript relay never invokes Deepgram');
-
-  // Group chat is isolated to the same authorized room (host <-> all PIN clients).
-  host.emit('message', Buffer.from(JSON.stringify({
-    type: 'meet_chat', sender: 'Host', message: 'Please review the agenda', meetTime: '10:31 AM'
-  })), false);
-  assert.equal(desktopA.messages.filter(m => m.type === 'meet_chat' && m.message === 'Please review the agenda').length, 1);
-  assert.equal(desktopB.messages.filter(m => m.type === 'meet_chat' && m.message === 'Please review the agenda').length, 1);
-  assert.equal(foreign.messages.filter(m => m.type === 'meet_chat').length, 0);
-  assert.equal(host.messages.filter(m => m.type === 'meet_chat').length, 0, 'no echo to sending host');
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'meet_chat', sender: 'Alice', message: 'Yes, host', meetTime: '10:32 AM'
-  })), false);
-  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1);
-  assert.equal(desktopB.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1);
-  desktopB.emit('message', Buffer.from(JSON.stringify({
-    type: 'meet_chat', sender: 'Alice', message: 'Yes, host', meetTime: '10:32 AM'
-  })), false);
-  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Yes, host').length, 1,
-    'multiple Meet observers may see the same user message but must relay once');
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'meet_chat', sender: 'Google Meet', message: 'Are you still there?'
-  })), false);
-  assert.equal(host.messages.filter(m => m.type === 'meet_chat' && m.message === 'Are you still there?').length, 0,
-    'Meet administrative prompts are not real user chat');
-  desktopA.emit('message', Buffer.from(JSON.stringify({
-    type: 'meet_chat', sender: 'Alice', message: 'A'.repeat(12000), meetTime: '10:34 AM'
-  })), false);
-  assert.equal(host.messages.find(m => m.type === 'meet_chat' && m.message.length === 12000)?.message.length, 12000,
-    'Zapper must not truncate messages before Google Meet applies its length policy');
-  assert.equal(deepgramSockets.length, 0, 'group chat must never use Deepgram');
+  assert.equal(deepgramSockets.length, 2);
+  deepgramSockets[1].emit('message', providerPayload('desktop Meet audio', true));
+  assert.equal(desktopA.messages.at(-1).text, 'desktop Meet audio');
+  assert.equal(desktopB.messages.filter(m => m.text === 'desktop Meet audio').length, 0);
 
   desktopB.close();
-  host.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'after disconnect', isFinal: true, capturedAt: Date.now()
-  })), false);
-  await new Promise(resolve => process.nextTick(resolve));
+  deepgramSockets[0].emit('message', providerPayload('after disconnect', true));
   assert.equal(desktopB.messages.filter(m => m.text === 'after disconnect').length, 0);
-  assert.equal(desktopA.messages.find(m => m.text === 'after disconnect')?.text, 'after disconnect');
-  // Native desktop host token is allowed without a browser Origin; a hostile
-  // website with a different Origin is still rejected.
-  const nativeHost = new ClientSocket();
-  serverSocket.emit('connection', nativeHost, { headers: { host: 'localhost' }, url: '/stt?token=host' });
-  assert.equal(nativeHost.readyState, 1, 'native host caption relay may use authorized token without browser Origin');
-  const hostile = new ClientSocket();
-  serverSocket.emit('connection', hostile, { headers: { host: 'localhost', origin: 'https://evil.example' }, url: '/stt?token=host' });
-  assert.equal(hostile.readyState, 3, 'unauthorized browser origin must still be rejected');
-  nativeHost.close();
+  assert.equal(desktopA.messages.at(-1).text, 'after disconnect');
   desktopA.close(); foreign.close(); host.close();
-
-  // Default mode: no STT flag and even a configured legacy key must NEVER
-  // start a provider connection on binary PCM; authorized Meet captions relay.
-  const previousProviderCount = deepgramSockets.length;
-  vm.runInNewContext(code, {
-    require: fakeRequire, __dirname: path.dirname(apiFile),
-    process: { env: { JWT_SECRET: 'fake', DEEPGRAM_API_KEY: 'test-key', WEB_ORIGINS: 'https://www.zapperapp.in' } },
-    Buffer, URL, URLSearchParams, console: { log() {}, error() {} },
-    setInterval, clearInterval, setTimeout, clearTimeout, setImmediate,
-  }, { filename: apiFile });
-  const onlyCaptionSender = new ClientSocket(), onlyCaptionViewer = new ClientSocket();
-  serverSocket.emit('connection', onlyCaptionSender, fakeReq('a'));
-  serverSocket.emit('connection', onlyCaptionViewer, fakeReq('b'));
-  onlyCaptionSender.emit('message', Buffer.alloc(3200), true);
-  await new Promise(resolve => process.nextTick(resolve));
-  assert.equal(deepgramSockets.length, previousProviderCount, 'Deepgram stays OFF even with a legacy key');
-  onlyCaptionSender.emit('message', Buffer.from(JSON.stringify({
-    type: 'local_caption', text: 'Native Meet remains live', isFinal: true, capturedAt: Date.now()
-  })), false);
-  await new Promise(resolve => process.nextTick(resolve));
-  assert.equal(onlyCaptionViewer.messages.find(m => m.text === 'Native Meet remains live')?.source, 'meet-captions',
-    'caption-only mode retains authorized host/PIN relay');
-  onlyCaptionSender.close(); onlyCaptionViewer.close();
   console.log(JSON.stringify({ ok: true, hostCaptionForwardedToTwoSilentPINClients: true,
-    deepgramHardOff: true, nativeCaptionRelayPreserved: true,
-    interimAndFinal: true, crossSessionIsolated: true, disconnectRemoved: true }));
+    interimAndFinal: true, crossSessionIsolated: true, desktopCaptureUnchanged: true, disconnectRemoved: true }));
 })().catch(error => { console.error(error); process.exitCode = 1; });

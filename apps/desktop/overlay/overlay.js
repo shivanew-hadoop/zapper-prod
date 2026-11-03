@@ -25,7 +25,6 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const appVersionEl = document.getElementById('appVersion');
 const latestVersionBtn = document.getElementById('latestVersionBtn');
-const transcriptionSourceEl = document.getElementById('transcriptionSource');
 let privateCursor = null;
 
 async function initAppVersionAndDownload() {
@@ -67,6 +66,8 @@ let activeMeetUrl = '';
 let sessionStartedAt = 0;
 let activeGoogleEmail = '';
 let countdownInterval = null;
+const MAX_LINES = 100;
+const MAX_CHAT_MESSAGES = 60;
 const OUTGOING_ECHO_SUPPRESS_MS = 20000;
 const MIN_FONT = 10;
 const MAX_FONT = 34;
@@ -79,28 +80,6 @@ let transcriptRenderRestoring = false;
 let transcriptUserScrollIntent = false;
 let transcriptRenderVersion = 0;
 let finalizingSession = false;
-let hostMirrorActive = false;
-let lastFinalCaptionAt = 0;
-let lastFinalCaptionOrigin = '';
-let lastFinalCaptionText = '';
-
-function setTranscriptionSource(source) {
-  if (!transcriptionSourceEl) return;
-  const normalized = String(source || '').trim().toLowerCase();
-  transcriptionSourceEl.classList.remove('source-meet', 'source-deepgram', 'source-detecting');
-  if (normalized === 'meet-captions') {
-    transcriptionSourceEl.textContent = 'Source: Google Meet Captions';
-    transcriptionSourceEl.classList.add('source-meet');
-    return;
-  }
-  if (normalized === 'deepgram') {
-    transcriptionSourceEl.textContent = 'Source: Deepgram Fallback';
-    transcriptionSourceEl.classList.add('source-deepgram');
-    return;
-  }
-  transcriptionSourceEl.textContent = normalized === 'idle' ? 'Source: —' : 'Source: Detecting…';
-  transcriptionSourceEl.classList.add('source-detecting');
-}
 
 
 function normalizeGoogleMeetInput(value) {
@@ -196,6 +175,12 @@ function transcriptIsNearBottom() {
   return distance <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
 }
 
+function trimTranscriptHistoryIfFollowing() {
+  if (!transcriptAutoScroll || finalLines.length <= MAX_LINES) return false;
+  finalLines = finalLines.slice(-MAX_LINES);
+  return true;
+}
+
 function pauseTranscriptFollow() {
   if (!transcriptAutoScroll) return;
   transcriptAutoScroll = false;
@@ -205,6 +190,7 @@ function pauseTranscriptFollow() {
 function resumeTranscriptFollow() {
   if (transcriptAutoScroll) return;
   transcriptAutoScroll = true;
+  trimTranscriptHistoryIfFollowing();
   renderTranscript();
 }
 
@@ -300,13 +286,14 @@ function setSessionInfo(text, cls = '') {
   const cfg = await window.electronAPI.getAppConfig().catch(() => ({}));
   localStorage.setItem('backendUrl', cfg.backendUrl || DEFAULT_BACKEND_URL);
   showJoin();
-  // Zapper session authorization is the PIN. Google login is optional for
-  // meetings which allow guests; avoid launching Google Sign-In automatically.
   const login = await window.electronAPI.checkGoogleLogin().catch(() => ({ loggedIn: false }));
-  loginAlert.classList.add('hidden');
-  setSessionInfo(login.loggedIn
-    ? 'Google is signed in. Enter the 6-digit session PIN.'
-    : 'Enter your session PIN. Google sign-in is optional; Meet may require admission.', 'ok');
+  if (login.loggedIn) {
+    loginAlert.classList.add('hidden');
+    setSessionInfo('Google is signed in. Enter the 6-digit session PIN.', 'ok');
+    return;
+  }
+  showJoinError('You must log in with your Google account before joining. Google Sign-In is opening now.');
+  setTimeout(() => signinBtn.click(), 250);
 })();
 
 let overlayCollapsed = localStorage.getItem('overlayCollapsed') === 'true';
@@ -343,27 +330,20 @@ function formatChatTime(ts, displayTime = '') {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Append only. Chat history stays intact instead of repainting every message
-// whenever another participant sends to the group.
-let chatRenderedCount = 0;
 function renderMeetChat() {
   if (!chatMessagesEl) return;
   if (!chatMessages.length) {
-    chatMessagesEl.textContent = 'No messages yet.';
-    chatRenderedCount = 0;
+    chatMessagesEl.textContent = 'No host chat yet.';
     return;
   }
-  if (chatRenderedCount > chatMessages.length) chatRenderedCount = 0;
-  if (!chatRenderedCount) chatMessagesEl.textContent = '';
-  const incoming = chatMessages.slice(chatRenderedCount);
-  if (!incoming.length) return;
-  chatMessagesEl.insertAdjacentHTML('beforeend', incoming.map(item => `
+
+  chatMessagesEl.innerHTML = chatMessages.map(item => `
     <div class="chatMsg ${item.outgoing ? 'outgoing' : 'incoming'}">
-      <div class="chatMeta"><span class="chatSender">${escapeHtml(item.outgoing ? 'You' : (item.sender || 'Participant'))}</span><span>${escapeHtml(formatChatTime(item.timestamp, item.meetTime))}</span></div>
+      <div class="chatMeta"><span class="chatSender">${escapeHtml(item.outgoing ? 'You' : (item.sender || 'Host'))}</span><span>${escapeHtml(formatChatTime(item.timestamp, item.meetTime))}</span></div>
       <div class="chatText">${escapeHtml(item.message || '')}</div>
     </div>
-  `).join(''));
-  chatRenderedCount = chatMessages.length;
+  `).join('');
+
   requestAnimationFrame(() => { chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight; });
 }
 
@@ -425,18 +405,16 @@ function isRecentOutgoingEcho(message) {
 
 function isDuplicateChat(payload) {
   const chatKey = String(payload?.chatKey || '').trim();
-  if (chatKey && chatMessages.some(item => String(item.chatKey || '') === chatKey)) return true;
+  if (chatKey) return chatMessages.some(item => String(item.chatKey || '') === chatKey);
 
   const cleanSender = String(payload?.sender || '').trim().toLowerCase();
   const cleanMessage = String(payload?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const cleanTime = String(payload?.meetTime || '').trim().toLowerCase();
-  return chatMessages.some(item => {
-    if (String(item.message || '').replace(/\s+/g, ' ').trim().toLowerCase() !== cleanMessage) return false;
-    const sameSender = String(item.sender || '').trim().toLowerCase() === cleanSender;
-    const sameMeetTime = cleanTime && String(item.meetTime || '').trim().toLowerCase() === cleanTime;
-    const closeArrival = Math.abs((item.timestamp || 0) - (payload?.timestamp || 0)) < 4000;
-    return (sameSender && (sameMeetTime || closeArrival)) || (sameMeetTime && closeArrival);
-  });
+  return chatMessages.some(item =>
+    String(item.sender || '').trim().toLowerCase() === cleanSender &&
+    String(item.message || '').replace(/\s+/g, ' ').trim().toLowerCase() === cleanMessage &&
+    String(item.meetTime || '').trim().toLowerCase() === cleanTime
+  );
 }
 
 function isIncomingHostChat(payload) {
@@ -467,9 +445,10 @@ if (chatSendForm) {
       if (res && res.success) {
         rememberOutgoingChat(message);
         chatMessages.push({ sender: 'You', message, timestamp: Date.now(), outgoing: true });
+        if (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages = chatMessages.slice(-MAX_CHAT_MESSAGES);
         renderMeetChat();
         if (chatInput) chatInput.value = '';
-        statusEl.textContent = 'Group message accepted by Zapper.';
+        statusEl.textContent = 'Chat message sent to Meet host.';
       } else {
         statusEl.textContent = (res && res.error) || 'Could not send Meet chat message.';
       }
@@ -481,159 +460,38 @@ if (chatSendForm) {
   });
 }
 
-// Completed lines are append-only DOM nodes. Provisional text consists of
-// immutable confirmed-prefix *word* nodes plus one changing tail. Meet may
-// correct the last two interim words without repainting any settled words.
-let renderedFinalLines = [];
-let liveStableWordNodes = [];
-let liveMutableNode = null;
-let placeholderNode = null;
-let previousLiveWords = [];
-let frozenLiveWords = [];
-function clearProvisionalPrefix() {
-  for (const node of liveStableWordNodes) {
-    if (transcriptEl.contains(node)) transcriptEl.removeChild(node);
-  }
-  liveStableWordNodes = [];
-  frozenLiveWords = [];
-  previousLiveWords = [];
-}
-// ---- Printed words are never taken back ---------------------------------
-// Google Meet keeps revising its caption row. Once a word is on screen it stays:
-// a shorter/revised interim never removes or rewrites settled words, and a final
-// line never rewrites the words already printed from its interim. Only the two
-// mutable tail words (where technology corrections land) may still change.
-const liveKey = word => String(word || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-function liveNear(a, b) {
-  if (a === b) return true;
-  if (!a || !b || Math.max(a.length, b.length) < 4 || Math.abs(a.length - b.length) > 1) return false;
-  let i = 0, j = 0, edits = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { i++; j++; continue; }
-    if (++edits > 1) return false;
-    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
-  }
-  return edits + (i < a.length || j < b.length ? 1 : 0) <= 1;
-}
-// Align already-printed words `a` with new words `b`. matches = shared words;
-// end = index in `b` after the last printed word (trailing revised words count
-// as in-place substitutions), or -1 when nothing lines up.
-function alignPrinted(a, b) {
-  const x = a.map(liveKey), y = b.map(liveKey), w = y.length + 1;
-  const table = new Uint16Array((x.length + 1) * w);
-  for (let i = 1; i <= x.length; i++) for (let j = 1; j <= y.length; j++) {
-    table[i * w + j] = liveNear(x[i - 1], y[j - 1]) ? table[(i - 1) * w + j - 1] + 1
-      : Math.max(table[(i - 1) * w + j], table[i * w + j - 1]);
-  }
-  let i = x.length, j = y.length, matches = 0, lastA = -1, lastB = -1;
-  while (i > 0 && j > 0) {
-    if (liveNear(x[i - 1], y[j - 1]) && table[i * w + j] === table[(i - 1) * w + j - 1] + 1) {
-      if (lastB < 0) { lastA = i - 1; lastB = j - 1; }
-      matches++; i--; j--;
-    } else if (table[(i - 1) * w + j] >= table[i * w + j - 1]) i--; else j--;
-  }
-  return { matches, end: lastB < 0 ? -1 : Math.min(b.length, lastB + 1 + (a.length - 1 - lastA)) };
-}
-function relatedToPrinted(printed, next) {
-  const { matches } = alignPrinted(printed, next);
-  return matches >= Math.max(1, Math.ceil(0.4 * Math.min(printed.length, next.length)));
-}
-function reconcileLive(printed, next, frozenLen) {
-  let lead = 0;
-  while (lead < printed.length && lead < next.length && printed[lead] === next[lead]) lead++;
-  if (lead === printed.length) return { words: next };           // normal growth
-  if (lead === next.length) return { words: printed };           // shrink: keep what is shown
-  if (lead >= frozenLen) return { words: next };                 // only the mutable tail changed
-  const frozen = printed.slice(0, frozenLen);
-  if (!relatedToPrinted(frozen, next)) return { fresh: true };   // a different sentence
-  const { end } = alignPrinted(frozen, next);                    // Meet revised settled words: ignore it
-  return { words: frozen.concat(next.slice(Math.max(end, 0))) };
-}
-// What a final line should show: the words already printed for this sentence
-// plus whatever the final adds after them.
-function reconcileFinal(printed, finalText) {
-  const words = String(finalText || '').split(/\s+/).filter(Boolean);
-  if (!printed.length || !words.length) return { text: finalText };
-  if (!relatedToPrinted(printed, words)) return { promote: printed.join(' '), text: finalText };
-  const { end } = alignPrinted(printed, words);
-  const rest = end >= 0 && end < words.length ? words.slice(end) : [];
-  return { text: printed.concat(rest).join(' ') };
-}
 function renderTranscript() {
-  const samePrefix = renderedFinalLines.length <= finalLines.length &&
-    renderedFinalLines.every((line, index) => line === finalLines[index]);
-  if (!liveMutableNode || !transcriptEl.contains(liveMutableNode) || !samePrefix) {
-    transcriptEl.textContent = '';
-    renderedFinalLines = [];
-    previousLiveWords = [];
-    frozenLiveWords = [];
-    liveStableWordNodes = [];
-    placeholderNode = document.createTextNode('');
-    liveMutableNode = document.createTextNode('');
-    transcriptEl.append(placeholderNode, liveMutableNode);
-  }
-  let newFinalAdded = false;
-  for (let i = renderedFinalLines.length; i < finalLines.length; i++) {
-    const line = document.createTextNode((i ? '\n' : '') + finalLines[i]);
-    transcriptEl.insertBefore(line, liveStableWordNodes[0] || liveMutableNode);
-    renderedFinalLines.push(finalLines[i]);
-    newFinalAdded = true;
-  }
-  // Transfer an interim sentence to its final node in the SAME synchronous
-  // render pass. No blank intermediate frame, no full transcript replacement.
-  if (newFinalAdded || !interimText) clearProvisionalPrefix();
-  let words = String(interimText || '').split(/\s+/).filter(Boolean);
-  if (words.length && previousLiveWords.length) {
-    const kept = reconcileLive(previousLiveWords, words, frozenLiveWords.length);
-    if (kept.fresh) {
-      // Meet moved on to an unrelated sentence without a final for this one.
-      // Keep the printed words on screen as their own line instead of erasing them.
-      finalLines.push(previousLiveWords.join(' '));
-      renderedFinalLines.push(finalLines[finalLines.length - 1]);
-      const line = document.createTextNode((finalLines.length > 1 ? '\n' : '') + finalLines[finalLines.length - 1]);
-      transcriptEl.insertBefore(line, liveStableWordNodes[0] || liveMutableNode);
-      clearProvisionalPrefix();
-    } else words = kept.words;
-  }
-  let nextFrozen = frozenLiveWords;
-  if (words.length && previousLiveWords.length) {
-    let match = 0;
-    while (match < Math.min(words.length, previousLiveWords.length) &&
-           words[match] === previousLiveWords[match]) match++;
-    const lockUpTo = Math.max(0, Math.min(match, words.length - 2));
-    if (nextFrozen.every((word, i) => word === words[i])) {
-      if (lockUpTo > nextFrozen.length) nextFrozen = words.slice(0, lockUpTo);
-    } else {
-      // Meet started a different interim sentence. Old *final* lines remain.
-      clearProvisionalPrefix();
-      nextFrozen = [];
+  const text = [...finalLines, interimText].filter(Boolean).join('\n');
+  const shouldFollowLive = transcriptAutoScroll;
+  const renderVersion = ++transcriptRenderVersion;
+
+  transcriptRenderRestoring = true;
+  transcriptEl.textContent = text || 'Waiting for host to speak...';
+
+  const restorePosition = () => {
+    if (renderVersion !== transcriptRenderVersion) return;
+
+    if (shouldFollowLive && transcriptAutoScroll) {
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    } else if (!transcriptAutoScroll) {
+      // Use the current global lock, not a stale value captured by an earlier
+      // transcript render. That way a user wheel/drag always wins immediately.
+      const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);
+      transcriptEl.scrollTop = Math.min(transcriptScrollTopLock, maxTop);
     }
-  }
-  if (nextFrozen.length > frozenLiveWords.length) {
-    for (let i = frozenLiveWords.length; i < nextFrozen.length; i++) {
-      const node = document.createTextNode(
-        i === 0 ? (finalLines.length ? '\n' : '') + nextFrozen[i] : ' ' + nextFrozen[i]);
-      transcriptEl.insertBefore(node, liveMutableNode);
-      liveStableWordNodes.push(node);
-    }
-    frozenLiveWords = nextFrozen;
-  }
-  previousLiveWords = words;
-  const tailWords = words.slice(frozenLiveWords.length);
-  const tail = words.length ?
-    (frozenLiveWords.length ? ' ' : (finalLines.length ? '\n' : '')) + tailWords.join(' ') : '';
-  const placeholder = finalLines.length || words.length ? '' : 'Waiting for host to speak...';
-  const changed = newFinalAdded || liveMutableNode.nodeValue !== tail ||
-    placeholderNode.nodeValue !== placeholder || nextFrozen.length > frozenLiveWords.length;
-  if (liveMutableNode.nodeValue !== tail) liveMutableNode.nodeValue = tail;
-  if (placeholderNode.nodeValue !== placeholder) placeholderNode.nodeValue = placeholder;
-  if (!changed) return;
-  // A single scroll update avoids the old multi-frame jump/flicker.
-  if (transcriptAutoScroll) transcriptEl.scrollTop = transcriptEl.scrollHeight;
-  else if (!transcriptUserScrollIntent) {
-    const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);
-    transcriptEl.scrollTop = Math.min(transcriptScrollTopLock, maxTop);
-  }
+  };
+
+  // Restore synchronously and after layout. Interim text can reflow as words are
+  // appended; repeated restoration plus overflow-anchor:none makes the reading
+  // position deterministic until the user deliberately returns to the bottom.
+  restorePosition();
+  requestAnimationFrame(() => {
+    restorePosition();
+    requestAnimationFrame(() => {
+      restorePosition();
+      if (renderVersion === transcriptRenderVersion) transcriptRenderRestoring = false;
+    });
+  });
 }
 
 function showJoinError(msg) {
@@ -752,8 +610,13 @@ if (window.electronAPI.onGoogleSignInComplete) {
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  // Do not block captions for a guest who has a valid Zapper PIN. Meet's
-  // existing join controller decides whether the meeting admits that guest.
+  const login = await window.electronAPI.checkGoogleLogin().catch(() => ({ loggedIn: false }));
+  if (!login.loggedIn) {
+    showJoinError('You must log in with your Google account before joining. Google Sign-In is opening now.');
+    await window.electronAPI.googleSignIn().catch(() => null);
+    return;
+  }
+
   const pinInput = document.getElementById('sessionPin');
   const pin = String(pinInput?.value || '').replace(/\D/g, '').slice(0, 6);
   if (!/^\d{6}$/.test(pin)) {
@@ -872,73 +735,18 @@ if (window.electronAPI.onSessionEnded) {
     finalizeActiveSession({ endBackend: false, reason: message || 'This session is no longer active. Ask the host for a new PIN.' }).catch(() => null);
   });
 }
-if (window.electronAPI.onTranscriptionSource) {
-  window.electronAPI.onTranscriptionSource((source) => setTranscriptionSource(source));
-}
-
-// The automatically joined host Meet has a separate, caption-only path.
-// It works without an overlay Google login or a second participant PIN.
-// A PIN-connected desktop still uses its existing (independent) live view.
-window.electronAPI.onHostSessionActive?.(() => {
-  if (activeSessionToken) return;
-  if (!hostMirrorActive) {
-    hostMirrorActive = true;
-    transcriptArchive = [];
-    transcriptSegments = [];
-    finalLines = [];
-    interimText = '';
-    renderTranscript();
-  }
-  if (currentPanel !== 'live') showLive('Host Meet captions are live.');
-  leaveBtn.classList.add('hidden'); // Host End Session stays in the web portal.
-  setTranscriptionSource('meet-captions');
-});
-window.electronAPI.onHostSessionStopped?.((reason) => {
-  if (!hostMirrorActive) return;
-  hostMirrorActive = false;
-  if (activeSessionToken) return;
-  finalLines = [];
-  interimText = '';
-  transcriptArchive = [];
-  transcriptSegments = [];
-  renderTranscript();
-  showJoin({ force: true });
-  setSessionInfo(reason || 'Host session ended.');
-});
-
-window.electronAPI.onTranscript(({ text, isFinal, source, origin = '' }) => {
-  if (source === 'meet-captions' || source === 'deepgram') setTranscriptionSource(source);
+window.electronAPI.onTranscript(({ text, isFinal }) => {
   if (!text) return;
   if (isFinal) {
     const cleanFinal = text.trim();
-    const normalizeCaption = value => String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-    // After a local -> host relay handoff the same final can arrive twice.
-    // Never add/repaint the same finalized sentence within a short window.
-    if (origin && lastFinalCaptionOrigin && origin !== lastFinalCaptionOrigin &&
-        normalizeCaption(lastFinalCaptionText) === normalizeCaption(cleanFinal) &&
-        Date.now() - lastFinalCaptionAt < 5000) {
-      // Duplicate of a sentence that is already printed. Drop it and leave
-      // everything on screen (including the sentence now being spoken) alone.
-      return;
-    }
-    // Ignore repeated finalized hypotheses from the same caption source too.
-    // This is display-only: existing host relay, PIN and PDF logic is untouched.
-    if (normalizeCaption(lastFinalCaptionText) === normalizeCaption(cleanFinal) &&
-        Date.now() - lastFinalCaptionAt < 3500) return;
-    lastFinalCaptionAt = Date.now();
-    lastFinalCaptionOrigin = origin;
-    lastFinalCaptionText = cleanFinal;
     transcriptArchive.push(cleanFinal);
     transcriptSegments.push({ text: cleanFinal, at: Date.now() });
-    // The archive/PDF keeps Meet's final text; the screen keeps the words that
-    // were already printed from the interim and only appends what is new.
-    const shown = reconcileFinal(previousLiveWords.slice(), cleanFinal);
-    if (shown.promote) finalLines.push(shown.promote);
-    finalLines.push(shown.text);
+    finalLines.push(cleanFinal);
     // Never delete lines from the top while the user is reading older text.
     // Top-trimming was the hidden cause of the view moving down one line for
     // every new final transcript line even though auto-scroll was disabled.
-      interimText = '';
+    trimTranscriptHistoryIfFollowing();
+    interimText = '';
   } else {
     interimText = text.trim();
   }
@@ -957,6 +765,7 @@ if (window.electronAPI.onMeetChat) {
       chatKey: payload.chatKey || '',
       timestamp: payload.timestamp || Date.now()
     });
+    if (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages = chatMessages.slice(-MAX_CHAT_MESSAGES);
     renderMeetChat();
   });
 }

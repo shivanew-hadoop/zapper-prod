@@ -8,7 +8,6 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const createSessionControl = require('./session-control');
 const createHostCaptionRelay = require('./live-caption-relay');
-const { normalizeMeetChat } = require('./meet-chat-filter');
 const { installDemoInquiries } = require('./demo-inquiries');
 const API_VERSION = require('./package.json').version;
 
@@ -21,9 +20,6 @@ function normalizeSecretEnv(name, rawValue) {
   return value;
 }
 const DEEPGRAM_API_KEY = normalizeSecretEnv('DEEPGRAM_API_KEY', process.env.DEEPGRAM_API_KEY);
-// Hard OFF for v1.0.2, even if a legacy key or enable flag remains in Railway.
-// Native Google Meet captions and authorized host/PIN text relay remain active.
-const DEEPGRAM_STT_ENABLED = false;
 const DATA_DIR = String(
   process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data')
 ).trim();
@@ -93,10 +89,9 @@ const sessionIdleSweepTimer = setInterval(() => {
 sessionIdleSweepTimer.unref();
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY), deepgramEnabled: DEEPGRAM_STT_ENABLED });
+  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
 });
 app.get('/health/stt', async (_req, res) => {
-  if (!DEEPGRAM_STT_ENABLED) return res.status(503).json({ ok: false, deepgramEnabled: false, error: 'Deepgram STT is disabled; Google Meet captions remain active.' });
   if (!DEEPGRAM_API_KEY) return res.status(503).json({ ok: false, deepgramAuthValid: false, error: 'DEEPGRAM_API_KEY is not configured.' });
   try {
     const check = await fetch('https://api.deepgram.com/v1/projects', {
@@ -141,35 +136,10 @@ function getCaptureState(sessionId) {
   }
   return state;
 }
-function registerCapture(sessionId, connectionId, isHost = false) {
+function registerCapture(sessionId, connectionId) {
   const state = getCaptureState(sessionId);
-  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [], isHost: Boolean(isHost) });
+  state.connections.set(connectionId, { connectedAt: Date.now(), lastFinalAt: 0, buffer: [] });
   if (!state.leaderId) state.leaderId = connectionId;
-}
-function isCaptureLeader(sessionId, connectionId) {
-  return getCaptureState(sessionId).leaderId === connectionId;
-}
-function markLocalCaptionSource(sessionId, connectionId, now = Date.now()) {
-  const state = getCaptureState(sessionId);
-  const connection = state.connections.get(connectionId);
-  if (!connection) return false;
-  connection.localCaptionAt = now;
-  const leader = state.connections.get(state.leaderId);
-  // All PIN viewers should follow the same host Meet feed whenever it is
-  // publishing. A PIN client that connected first must not own the relay while
-  // the host is talking. Fall back to any active Meet source after 3 seconds.
-  const healthyLeader = leader && now - Number(leader.localCaptionAt || 0) <= 3000;
-  if (!healthyLeader || (connection.isHost && !leader.isHost)) state.leaderId = connectionId;
-  return state.leaderId === connectionId;
-}
-// Native Meet captions include all meeting speakers. While those captions are
-// flowing, do not also relay the host browser microphone's copy of the same
-// voice to PIN viewers; doing so created parallel, duplicated live captions.
-function hasFreshMeetCaptions(sessionId, now = Date.now()) {
-  const state = sessionCaptureRegistry.get(String(sessionId || ''));
-  if (!state) return false;
-  return [...state.connections.values()].some(connection =>
-    Number(connection.localCaptionAt || 0) > 0 && now - Number(connection.localCaptionAt) < 5500);
 }
 function persistCaptureSegment(sessionId, connectionId, segment) {
   const state = getCaptureState(sessionId);
@@ -230,7 +200,7 @@ function unregisterCapture(sessionId, connectionId) {
 
 function buildDeepgramUrl() {
   const params = new URLSearchParams({
-    model: 'nova-2', language: 'en', encoding: 'linear16', sample_rate: '16000', channels: '1',
+    model: 'nova-2', language: 'en-US', encoding: 'linear16', sample_rate: '16000', channels: '1',
     interim_results: 'true', punctuate: 'true', smart_format: 'true', endpointing: '300',
     utterance_end_ms: '1000', vad_events: 'true',
   });
@@ -246,7 +216,7 @@ wss.on('connection', (clientWs, req) => {
   const participant = sessionControl.verifyParticipantToken(sessionToken);
   const hostAudio = !participant && sessionControl.verifyHostAudioToken(sessionToken);
   const capture = participant || hostAudio;
-  if (hostAudio && req.headers.origin && !WEB_ORIGINS.includes(String(req.headers.origin))) {
+  if (hostAudio && !WEB_ORIGINS.includes(String(req.headers.origin || ''))) {
     try { clientWs.close(1008, 'origin not allowed'); } catch (_) {}
     return;
   }
@@ -256,15 +226,17 @@ wss.on('connection', (clientWs, req) => {
     clientWs.close(1008, 'invalid session');
     return;
   }
+  if (!DEEPGRAM_API_KEY) {
+    try { clientWs.send(JSON.stringify({ type: 'error', message: 'Transcription service is not configured.' })); } catch (_) {}
+    clientWs.close(1011, 'stt unavailable');
+    return;
+  }
+
   const connectionId = crypto.randomUUID();
-  registerCapture(capture.session.id, connectionId, Boolean(hostAudio));
+  registerCapture(capture.session.id, connectionId);
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
-  // The host subscribes too: if its hidden Meet observer stalls, another
-  // authorized participant's live caption can safely refresh the host overlay.
-  // publish(..., excludeSocket) prevents an echo of the host's own caption.
-  hostCaptionRelay.subscribe(capture.session.id, clientWs);
-  hostCaptionRelay.subscribeChat(capture.session.id, clientWs);
+  if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
@@ -281,7 +253,6 @@ wss.on('connection', (clientWs, req) => {
   let lastSpeechDbTouchAt = 0;
   let limitReached = false;
   let pendingAudio = [];
-  let deepgramUnavailableNotified = false;
   const MAX_PENDING_AUDIO = 50;
 
   const sendClient = payload => {
@@ -334,14 +305,7 @@ wss.on('connection', (clientWs, req) => {
   }, 5000);
 
   function connectDeepgram() {
-    if (limitReached || !DEEPGRAM_STT_ENABLED) return;
-    if (!DEEPGRAM_API_KEY) {
-      if (!deepgramUnavailableNotified) {
-        deepgramUnavailableNotified = true;
-        sendClient({ type: 'error', message: 'Google Meet captions are unavailable and Deepgram fallback is not configured.' });
-      }
-      return;
-    }
+    if (limitReached) return;
     if (dgWs && [WebSocket.OPEN, WebSocket.CONNECTING].includes(dgWs.readyState)) return;
     dgOpen = false; dgConnecting = true;
     dgWs = new WebSocket(buildDeepgramUrl(), { headers: { Authorization: `Token ${DEEPGRAM_API_KEY}` } });
@@ -378,12 +342,9 @@ wss.on('connection', (clientWs, req) => {
         const isFinal = Boolean(msg.is_final);
         const caption = { type: 'transcript', text, isFinal, speechFinal: Boolean(msg.speech_final), confidence: Number(alt?.confidence || 0) };
         sendClient(caption);
+        if (hostAudio) hostCaptionRelay.publish(capture.session.id, caption);
         const now = Date.now();
-        const meetHasPriority = hostAudio && hasFreshMeetCaptions(capture.session.id, now);
-        if (hostAudio && !meetHasPriority) hostCaptionRelay.publish(capture.session.id, caption);
-        // The host still sees microphone captions in the browser, but these
-        // must not duplicate Meet's live captions in participant PDFs.
-        if (isFinal && !meetHasPriority) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
+        if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: now });
         if (now - lastSpeechDbTouchAt >= 15000) { lastSpeechDbTouchAt = now; setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now)); }
       } catch (error) { console.error('[STT] Deepgram parse error:', error.message); }
     });
@@ -416,57 +377,8 @@ wss.on('connection', (clientWs, req) => {
     });
   }
 
-  clientWs.on('message', (incoming, isBinary) => {
-    if (limitReached || !incoming?.length) return;
-
-    // Primary zero-STT-cost path: Electron observes Google Meet's own live
-    // captions and sends only text here. The sender renders locally first; the
-    // backend persists final text and relays the leader's captions to any other
-    // PIN-authorized desktops. No Deepgram socket is opened for this path.
-    if (!isBinary) {
-      let localCaption = null;
-      try { localCaption = JSON.parse(incoming.toString()); } catch (_) { return; }
-      if (localCaption?.type === 'meet_chat') {
-        const chat = normalizeMeetChat(localCaption, Boolean(hostAudio));
-        if (chat) hostCaptionRelay.publishChat(capture.session.id, chat, { excludeSocket: clientWs });
-        return;
-      }
-      if (localCaption?.type !== 'local_caption') return;
-      const text = String(localCaption.text || '').trim().slice(0, 12000);
-      if (!text) return;
-      const isFinal = Boolean(localCaption.isFinal);
-      const capturedAt = Math.max(1, Math.min(Date.now() + 5000, Number(localCaption.capturedAt) || Date.now()));
-      const caption = { type: 'transcript', text, isFinal, speechFinal: isFinal, confidence: 1, source: 'meet-captions' };
-      // If this socket had temporarily fallen back to Deepgram, stop that paid
-      // stream immediately when native Meet captions recover.
-      if (dgWs) cleanupDeepgram();
-      pendingAudio = [];
-      markLocalCaptionSource(capture.session.id, connectionId, Date.now());
-      // Separate caption activity from PIN redemption / legacy Deepgram speech timestamps.
-      // Throttled to avoid SQLite writes on each 120 ms interim caption frame.
-      const nativeNow = Date.now();
-      if (nativeNow - lastSpeechDbTouchAt >= 5000) {
-        lastSpeechDbTouchAt = nativeNow;
-        setImmediate(() => sessionControl.touchSessionCaption(capture.session.id, nativeNow));
-      }
-      if (isFinal) persistCaptureSegment(capture.session.id, connectionId, { text, at: capturedAt });
-      // Offline finals are replayed solely to complete the PDF ledger. They
-      // must not appear as a sudden batch in every connected PIN overlay.
-      if (!localCaption.catchUpOnly && isCaptureLeader(capture.session.id, connectionId)) {
-        hostCaptionRelay.publish(capture.session.id, caption, { excludeSocket: clientWs, source: 'meet-captions', fromHost: Boolean(hostAudio) });
-      }
-      const now = Date.now();
-      if (now - lastSpeechDbTouchAt >= 15000) {
-        lastSpeechDbTouchAt = now;
-        setImmediate(() => sessionControl.touchSessionSpeech(capture.session.id, now));
-      }
-      return;
-    }
-
-    // Deepgram is OFF by default. Ignore ALL binary PCM, including packets
-    // from older desktops/host browser code, while preserving caption JSON.
-    if (!DEEPGRAM_STT_ENABLED) return;
-    const audioChunk = incoming;
+  clientWs.on('message', audioChunk => {
+    if (limitReached || !audioChunk?.length) return;
     lastDeepgramAudioAt = Date.now();
     if (!dgWs || [WebSocket.CLOSED, WebSocket.CLOSING].includes(dgWs.readyState)) {
       pendingAudio.push(Buffer.from(audioChunk));
@@ -486,19 +398,12 @@ wss.on('connection', (clientWs, req) => {
     if (cleanedUp) return;
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
-    hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
-    hostCaptionRelay.unsubscribeChat(capture.session.id, clientWs);
-    unregisterCapture(capture.session.id, connectionId, Boolean(hostAudio));
+    if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
+    unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });
 });
-
-const inactivitySweepTimer = setInterval(() => {
-  try { sessionControl.sweepIdleSessions(Date.now()); }
-  catch (error) { console.error('[SESSION] Inactivity sweep error:', error.message); }
-}, 15000);
-inactivitySweepTimer.unref?.();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[BOOT] Zapper API listening on ${PORT}`);

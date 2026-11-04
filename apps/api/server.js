@@ -20,6 +20,9 @@ function normalizeSecretEnv(name, rawValue) {
   return value;
 }
 const DEEPGRAM_API_KEY = normalizeSecretEnv('DEEPGRAM_API_KEY', process.env.DEEPGRAM_API_KEY);
+// Opt-in: PIN desktops receive host captions without opening billable STT streams.
+// Enable ONLY after confirming the host capture contains all required meeting audio.
+const PARTICIPANT_STT_MODE = String(process.env.PARTICIPANT_STT_MODE || 'independent').trim().toLowerCase() === 'relay-only' ? 'relay-only' : 'independent';
 const DATA_DIR = String(
   process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data')
 ).trim();
@@ -89,7 +92,7 @@ const sessionIdleSweepTimer = setInterval(() => {
 sessionIdleSweepTimer.unref();
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY) });
+  res.json({ ok: true, service: 'zapper-api', version: API_VERSION, databaseReady: true, deepgramConfigured: Boolean(DEEPGRAM_API_KEY), participantSttMode: PARTICIPANT_STT_MODE });
 });
 app.get('/health/stt', async (_req, res) => {
   if (!DEEPGRAM_API_KEY) return res.status(503).json({ ok: false, deepgramAuthValid: false, error: 'DEEPGRAM_API_KEY is not configured.' });
@@ -232,15 +235,19 @@ wss.on('connection', (clientWs, req) => {
     return;
   }
 
+  const relayOnly = Boolean(participant && PARTICIPANT_STT_MODE === 'relay-only');
   const connectionId = crypto.randomUUID();
-  registerCapture(capture.session.id, connectionId);
+  if (!relayOnly) registerCapture(capture.session.id, connectionId);
   // PIN-authorized desktops subscribe immediately, even before Meet supplies
   // any audio. Only this session's host microphone captions are forwarded.
   if (participant) hostCaptionRelay.subscribe(capture.session.id, clientWs);
   if (participant && googleEmail) {
     try { sessionControl.registerParticipantGoogleEmail(capture.session.id, googleEmail); } catch (_) {}
   }
-  console.log(`[STT] Connected session=${capture.session.id} host=${capture.user.email} source=${connectionId.slice(0, 8)}`);
+  console.log(`[STT] Connected session=${capture.session.id} host=${capture.user.email} source=${connectionId.slice(0, 8)} mode=${relayOnly ? 'relay-only' : 'independent'}`);
+  if (relayOnly) {
+    try { clientWs.send(JSON.stringify({ type: 'status', text: 'Receiving shared host captions.' })); } catch (_) {}
+  }
   let dgWs = null;
   let dgOpen = false;
   let dgConnecting = false;
@@ -378,7 +385,9 @@ wss.on('connection', (clientWs, req) => {
   }
 
   clientWs.on('message', audioChunk => {
-    if (limitReached || !audioChunk?.length) return;
+    // Intentionally discard participant audio in relay-only mode: no Deepgram
+    // connection, no billing, and no extra hop on the host caption path.
+    if (relayOnly || limitReached || !audioChunk?.length) return;
     lastDeepgramAudioAt = Date.now();
     if (!dgWs || [WebSocket.CLOSED, WebSocket.CLOSING].includes(dgWs.readyState)) {
       pendingAudio.push(Buffer.from(audioChunk));
@@ -399,7 +408,7 @@ wss.on('connection', (clientWs, req) => {
     cleanedUp = true;
     clearTimers(); cleanupDeepgram(); pendingAudio = [];
     if (participant) hostCaptionRelay.unsubscribe(capture.session.id, clientWs);
-    unregisterCapture(capture.session.id, connectionId);
+    if (!relayOnly) unregisterCapture(capture.session.id, connectionId);
   };
   clientWs.on('close', cleanup);
   clientWs.on('error', error => { console.error('[STT] Client error:', error.message); cleanup(); });

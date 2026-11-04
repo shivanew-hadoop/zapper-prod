@@ -175,11 +175,9 @@ function transcriptIsNearBottom() {
   return distance <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
 }
 
-function trimTranscriptHistoryIfFollowing() {
-  if (!transcriptAutoScroll || finalLines.length <= MAX_LINES) return false;
-  finalLines = finalLines.slice(-MAX_LINES);
-  return true;
-}
+// Keep finalized captions visible for the entire meeting. The previous
+// 100-line trim made earlier sentences disappear as new lines arrived.
+function trimTranscriptHistoryIfFollowing() { return false; }
 
 function pauseTranscriptFollow() {
   if (!transcriptAutoScroll) return;
@@ -460,30 +458,58 @@ if (chatSendForm) {
   });
 }
 
+// Incremental transcript rendering: finalized text nodes are never rewritten
+// by interim results. Only the last, provisional text node is updated.
+let renderedFinalCount = 0;
+let renderedFinalTail = '';
+let interimNode = null;
 function renderTranscript() {
-  const text = [...finalLines, interimText].filter(Boolean).join('\n');
   const shouldFollowLive = transcriptAutoScroll;
   const renderVersion = ++transcriptRenderVersion;
-
   transcriptRenderRestoring = true;
-  transcriptEl.textContent = text || 'Waiting for host to speak...';
+
+  // A new session or reset starts with a fresh DOM. Otherwise retain all
+  // committed nodes, including their existing line wrapping and scroll state.
+  if (renderedFinalCount > finalLines.length ||
+      (renderedFinalCount && finalLines[renderedFinalCount - 1] !== renderedFinalTail)) {
+    transcriptEl.replaceChildren();
+    renderedFinalCount = 0;
+    renderedFinalTail = '';
+    interimNode = null;
+  }
+  if (interimNode) {
+    interimNode.remove();
+    interimNode = null;
+  }
+  // Remove the waiting message only when actual transcript content arrives.
+  if (finalLines.length || interimText) {
+    if (!renderedFinalCount && transcriptEl.textContent === 'Waiting for host to speak...') {
+      transcriptEl.replaceChildren();
+    }
+    const fragment = document.createDocumentFragment();
+    for (let i = renderedFinalCount; i < finalLines.length; i++) {
+      fragment.appendChild(document.createTextNode((i ? '\n' : '') + finalLines[i]));
+    }
+    transcriptEl.appendChild(fragment);
+    renderedFinalCount = finalLines.length;
+    renderedFinalTail = renderedFinalCount ? finalLines[renderedFinalCount - 1] : '';
+    if (interimText) {
+      interimNode = document.createTextNode((renderedFinalCount ? '\n' : '') + interimText);
+      transcriptEl.appendChild(interimNode);
+    }
+  } else if (!renderedFinalCount) {
+    transcriptEl.textContent = 'Waiting for host to speak...';
+  }
 
   const restorePosition = () => {
     if (renderVersion !== transcriptRenderVersion) return;
-
     if (shouldFollowLive && transcriptAutoScroll) {
       transcriptEl.scrollTop = transcriptEl.scrollHeight;
     } else if (!transcriptAutoScroll) {
-      // Use the current global lock, not a stale value captured by an earlier
-      // transcript render. That way a user wheel/drag always wins immediately.
       const maxTop = Math.max(0, transcriptEl.scrollHeight - transcriptEl.clientHeight);
       transcriptEl.scrollTop = Math.min(transcriptScrollTopLock, maxTop);
     }
   };
-
-  // Restore synchronously and after layout. Interim text can reflow as words are
-  // appended; repeated restoration plus overflow-anchor:none makes the reading
-  // position deterministic until the user deliberately returns to the bottom.
   restorePosition();
   requestAnimationFrame(() => {
     restorePosition();
